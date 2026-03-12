@@ -1,0 +1,22 @@
+{
+  "name": "jigumiya-price-checker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --loader ts-node/esm index.ts",
+    "check:js": "node dist/index.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "expo-server-sdk": "^3.13.0",
+    "firebase-admin": "^13.4.0",
+    "puppeteer": "^24.9.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.2"
+  }
+}
