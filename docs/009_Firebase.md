@@ -2,52 +2,50 @@
 
 ## 상태: ✅ 완료
 
-## 완료된 작업 (코드)
-- @react-native-firebase/app, auth, firestore 패키지 설치
-- app.json 플러그인 자동 등록 (@react-native-firebase/app, auth)
-- services/firebase.ts 구현:
-  - signInAnonymously() — 앱 시작 시 익명 로그인
-  - getCurrentUid()
-  - saveItemToFirestore() / removeItemFromFirestore() / updateItemInFirestore()
-  - fetchItemsFromFirestore()
-  - syncLocalToFirestore() — 로컬 전체 데이터 백업
-- store/useAppStore.ts — addItem/removeItem/updateTargetPrice에 Firestore 동기화 연결
-- _layout.tsx — 앱 시작 시 signInAnonymously() 호출
+## 구현 방식
+- **Firebase JS SDK v12.10.0** 사용 (npm `firebase` 패키지)
+- @react-native-firebase 네이티브 패키지는 CocoaPods 빌드 실패로 사용 불가 → JS SDK로 전환
+- `initializeAuth` + `getReactNativePersistence(AsyncStorage)`로 Auth 세션 영속화
+- `@firebase/auth/dist/rn/index.js`에서 RN용 persistence import (`@ts-ignore` 필요)
+
+## Firebase 프로젝트 정보
+- 프로젝트 ID: jigumiya
+- 리전: asia-northeast3 (서울)
+- iOS 앱: com.jigumiya.app
+- messagingSenderId: 250441543259
+
+## 완료된 작업
+- Anonymous Auth (익명 로그인) — 앱 시작 시 자동
+- Firestore CRUD — 상품 저장/삭제/조회/업데이트
+- 로컬→Firestore 동기화 (syncLocalToFirestore)
+- Push Token 저장 (expoPushToken) — Phase 2 알림용
+- 알림 ON/OFF 설정 저장 (notificationEnabled)
+- 포그라운드 복귀 시 Firestore→로컬 동기화
 
 ## 핵심 파일
 | 파일 | 역할 |
 |------|------|
-| services/firebase.ts | Auth + Firestore CRUD + 동기화 |
-| store/useAppStore.ts | 로컬 저장 + Firestore 동기화 |
-| app/_layout.tsx | 앱 시작 시 익명 로그인 |
+| services/firebase.ts | Auth + Firestore CRUD + Push Token 저장 |
+| store/useAppStore.ts | 로컬 저장 + Firestore 동기화 + syncFromFirestore |
+| app/_layout.tsx | 앱 시작 시 익명 로그인 + 푸시 토큰 등록 |
 
-## 데이터 구조 (Firestore)
+## Firestore 데이터 구조
 ```
-users/{uid}/items/{itemId}
-├── id: string
-├── url: string
-├── productName: string
-├── currentPrice: number
-├── targetPrice: number
-├── thumbnail: string
-├── priceHistory: [{ date, price }]
-└── createdAt: number
+users/{uid}
+├── expoPushToken: string
+├── notificationEnabled: boolean
+└── items/{itemId}
+    ├── id: string
+    ├── url: string
+    ├── productName: string
+    ├── currentPrice: number
+    ├── targetPrice: number
+    ├── thumbnail: string
+    ├── priceHistory: [{ date, price }]
+    └── createdAt: number
 ```
 
-## 남은 작업 (Firebase 콘솔)
-1. Firebase 콘솔에서 새 프로젝트 생성 (jigumiya)
-2. iOS 앱 등록 (com.jigumiya.app) → GoogleService-Info.plist 다운로드
-3. Android 앱 등록 (com.jigumiya.app) → google-services.json 다운로드
-4. Authentication → 로그인 방법 → 익명(Anonymous) 활성화
-5. Firestore Database 생성 (asia-northeast3 / 서울)
-6. 설정 파일을 프로젝트 루트에 배치
-7. EAS Build로 네이티브 빌드 후 테스트
-
-## 설정 파일 위치 (다운로드 후)
-- iOS: jigumiya/GoogleService-Info.plist
-- Android: jigumiya/google-services.json
-
-## Firestore 보안 규칙 (초기)
+## Firestore 보안 규칙
 ```
 rules_version = '2';
 service cloud.firestore {
@@ -58,6 +56,12 @@ service cloud.firestore {
   }
 }
 ```
+
+## 실기기 테스트 결과
+- ✅ 익명 로그인 성공 (uid 발급 확인)
+- ✅ Firestore 상품 저장/조회 정상
+- ✅ Auth AsyncStorage 영속화 (앱 재시작 시 재로그인 불필요)
+- ✅ Auth WARN 해결 (initializeAuth + getReactNativePersistence)
 
 ## 설계 원칙
 - AsyncStorage = 1차 저장소 (항상 동작)

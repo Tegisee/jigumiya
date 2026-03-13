@@ -18,35 +18,43 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 007 | 데이터 저장 구조 구현 | ✅ | 007_데이터저장구조.md |
 | 008 | Share Intent 연동 | ✅ | 008_ShareIntent.md |
 | 009 | Firebase 연동 | ✅ | 009_Firebase.md |
-| 010 | 쿠팡 파트너스 API 연동 | ⏸ | 010_쿠팡파트너스API.md |
-| 011 | EAS 빌드 + 실기기 테스트 | 🔄 | 011_EAS빌드_배포.md |
+| 010 | 상품 정보 스크래핑 (WebView) | ✅ | 010_쿠팡파트너스API.md |
+| 011 | EAS 빌드 + 실기기 테스트 | ✅ | 011_EAS빌드_배포.md |
 
-### Phase 2
+### Phase 2 (가격 추적 + 알림)
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
-| 012 | Phase 2 전체 계획 | ⬜ | 012_Phase2계획.md |
+| 012 | FCM 푸시 알림 + 가격 체크 봇 | 🔄 | 012_FCM푸시알림.md |
+| 013 | 쿠팡 파트너스 API 연동 (15만원 달성 후) | ⏸ | 013_쿠팡파트너스API_활성화.md |
 
 ### Phase 3
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
-| 013 | Phase 3 전체 계획 | ⬜ | 013_Phase3계획.md |
+| 014 | Phase 3 전체 계획 | ⬜ | 014_Phase3계획.md |
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
 - 현실적 진행 순서:
-  1. 앱 완성 + 파트너스 문구 삽입 (쿠팡 파트너스 활동)
-  2. 앱스토어 출시
-  3. 수동 affiliate 링크로 실사용자 유입
-  4. 15만원 누적 달성 → 최종승인 신청
-  5. API 키 발급 → 앱 업데이트 (자동 딥링크 변환 활성화)
-- 코드 준비 완료: services/coupangApi.ts, services/productMeta.ts
+  1. 앱 완성 + 파트너스 문구 삽입 ("이 포스팅은 쿠팡 파트너스 활동의 일환으로...")
+  2. iOS 앱스토어 먼저 출시
+  3. 수동 affiliate 링크로 실사용자 유입 → 15만원 누적 달성
+  4. 최종승인 → API 키 발급 → 앱 업데이트 (자동 딥링크 변환)
+  5. Android 출시 (Google Play 14일 비공개 테스트 + 테스터 12명 필요)
+- 코드 준비 완료: services/coupangApi.ts, components/CoupangScraper.tsx
 
 ## 현재 진행중
-- 011: EAS Build iOS 실기기 빌드 완료
+- 012: FCM 푸시 알림 — 앱 클라이언트 코드 완료, EAS 재빌드 필요 (Push Notifications capability)
+- GitHub 레포: https://github.com/Tegisee/jigumiya (private)
 
 ## 앱 기본 정보
 - 앱 이름: 지금이야 (Jigumiya)
 - 번들 ID: com.jigumiya.app
 - 프로젝트 경로: ~/jigumiya/jigumiya
 - Expo 계정: june56189906
+- GitHub: Tegisee/jigumiya
 - 터미널 단축명령: ji (→ Max Plan으로 자동 접속)
+
+# currentDate
+Today's date is 2026-03-13.
+
+      IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.

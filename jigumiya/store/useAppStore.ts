@@ -17,6 +17,7 @@ interface AppState {
   addItem: (item: TrackedItem) => void;
   removeItem: (id: string) => void;
   updateTargetPrice: (id: string, price: number) => void;
+  updateItemPrice: (id: string, price: number) => void;
   syncFromFirestore: () => Promise<void>;
   toggleWowMember: () => void;
   toggleNotification: () => void;
@@ -45,6 +46,29 @@ export const useAppStore = create<AppState>()(
           ),
         }));
         updateItemInFirestore(id, { targetPrice: price });
+      },
+      updateItemPrice: (id, newPrice) => {
+        const today = new Date().toISOString().slice(0, 10);
+        set((state) => ({
+          trackedItems: state.trackedItems.map((item) => {
+            if (item.id !== id || newPrice === 0) return item;
+            const history = [...item.priceHistory];
+            const last = history[history.length - 1];
+            if (last?.date === today) {
+              last.price = newPrice;
+            } else {
+              history.push({ date: today, price: newPrice });
+            }
+            return {
+              ...item,
+              currentPrice: newPrice,
+              priceHistory: history.slice(-30),
+            };
+          }),
+        }));
+        updateItemInFirestore(id, {
+          currentPrice: newPrice,
+        });
       },
       syncFromFirestore: async () => {
         const items = await fetchItemsFromFirestore();

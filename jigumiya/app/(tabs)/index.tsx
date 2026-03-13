@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, AppState } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
-import { fetchItemsFromFirestore } from '../../services/firebase';
 import { ProductCard } from '../../components/ProductCard';
+import PriceChecker from '../../components/PriceChecker';
 import { TrackedItem } from '../../types';
 
 const MOCK_DATA: TrackedItem[] = [
@@ -70,11 +70,28 @@ export default function HomeScreen() {
   const { trackedItems, syncFromFirestore } = useAppStore();
   const items = trackedItems.length > 0 ? trackedItems : MOCK_DATA;
   const appStateRef = useRef(AppState.currentState);
+  const [checkActive, setCheckActive] = useState(false);
+  const lastCheckRef = useRef(0);
 
+  // 앱 포그라운드 복귀 시 가격 체크 (최소 30분 간격)
   useEffect(() => {
+    // 앱 최초 로드 시에도 체크
+    const now = Date.now();
+    if (now - lastCheckRef.current > 30 * 60 * 1000) {
+      lastCheckRef.current = now;
+      setCheckActive(true);
+      setTimeout(() => setCheckActive(false), 60000);
+    }
+
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         syncFromFirestore();
+        const elapsed = Date.now() - lastCheckRef.current;
+        if (elapsed > 30 * 60 * 1000) {
+          lastCheckRef.current = Date.now();
+          setCheckActive(true);
+          setTimeout(() => setCheckActive(false), 60000);
+        }
       }
       appStateRef.current = nextState;
     });
@@ -104,6 +121,9 @@ export default function HomeScreen() {
       >
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
+
+      {/* 포그라운드 가격 체크 (Hidden WebView) */}
+      <PriceChecker active={checkActive} />
     </SafeAreaView>
   );
 }
