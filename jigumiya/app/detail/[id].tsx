@@ -98,7 +98,24 @@ export default function DetailScreen() {
   const prices = item.priceHistory.map((p) => p.price);
   const maxPrice = Math.max(...prices);
   const minPrice = Math.min(...prices);
-  const chartData = item.priceHistory.map((p) => ({ value: p.price }));
+  const isAllTimeLow = item.currentPrice > 0 && item.currentPrice <= minPrice;
+
+  const chartData = item.priceHistory.map((p, i) => {
+    const d = p.date.slice(5); // "MM-DD"
+    // 첫/마지막/중간 날짜만 라벨 표시
+    const showLabel = i === 0 || i === item.priceHistory.length - 1 ||
+      (item.priceHistory.length > 4 && i === Math.floor(item.priceHistory.length / 2));
+    return {
+      value: p.price,
+      label: showLabel ? d : '',
+      labelTextStyle: { color: theme.subtext, fontSize: 10 },
+    };
+  });
+
+  // 목표가 참조선 데이터 (민트색 점선)
+  const targetLineData = item.priceHistory.map(() => ({
+    value: item.targetPrice,
+  }));
 
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
@@ -208,21 +225,34 @@ export default function DetailScreen() {
         {/* Chart */}
         {chartData.length > 1 && (
           <View style={styles.chartSection}>
-            <Text style={styles.sectionTitle}>30일 가격 변동</Text>
+            <View style={styles.chartHeader}>
+              <Text style={styles.sectionTitle}>30일 가격 변동</Text>
+              {isAllTimeLow && (
+                <View style={styles.lowestBadge}>
+                  <Text style={styles.lowestBadgeText}>역대 최저가!</Text>
+                </View>
+              )}
+            </View>
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}
+                data2={targetLineData}
                 width={300}
-                height={120}
+                height={140}
                 color={theme.primary}
+                color2={theme.primary}
                 thickness={2}
+                thickness2={1}
+                strokeDashArray2={[6, 4]}
                 hideDataPoints={false}
+                hideDataPoints2
                 dataPointsColor={theme.primary}
                 dataPointsRadius={3}
                 hideYAxisText
                 hideRules
                 yAxisColor="transparent"
-                xAxisColor="transparent"
+                xAxisColor={theme.border}
+                xAxisThickness={1}
                 curved
                 isAnimated={false}
                 initialSpacing={10}
@@ -231,10 +261,20 @@ export default function DetailScreen() {
                 adjustToWidth
                 startFillColor={theme.primary}
                 endFillColor="transparent"
-                startOpacity={0.2}
+                startOpacity={0.15}
                 endOpacity={0}
                 areaChart
               />
+              <View style={styles.chartLegend}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendLine, { backgroundColor: theme.primary }]} />
+                  <Text style={styles.legendText}>가격</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDash, { borderColor: theme.primary }]} />
+                  <Text style={styles.legendText}>목표가 {item.targetPrice.toLocaleString()}원</Text>
+                </View>
+              </View>
             </View>
           </View>
         )}
@@ -400,11 +440,27 @@ const styles = StyleSheet.create({
   chartSection: {
     marginTop: 24,
   },
+  chartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: theme.text,
-    marginBottom: 12,
+  },
+  lowestBadge: {
+    backgroundColor: '#FF4444',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  lowestBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   chartWrap: {
     backgroundColor: theme.card,
@@ -414,6 +470,31 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     alignItems: 'center',
     overflow: 'hidden',
+  },
+  chartLegend: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendLine: {
+    width: 16,
+    height: 2,
+    borderRadius: 1,
+  },
+  legendDash: {
+    width: 16,
+    height: 0,
+    borderTopWidth: 1,
+    borderStyle: 'dashed',
+  },
+  legendText: {
+    fontSize: 11,
+    color: theme.subtext,
   },
   bottomBar: {
     position: 'absolute',
