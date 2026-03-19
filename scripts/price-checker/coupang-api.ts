@@ -122,9 +122,14 @@ export async function fetchCurrentPrice(
     scored.sort((a, b) => b.score - a.score);
 
     const best = scored[0];
-    if (best && best.score > 0) {
+    // productId 매칭 시 최소 110 (productId+단어1개), 이름만일 때 최소 30 (단어3개)
+    const minScore = productId ? 110 : 30;
+    if (best && best.score >= minScore) {
       console.log(`  [API] 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
       return { price: best.productPrice, image: best.productImage };
+    }
+    if (best) {
+      console.log(`  [API] 매칭 후보 score=${best.score} 미달 (최소 ${minScore}): "${best.productName.slice(0, 40)}"`);
     }
   }
 
