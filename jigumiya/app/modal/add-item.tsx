@@ -19,12 +19,10 @@ import CoupangScraper, {
   ScrapedProduct,
 } from '../../components/CoupangScraper';
 
-/** 텍스트에서 쿠팡 URL만 추출 (붙여넣기 시 "상품명\nURL" 형태 대응) */
+/** 텍스트에서 쿠팡 URL만 추출 */
 function extractUrl(text: string): string {
-  // 쿠팡 URL 우선 추출
   const coupangMatch = text.match(/https?:\/\/[^\s]*coupang\.com[^\s]*/i);
   if (coupangMatch) return coupangMatch[0];
-  // 일반 URL 폴백
   const match = text.match(/https?:\/\/[^\s]+/);
   return match ? match[0] : text.trim();
 }
@@ -62,19 +60,17 @@ export default function AddItemModal() {
   const [targetPrice, setTargetPrice] = useState('');
   const [loading, setLoading] = useState(false);
   const [scrapeFailed, setScrapeFailed] = useState(false);
-  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const isFromShare = !!sharedUrl;
   const pendingRef = useRef<{ url: string; targetPrice: number } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scrapeKeyRef = useRef(0);
 
-  // 미리보기 상태
+  // 단일 스크래퍼: 미리보기 + 저장 겸용
+  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
+  const scrapeKeyRef = useRef(0);
   const [preview, setPreview] = useState<ScrapedProduct | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const previewKeyRef = useRef(0);
-  const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previewDoneRef = useRef(false);
+  const modeRef = useRef<'preview' | 'save'>('preview');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 추천 목표가 (현재가의 90%)
   const suggestedPrice = preview?.price ? Math.round(preview.price * 0.9) : null;
@@ -87,49 +83,37 @@ export default function AddItemModal() {
         startPreview(parsedUrl);
       }
     }
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, []);
 
   const startPreview = (rawUrl: string) => {
+    modeRef.current = 'preview';
     setPreviewLoading(true);
     setPreview(null);
-    previewDoneRef.current = false;
-    previewKeyRef.current++;
+    scrapeKeyRef.current++;
+    setScrapeUrl(rawUrl);
 
-    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
-    previewTimeoutRef.current = setTimeout(() => {
-      if (!previewDoneRef.current) {
-        setPreviewLoading(false);
-        setPreviewUrl(null);
-      }
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      setPreviewLoading(false);
+      setScrapeUrl(null);
     }, 20000);
-
-    setPreviewUrl(rawUrl);
   };
 
-  const handlePreviewResult = useCallback((data: ScrapedProduct) => {
-    if (previewDoneRef.current) return;
-    previewDoneRef.current = true;
-    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
-    setPreview(data);
-    setPreviewLoading(false);
-    setPreviewUrl(null);
-  }, []);
-
-  const handlePreviewError = useCallback(() => {
-    if (previewDoneRef.current) return;
-    previewDoneRef.current = true;
-    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
-    setPreviewLoading(false);
-    setPreviewUrl(null);
-  }, []);
-
-  // 수동 입력: URL 변경 시 자동 미리보기
+  // 수동 입력: URL 변경 시 디바운스로 미리보기 (1.5초 대기)
   const handleUrlChange = (text: string) => {
     setUrl(text);
-    const parsedUrl = extractUrl(text);
-    if (parsedUrl.includes('coupang.com') && parsedUrl.length > 25) {
-      startPreview(parsedUrl);
-    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    debounceRef.current = setTimeout(() => {
+      const parsedUrl = extractUrl(text);
+      if (parsedUrl.includes('coupang.com') && parsedUrl.length > 25) {
+        startPreview(parsedUrl);
+      }
+    }, 1500);
   };
 
   const handleApplySuggestion = () => {
@@ -138,68 +122,76 @@ export default function AddItemModal() {
     }
   };
 
-  const saveItem = useCallback(
-    async (scraped: ScrapedProduct | null) => {
-      if (!pendingRef.current) return;
-      const { url: itemUrl, targetPrice: tp } = pendingRef.current;
-      pendingRef.current = null;
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-
-      // 파트너스 딥링크 변환 (API 키 있을 때만)
-      let affiliateUrl = itemUrl;
-      if (hasCoupangApiKeys()) {
-        const deepLink = await generateDeepLink(itemUrl);
-        if (deepLink?.shortenUrl) affiliateUrl = deepLink.shortenUrl;
-      }
-
-      const nameFromText = parseProductName(sharedText || '');
-      const productName = scraped?.title || nameFromText || '상품 정보 없음';
-      const currentPrice = scraped?.price || 0;
-      const thumbnail = scraped?.image || '';
-
-      addItem({
-        id: Date.now().toString(),
-        url: affiliateUrl,
-        resolvedUrl: scraped?.resolvedUrl || '',
-        productName,
-        currentPrice,
-        targetPrice: tp,
-        thumbnail,
-        priceHistory: currentPrice
-          ? [
-              {
-                date: new Date().toISOString().slice(0, 10),
-                price: currentPrice,
-              },
-            ]
-          : [],
-        createdAt: Date.now(),
-      });
-
-      setLoading(false);
-      setScrapeUrl(null);
-      if (isFromShare) {
-        router.replace('/');
-      } else {
-        router.back();
-      }
-    },
-    [addItem, router, sharedText, isFromShare]
-  );
-
+  // 스크래퍼 결과 핸들러 (preview / save 모드 분기)
   const handleScrapeResult = useCallback(
     (data: ScrapedProduct) => {
-      saveItem(data);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+      if (modeRef.current === 'preview') {
+        setPreview(data);
+        setPreviewLoading(false);
+        setScrapeUrl(null);
+      } else {
+        // save 모드: 바로 저장
+        doSave(data);
+      }
     },
-    [saveItem]
+    [],
   );
 
   const handleScrapeError = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    if (modeRef.current === 'preview') {
+      setPreviewLoading(false);
+      setScrapeUrl(null);
+    } else {
+      setLoading(false);
+      setScrapeUrl(null);
+      setScrapeFailed(true);
+    }
+  }, []);
+
+  const doSave = async (scraped: ScrapedProduct | null) => {
+    if (!pendingRef.current) return;
+    const { url: itemUrl, targetPrice: tp } = pendingRef.current;
+    pendingRef.current = null;
+
+    let affiliateUrl = itemUrl;
+    if (hasCoupangApiKeys()) {
+      try {
+        const deepLink = await generateDeepLink(itemUrl);
+        if (deepLink?.shortenUrl) affiliateUrl = deepLink.shortenUrl;
+      } catch {}
+    }
+
+    const nameFromText = parseProductName(sharedText || '');
+    const productName = scraped?.title || nameFromText || '상품 정보 없음';
+    const currentPrice = scraped?.price || 0;
+    const thumbnail = scraped?.image || '';
+
+    addItem({
+      id: Date.now().toString(),
+      url: affiliateUrl,
+      resolvedUrl: scraped?.resolvedUrl || '',
+      productName,
+      currentPrice,
+      targetPrice: tp,
+      thumbnail,
+      priceHistory: currentPrice
+        ? [{ date: new Date().toISOString().slice(0, 10), price: currentPrice }]
+        : [],
+      createdAt: Date.now(),
+    });
+
     setLoading(false);
     setScrapeUrl(null);
-    setScrapeFailed(true);
-  }, []);
+    if (isFromShare) {
+      router.replace('/');
+    } else {
+      router.back();
+    }
+  };
 
   const handleSave = () => {
     if (!url.trim() || !targetPrice.trim()) return;
@@ -216,23 +208,23 @@ export default function AddItemModal() {
       return;
     }
 
-    // 미리보기 데이터가 있으면 재스크래핑 없이 바로 저장
-    if (preview) {
-      pendingRef.current = {
-        url: parsedUrl,
-        targetPrice: Number(targetPrice),
-      };
-      saveItem(preview);
-      return;
-    }
-
-    setLoading(true);
-    setScrapeFailed(false);
     pendingRef.current = {
       url: parsedUrl,
       targetPrice: Number(targetPrice),
     };
 
+    // 미리보기 데이터가 있으면 재스크래핑 없이 바로 저장
+    if (preview) {
+      doSave(preview);
+      return;
+    }
+
+    // 미리보기 없으면 save 모드로 스크래핑
+    modeRef.current = 'save';
+    setLoading(true);
+    setScrapeFailed(false);
+
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (pendingRef.current) {
         setLoading(false);
@@ -248,6 +240,7 @@ export default function AddItemModal() {
 
   const handleRetry = () => {
     const parsedUrl = extractUrl(url);
+    modeRef.current = 'save';
     setLoading(true);
     setScrapeFailed(false);
     pendingRef.current = {
@@ -255,6 +248,7 @@ export default function AddItemModal() {
       targetPrice: Number(targetPrice),
     };
 
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (pendingRef.current) {
         setLoading(false);
@@ -274,7 +268,7 @@ export default function AddItemModal() {
       targetPrice: Number(targetPrice),
     };
     setScrapeFailed(false);
-    saveItem(null);
+    doSave(null);
   };
 
   return (
@@ -309,7 +303,7 @@ export default function AddItemModal() {
             <Text style={styles.previewLoadingText}>현재가 확인 중...</Text>
           </View>
         )}
-        {preview && (
+        {preview && !previewLoading && (
           <View style={styles.previewBox}>
             <Text style={styles.previewTitle} numberOfLines={1}>
               {preview.title}
@@ -388,17 +382,9 @@ export default function AddItemModal() {
         </View>
       </KeyboardAvoidingView>
 
-      {/* Hidden WebView — 미리보기 스크래핑 */}
+      {/* 단일 Hidden WebView — 미리보기 + 저장 겸용 */}
       <CoupangScraper
-        key={`preview-${previewKeyRef.current}`}
-        url={previewUrl}
-        onResult={handlePreviewResult}
-        onError={handlePreviewError}
-      />
-
-      {/* Hidden WebView — 저장 시 스크래핑 (미리보기 없을 때만) */}
-      <CoupangScraper
-        key={`save-${scrapeKeyRef.current}`}
+        key={scrapeKeyRef.current}
         url={scrapeUrl}
         onResult={handleScrapeResult}
         onError={handleScrapeError}
