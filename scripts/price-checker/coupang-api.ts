@@ -94,7 +94,7 @@ export async function fetchCurrentPrice(
 
   for (const keyword of keywords) {
     console.log(`  [API] 검색: "${keyword}" (productId=${productId || 'none'})`);
-    const products = await searchProducts(keyword, 20);
+    const products = await searchProducts(keyword, 5);
 
     if (products.length === 0) {
       console.log(`  [API] 결과 없음`);
