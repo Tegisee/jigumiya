@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -68,6 +68,76 @@ export default function AddItemModal() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrapeKeyRef = useRef(0);
 
+  // 미리보기 상태
+  const [preview, setPreview] = useState<ScrapedProduct | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const previewKeyRef = useRef(0);
+  const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewDoneRef = useRef(false);
+
+  // 추천 목표가 (현재가의 90%)
+  const suggestedPrice = preview?.price ? Math.round(preview.price * 0.9) : null;
+
+  // Share Intent 진입 시 즉시 미리보기 스크래핑
+  useEffect(() => {
+    if (isFromShare && sharedUrl) {
+      const parsedUrl = extractUrl(sharedUrl);
+      if (parsedUrl.includes('coupang.com')) {
+        startPreview(parsedUrl);
+      }
+    }
+  }, []);
+
+  const startPreview = (rawUrl: string) => {
+    setPreviewLoading(true);
+    setPreview(null);
+    previewDoneRef.current = false;
+    previewKeyRef.current++;
+
+    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
+    previewTimeoutRef.current = setTimeout(() => {
+      if (!previewDoneRef.current) {
+        setPreviewLoading(false);
+        setPreviewUrl(null);
+      }
+    }, 20000);
+
+    setPreviewUrl(rawUrl);
+  };
+
+  const handlePreviewResult = useCallback((data: ScrapedProduct) => {
+    if (previewDoneRef.current) return;
+    previewDoneRef.current = true;
+    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
+    setPreview(data);
+    setPreviewLoading(false);
+    setPreviewUrl(null);
+  }, []);
+
+  const handlePreviewError = useCallback(() => {
+    if (previewDoneRef.current) return;
+    previewDoneRef.current = true;
+    if (previewTimeoutRef.current) clearTimeout(previewTimeoutRef.current);
+    setPreviewLoading(false);
+    setPreviewUrl(null);
+  }, []);
+
+  // 수동 입력: URL 변경 시 자동 미리보기
+  const handleUrlChange = (text: string) => {
+    setUrl(text);
+    const parsedUrl = extractUrl(text);
+    if (parsedUrl.includes('coupang.com') && parsedUrl.length > 25) {
+      startPreview(parsedUrl);
+    }
+  };
+
+  const handleApplySuggestion = () => {
+    if (suggestedPrice) {
+      setTargetPrice(String(suggestedPrice));
+    }
+  };
+
   const saveItem = useCallback(
     async (scraped: ScrapedProduct | null) => {
       if (!pendingRef.current) return;
@@ -108,8 +178,6 @@ export default function AddItemModal() {
 
       setLoading(false);
       setScrapeUrl(null);
-      // Share Intent 경로: back()하면 네비게이션 스택이 비어 쿠팡으로 복귀할 수 있음
-      // → 명시적으로 홈 화면으로 이동
       if (isFromShare) {
         router.replace('/');
       } else {
@@ -127,7 +195,6 @@ export default function AddItemModal() {
   );
 
   const handleScrapeError = useCallback(() => {
-    // 스크래핑 실패 — 바로 저장하지 않고 "다시 시도" UI 표시
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setLoading(false);
     setScrapeUrl(null);
@@ -149,6 +216,16 @@ export default function AddItemModal() {
       return;
     }
 
+    // 미리보기 데이터가 있으면 재스크래핑 없이 바로 저장
+    if (preview) {
+      pendingRef.current = {
+        url: parsedUrl,
+        targetPrice: Number(targetPrice),
+      };
+      saveItem(preview);
+      return;
+    }
+
     setLoading(true);
     setScrapeFailed(false);
     pendingRef.current = {
@@ -156,7 +233,6 @@ export default function AddItemModal() {
       targetPrice: Number(targetPrice),
     };
 
-    // 20초 타임아웃
     timeoutRef.current = setTimeout(() => {
       if (pendingRef.current) {
         setLoading(false);
@@ -166,7 +242,6 @@ export default function AddItemModal() {
       }
     }, 20000);
 
-    // WebView 스크래핑 시작 (key 변경으로 강제 리마운트)
     scrapeKeyRef.current++;
     setScrapeUrl(parsedUrl);
   };
@@ -219,7 +294,7 @@ export default function AddItemModal() {
             placeholder="상품 URL 붙여넣기"
             placeholderTextColor={theme.subtext}
             value={url}
-            onChangeText={isFromShare ? undefined : setUrl}
+            onChangeText={isFromShare ? undefined : handleUrlChange}
             editable={!isFromShare}
             autoCapitalize="none"
             keyboardType="url"
@@ -227,14 +302,46 @@ export default function AddItemModal() {
           />
         </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="목표가 (원)"
-          placeholderTextColor={theme.subtext}
-          value={targetPrice}
-          onChangeText={setTargetPrice}
-          keyboardType="number-pad"
-        />
+        {/* 현재가 미리보기 */}
+        {previewLoading && (
+          <View style={styles.previewBox}>
+            <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={styles.previewLoadingText}>현재가 확인 중...</Text>
+          </View>
+        )}
+        {preview && (
+          <View style={styles.previewBox}>
+            <Text style={styles.previewTitle} numberOfLines={1}>
+              {preview.title}
+            </Text>
+            <Text style={styles.previewPrice}>
+              현재가 {preview.price.toLocaleString()}원
+            </Text>
+          </View>
+        )}
+
+        {/* 목표가 입력 + 추천 */}
+        <View>
+          <TextInput
+            style={styles.input}
+            placeholder="목표가 (원)"
+            placeholderTextColor={theme.subtext}
+            value={targetPrice}
+            onChangeText={setTargetPrice}
+            keyboardType="number-pad"
+          />
+          {suggestedPrice && !targetPrice && (
+            <TouchableOpacity
+              style={styles.suggestBtn}
+              onPress={handleApplySuggestion}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.suggestText}>
+                추천 목표가: {suggestedPrice.toLocaleString()}원 (10% 할인)
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         {scrapeFailed && (
           <View style={styles.failedBox}>
@@ -281,9 +388,17 @@ export default function AddItemModal() {
         </View>
       </KeyboardAvoidingView>
 
-      {/* Hidden WebView — 쿠팡 페이지 스크래핑 */}
+      {/* Hidden WebView — 미리보기 스크래핑 */}
       <CoupangScraper
-        key={scrapeKeyRef.current}
+        key={`preview-${previewKeyRef.current}`}
+        url={previewUrl}
+        onResult={handlePreviewResult}
+        onError={handlePreviewError}
+      />
+
+      {/* Hidden WebView — 저장 시 스크래핑 (미리보기 없을 때만) */}
+      <CoupangScraper
+        key={`save-${scrapeKeyRef.current}`}
         url={scrapeUrl}
         onResult={handleScrapeResult}
         onError={handleScrapeError}
@@ -328,6 +443,40 @@ const styles = StyleSheet.create({
   inputReadOnly: {
     opacity: 0.7,
     backgroundColor: '#111111',
+  },
+  previewBox: {
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  previewLoadingText: {
+    color: theme.subtext,
+    fontSize: 14,
+  },
+  previewTitle: {
+    color: theme.subtext,
+    fontSize: 13,
+    flex: 1,
+  },
+  previewPrice: {
+    color: theme.primary,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  suggestBtn: {
+    marginTop: -10,
+    marginBottom: 16,
+    paddingHorizontal: 4,
+  },
+  suggestText: {
+    color: theme.primary,
+    fontSize: 13,
   },
   buttons: {
     flexDirection: 'row',
