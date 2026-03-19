@@ -1,6 +1,6 @@
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
-import { scrapePrice } from './scraper.js';
+import { fetchCurrentPrice, extractProductId } from './coupang-api.js';
 import {
   sendPriceDropNotifications,
   sendDailyNotifications,
@@ -24,6 +24,7 @@ function isDailyRun(): boolean {
 interface UserItem {
   id: string;
   url: string;
+  resolvedUrl?: string;
   productName: string;
   currentPrice: number;
   targetPrice: number;
@@ -56,18 +57,26 @@ async function main() {
 
     for (const itemDoc of itemsSnap.docs) {
       const item = itemDoc.data() as UserItem;
-      if (!item.url) continue;
+      if (!item.url || !item.productName) continue;
 
-      console.log(`[PriceChecker] 스크래핑: ${item.productName?.slice(0, 30)}`);
-      const scraped = await scrapePrice(item.url);
+      console.log(`[PriceChecker] 조회: ${item.productName?.slice(0, 30)}`);
 
-      if (!scraped || scraped.price === 0) {
-        console.log(`  → 스크래핑 실패, 건너뜀`);
+      // URL에서 productId 추출 (resolvedUrl → url 순서로 시도)
+      const productId =
+        extractProductId(item.resolvedUrl || '') ||
+        extractProductId(item.url);
+      console.log(`  productId=${productId || 'none'} url=${(item.resolvedUrl || item.url).slice(0, 60)}`);
+
+      // 파트너스 API로 가격 조회
+      const result = await fetchCurrentPrice(item.productName, productId);
+
+      if (!result || result.price === 0) {
+        console.log(`  → 가격 조회 실패, 건너뜀`);
         continue;
       }
 
       const prevPrice = item.currentPrice;
-      const newPrice = scraped.price;
+      const newPrice = result.price;
       const today = new Date().toISOString().slice(0, 10);
 
       // Firestore 업데이트: currentPrice + priceHistory
@@ -81,17 +90,24 @@ async function main() {
       // 최근 30일만 유지
       const trimmed = history.slice(-30);
 
-      await itemDoc.ref.update({
+      const updateData: Record<string, any> = {
         currentPrice: newPrice,
         priceHistory: trimmed,
-      });
+      };
+      // 썸네일이 비어있으면 API 결과로 보충
+      const itemData = itemDoc.data();
+      if (result.image && !itemData.thumbnail) {
+        updateData.thumbnail = result.image;
+      }
+
+      await itemDoc.ref.update(updateData);
 
       console.log(
         `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원`,
       );
 
-      // 가격 하락 감지
-      if (newPrice < prevPrice) {
+      // 목표가 이하로 하락 감지
+      if (newPrice <= item.targetPrice && prevPrice > item.targetPrice) {
         pushTargets.push({
           token,
           itemId: item.id,
@@ -101,8 +117,8 @@ async function main() {
         });
       }
 
-      // 요청 간 딜레이 (차단 방지)
-      await new Promise((r) => setTimeout(r, 3000));
+      // API 요청 간 딜레이 (레이트 리밋 방지)
+      await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
