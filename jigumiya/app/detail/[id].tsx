@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Linking,
   TextInput,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,6 +19,7 @@ import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { TrackedItem } from '../../types';
+import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
 
 const MOCK_DATA: TrackedItem[] = [
   {
@@ -79,13 +81,43 @@ const MOCK_DATA: TrackedItem[] = [
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { trackedItems, removeItem, updateTargetPrice } = useAppStore();
+  const { trackedItems, removeItem, updateTargetPrice, updateItemPrice } = useAppStore();
 
   const allItems = trackedItems.length > 0 ? trackedItems : MOCK_DATA;
   const item = allItems.find((i) => i.id === id);
 
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [newPrice, setNewPrice] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleRefresh = useCallback(() => {
+    if (!item || refreshing || item.id.startsWith('mock-')) return;
+    setRefreshing(true);
+    const targetUrl = item.resolvedUrl || item.url;
+    setScrapeUrl(targetUrl);
+    timeoutRef.current = setTimeout(() => {
+      setRefreshing(false);
+      setScrapeUrl(null);
+    }, 15000);
+  }, [item, refreshing]);
+
+  const handleScrapeResult = useCallback((data: ScrapedProduct) => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (item && data.price > 0) {
+      updateItemPrice(item.id, data.price);
+    }
+    setRefreshing(false);
+    setScrapeUrl(null);
+  }, [item, updateItemPrice]);
+
+  const handleScrapeError = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    Alert.alert('실패', '가격 정보를 가져올 수 없습니다');
+    setRefreshing(false);
+    setScrapeUrl(null);
+  }, []);
 
   if (!item) {
     return (
@@ -98,21 +130,32 @@ export default function DetailScreen() {
   const prices = item.priceHistory.map((p) => p.price);
   const maxPrice = Math.max(...prices);
   const minPrice = Math.min(...prices);
-  const isAllTimeLow = item.currentPrice > 0 && item.currentPrice <= minPrice;
+  const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+  const hasChartData = item.priceHistory.length > 1;
+  const isAllSamePrice = hasChartData && new Set(prices).size === 1;
 
-  const chartData = item.priceHistory.map((p, i) => {
-    const d = p.date.slice(5); // "MM-DD"
-    // 첫/마지막/중간 날짜만 라벨 표시
-    const showLabel = i === 0 || i === item.priceHistory.length - 1 ||
-      (item.priceHistory.length > 4 && i === Math.floor(item.priceHistory.length / 2));
+  // 추적 기간 계산 (일)
+  const trackingDays = item.priceHistory.length >= 2
+    ? Math.max(1, Math.round(
+        (new Date(item.priceHistory[item.priceHistory.length - 1].date).getTime() -
+         new Date(item.priceHistory[0].date).getTime()) / 86400000
+      ))
+    : 0;
+
+  const chartData = item.priceHistory.map((entry, i) => {
+    const total = item.priceHistory.length;
+    const showLabel = i === 0 || i === total - 1 ||
+      (total > 4 && i === Math.floor(total / 2));
+    const dateLabel = showLabel
+      ? `${entry.date.slice(5, 7)}/${entry.date.slice(8, 10)}`
+      : '';
     return {
-      value: p.price,
-      label: showLabel ? d : '',
+      value: entry.price,
+      label: dateLabel,
       labelTextStyle: { color: theme.subtext, fontSize: 10 },
     };
   });
 
-  // 목표가 참조선 데이터 (민트색 점선)
   const targetLineData = item.priceHistory.map(() => ({
     value: item.targetPrice,
   }));
@@ -153,9 +196,22 @@ export default function DetailScreen() {
           <Ionicons name="chevron-back" size={24} color={theme.text} />
           <Text style={styles.headerBtnText}>홈</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={handleDelete} style={styles.headerBtn}>
-          <Ionicons name="trash-outline" size={22} color="#FF4444" />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            onPress={handleRefresh}
+            style={styles.headerBtn}
+            disabled={refreshing || item.id.startsWith('mock-')}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color={theme.primary} />
+            ) : (
+              <Ionicons name="refresh" size={22} color={theme.text} />
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleDelete} style={styles.headerBtn}>
+            <Ionicons name="trash-outline" size={22} color="#FF4444" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -180,7 +236,25 @@ export default function DetailScreen() {
           </View>
         </View>
 
-        {/* Price Grid 2x2 */}
+        {/* 목표가 */}
+        <TouchableOpacity
+          style={styles.targetRow}
+          onPress={() => {
+            setNewPrice(String(item.targetPrice));
+            setShowPriceModal(true);
+          }}
+          activeOpacity={0.7}
+        >
+          <View style={styles.gridLabelRow}>
+            <Text style={styles.gridLabel}>목표가</Text>
+            <Ionicons name="pencil" size={12} color={theme.subtext} />
+          </View>
+          <Text style={[styles.gridValue, { color: theme.primary }]}>
+            {item.targetPrice.toLocaleString()}원
+          </Text>
+        </TouchableOpacity>
+
+        {/* Price Stats */}
         <View style={styles.gridSection}>
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
@@ -189,50 +263,33 @@ export default function DetailScreen() {
                 {item.currentPrice.toLocaleString()}원
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.gridItem}
-              onPress={() => {
-                setNewPrice(String(item.targetPrice));
-                setShowPriceModal(true);
-              }}
-              activeOpacity={0.7}
-            >
-              <View style={styles.gridLabelRow}>
-                <Text style={styles.gridLabel}>목표가</Text>
-                <Ionicons name="pencil" size={12} color={theme.subtext} />
-              </View>
-              <Text style={[styles.gridValue, { color: theme.primary }]}>
-                {item.targetPrice.toLocaleString()}원
+            <View style={styles.gridItem}>
+              <Text style={styles.gridLabel}>최저가</Text>
+              <Text style={[styles.gridValue, { color: '#4CAF50' }]}>
+                {minPrice.toLocaleString()}원
               </Text>
-            </TouchableOpacity>
+            </View>
           </View>
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>30일 최고가</Text>
-              <Text style={styles.gridValue}>
+              <Text style={styles.gridLabel}>최고가</Text>
+              <Text style={[styles.gridValue, { color: '#FF4444' }]}>
                 {maxPrice.toLocaleString()}원
               </Text>
             </View>
             <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>30일 최저가</Text>
+              <Text style={styles.gridLabel}>평균가</Text>
               <Text style={styles.gridValue}>
-                {minPrice.toLocaleString()}원
+                {avgPrice.toLocaleString()}원
               </Text>
             </View>
           </View>
         </View>
 
         {/* Chart */}
-        {chartData.length > 1 && (
-          <View style={styles.chartSection}>
-            <View style={styles.chartHeader}>
-              <Text style={styles.sectionTitle}>30일 가격 변동</Text>
-              {isAllTimeLow && (
-                <View style={styles.lowestBadge}>
-                  <Text style={styles.lowestBadgeText}>역대 최저가!</Text>
-                </View>
-              )}
-            </View>
+        <View style={styles.chartSection}>
+          <Text style={styles.sectionTitle}>가격 변동</Text>
+          {hasChartData ? (
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}
@@ -275,9 +332,25 @@ export default function DetailScreen() {
                   <Text style={styles.legendText}>목표가 {item.targetPrice.toLocaleString()}원</Text>
                 </View>
               </View>
+              {isAllSamePrice && (
+                <Text style={styles.noChangeText}>
+                  최근 {trackingDays}일간 가격변동이 없었습니다
+                </Text>
+              )}
             </View>
-          </View>
-        )}
+          ) : (
+            <View style={styles.chartEmpty}>
+              <Text style={styles.chartSinglePrice}>
+                {item.currentPrice > 0
+                  ? `${item.currentPrice.toLocaleString()}원`
+                  : '가격 정보 없음'}
+              </Text>
+              <Text style={styles.chartEmptySubtext}>
+                매일 3회 가격을 확인합니다 (08시/14시/21시)
+              </Text>
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       {/* Bottom CTA */}
@@ -325,6 +398,13 @@ export default function DetailScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Hidden WebView — 수동 가격 새로고침 */}
+      <CoupangScraper
+        url={scrapeUrl}
+        onResult={handleScrapeResult}
+        onError={handleScrapeError}
+      />
     </SafeAreaView>
   );
 }
@@ -346,6 +426,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   headerBtn: {
     flexDirection: 'row',
@@ -406,9 +491,17 @@ const styles = StyleSheet.create({
     borderRadius: 1.5,
     backgroundColor: theme.subtext,
   },
+  targetRow: {
+    backgroundColor: theme.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: theme.border,
+    marginTop: 8,
+  },
   gridSection: {
     gap: 10,
-    marginTop: 8,
+    marginTop: 10,
   },
   gridRow: {
     flexDirection: 'row',
@@ -440,27 +533,11 @@ const styles = StyleSheet.create({
   chartSection: {
     marginTop: 24,
   },
-  chartHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: theme.text,
-  },
-  lowestBadge: {
-    backgroundColor: '#FF4444',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  lowestBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
+    marginBottom: 12,
   },
   chartWrap: {
     backgroundColor: theme.card,
@@ -495,6 +572,30 @@ const styles = StyleSheet.create({
   legendText: {
     fontSize: 11,
     color: theme.subtext,
+  },
+  chartEmpty: {
+    backgroundColor: theme.card,
+    borderRadius: 12,
+    padding: 32,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+    gap: 8,
+  },
+  chartSinglePrice: {
+    color: theme.text,
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  chartEmptySubtext: {
+    color: theme.subtext,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  noChangeText: {
+    color: theme.subtext,
+    fontSize: 12,
+    marginTop: 10,
   },
   bottomBar: {
     position: 'absolute',
