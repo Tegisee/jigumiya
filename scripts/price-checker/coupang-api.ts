@@ -57,6 +57,7 @@ export async function searchProducts(
   });
 
   const json = await res.json();
+  console.log(`  [API] 응답: status=${res.status} rCode=${json.rCode} rMessage=${json.rMessage || ''} productData=${json.data?.productData?.length ?? 'null'}`);
   if (json.rCode === '0' && json.data?.productData) {
     return json.data.productData.map((p: any) => ({
       productId: p.productId,
