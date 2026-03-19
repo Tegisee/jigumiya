@@ -107,22 +107,23 @@ export async function fetchCurrentPrice(
 
     console.log(`  [API] ${products.length}개 결과`);
 
-    // productId가 있으면 정확 매칭
-    if (productId) {
-      const exact = products.find((p) => String(p.productId) === productId);
-      if (exact) {
-        console.log(`  [API] productId 매칭 성공: ${exact.productPrice}원`);
-        return { price: exact.productPrice, image: exact.productImage };
+    // productId + 상품명 유사도 결합 매칭
+    const scored = products.map((p) => {
+      let score = 0;
+      // productId 매칭 보너스
+      if (productId && String(p.productId) === productId) score += 100;
+      // 상품명 단어 일치 수
+      for (const w of words) {
+        if (w.length >= 2 && p.productName.includes(w)) score += 10;
       }
-    }
+      return { ...p, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
 
-    // productId 매칭 실패 → 상품명 유사도로 매칭
-    const nameMatch = products.find((p) =>
-      p.productName.includes(words[0]) && p.productName.includes(words[1] || words[0]),
-    );
-    if (nameMatch) {
-      console.log(`  [API] 이름 매칭: "${nameMatch.productName.slice(0, 30)}" → ${nameMatch.productPrice}원`);
-      return { price: nameMatch.productPrice, image: nameMatch.productImage };
+    const best = scored[0];
+    if (best && best.score > 0) {
+      console.log(`  [API] 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
+      return { price: best.productPrice, image: best.productImage };
     }
   }
 
