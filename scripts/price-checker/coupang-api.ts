@@ -59,6 +59,10 @@ export async function searchProducts(
   const json = await res.json();
   console.log(`  [API] 응답: status=${res.status} rCode=${json.rCode} rMessage=${json.rMessage || ''} productData=${json.data?.productData?.length ?? 'null'}`);
   if (json.rCode === '0' && json.data?.productData) {
+    // 디버그: 원시 응답 전체 필드 확인
+    for (const p of json.data.productData) {
+      console.log(`  [API] raw: productId=${p.productId} vendorItemId=${p.vendorItemId ?? 'N/A'} itemId=${p.itemId ?? 'N/A'} price=${p.productPrice} name="${(p.productName || '').slice(0, 40)}" url=${(p.productUrl || '').slice(0, 80)}`);
+    }
     return json.data.productData.map((p: any) => ({
       productId: p.productId,
       productName: p.productName,
