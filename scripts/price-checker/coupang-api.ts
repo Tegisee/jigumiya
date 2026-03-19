@@ -90,7 +90,7 @@ export async function fetchCurrentPrice(
   if (!productName) return null;
 
   // 검색 키워드 전략: 구체적 → 포괄적 순서로 시도
-  const words = productName.split(/\s+/).filter(Boolean);
+  const words = productName.split(/\s+/).map(w => w.replace(/[,()]/g, '')).filter(Boolean);
   const keywords = [
     words.slice(0, 4).join(' '),  // 1차: 처음 4단어
     words.slice(0, 2).join(' '),  // 2차: 처음 2단어
@@ -112,9 +112,10 @@ export async function fetchCurrentPrice(
       let score = 0;
       // productId 매칭 보너스
       if (productId && String(p.productId) === productId) score += 100;
-      // 상품명 단어 일치 수
+      // 상품명 단어 일치 수 (구두점 제거 후 비교)
+      const pName = p.productName.replace(/[,()]/g, '');
       for (const w of words) {
-        if (w.length >= 2 && p.productName.includes(w)) score += 10;
+        if (w.length >= 2 && pName.includes(w)) score += 10;
       }
       return { ...p, score };
     });
