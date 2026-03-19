@@ -19,8 +19,12 @@ import CoupangScraper, {
   ScrapedProduct,
 } from '../../components/CoupangScraper';
 
-/** 텍스트에서 URL만 추출 (붙여넣기 시 "상품명\nURL" 형태 대응) */
+/** 텍스트에서 쿠팡 URL만 추출 (붙여넣기 시 "상품명\nURL" 형태 대응) */
 function extractUrl(text: string): string {
+  // 쿠팡 URL 우선 추출
+  const coupangMatch = text.match(/https?:\/\/[^\s]*coupang\.com[^\s]*/i);
+  if (coupangMatch) return coupangMatch[0];
+  // 일반 URL 폴백
   const match = text.match(/https?:\/\/[^\s]+/);
   return match ? match[0] : text.trim();
 }
@@ -57,10 +61,12 @@ export default function AddItemModal() {
   const [url, setUrl] = useState(sharedUrl ?? '');
   const [targetPrice, setTargetPrice] = useState('');
   const [loading, setLoading] = useState(false);
+  const [scrapeFailed, setScrapeFailed] = useState(false);
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const isFromShare = !!sharedUrl;
   const pendingRef = useRef<{ url: string; targetPrice: number } | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrapeKeyRef = useRef(0);
 
   const saveItem = useCallback(
     async (scraped: ScrapedProduct | null) => {
@@ -81,17 +87,10 @@ export default function AddItemModal() {
       const currentPrice = scraped?.price || 0;
       const thumbnail = scraped?.image || '';
 
-      console.log(
-        '[AddItem] 저장 —',
-        productName.slice(0, 30),
-        currentPrice,
-        '원, 이미지URL:',
-        thumbnail?.slice(0, 80)
-      );
-
       addItem({
         id: Date.now().toString(),
         url: affiliateUrl,
+        resolvedUrl: scraped?.resolvedUrl || '',
         productName,
         currentPrice,
         targetPrice: tp,
@@ -109,28 +108,31 @@ export default function AddItemModal() {
 
       setLoading(false);
       setScrapeUrl(null);
-      router.back();
+      // Share Intent 경로: back()하면 네비게이션 스택이 비어 쿠팡으로 복귀할 수 있음
+      // → 명시적으로 홈 화면으로 이동
+      if (isFromShare) {
+        router.replace('/');
+      } else {
+        router.back();
+      }
     },
-    [addItem, router, sharedText]
+    [addItem, router, sharedText, isFromShare]
   );
 
   const handleScrapeResult = useCallback(
     (data: ScrapedProduct) => {
-      console.log(
-        '[Scraper] 성공 —',
-        data.title?.slice(0, 30),
-        data.price,
-        '원'
-      );
       saveItem(data);
     },
     [saveItem]
   );
 
   const handleScrapeError = useCallback(() => {
-    console.log('[Scraper] 실패 — fallback 저장');
-    saveItem(null);
-  }, [saveItem]);
+    // 스크래핑 실패 — 바로 저장하지 않고 "다시 시도" UI 표시
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setLoading(false);
+    setScrapeUrl(null);
+    setScrapeFailed(true);
+  }, []);
 
   const handleSave = () => {
     if (!url.trim() || !targetPrice.trim()) return;
@@ -148,19 +150,56 @@ export default function AddItemModal() {
     }
 
     setLoading(true);
+    setScrapeFailed(false);
     pendingRef.current = {
       url: parsedUrl,
       targetPrice: Number(targetPrice),
     };
 
-    // 10초 타임아웃
+    // 20초 타임아웃
     timeoutRef.current = setTimeout(() => {
-      console.log('[Scraper] 타임아웃 10초 — fallback 저장');
-      saveItem(null);
-    }, 10000);
+      if (pendingRef.current) {
+        setLoading(false);
+        setScrapeUrl(null);
+        setScrapeFailed(true);
+        pendingRef.current = null;
+      }
+    }, 20000);
 
-    // WebView 스크래핑 시작
+    // WebView 스크래핑 시작 (key 변경으로 강제 리마운트)
+    scrapeKeyRef.current++;
     setScrapeUrl(parsedUrl);
+  };
+
+  const handleRetry = () => {
+    const parsedUrl = extractUrl(url);
+    setLoading(true);
+    setScrapeFailed(false);
+    pendingRef.current = {
+      url: parsedUrl,
+      targetPrice: Number(targetPrice),
+    };
+
+    timeoutRef.current = setTimeout(() => {
+      if (pendingRef.current) {
+        setLoading(false);
+        setScrapeUrl(null);
+        setScrapeFailed(true);
+        pendingRef.current = null;
+      }
+    }, 20000);
+
+    scrapeKeyRef.current++;
+    setScrapeUrl(parsedUrl);
+  };
+
+  const handleSaveWithoutScrape = () => {
+    pendingRef.current = {
+      url: extractUrl(url),
+      targetPrice: Number(targetPrice),
+    };
+    setScrapeFailed(false);
+    saveItem(null);
   };
 
   return (
@@ -195,20 +234,43 @@ export default function AddItemModal() {
           value={targetPrice}
           onChangeText={setTargetPrice}
           keyboardType="number-pad"
-          autoFocus
         />
+
+        {scrapeFailed && (
+          <View style={styles.failedBox}>
+            <Text style={styles.failedText}>
+              상품 정보를 가져오지 못했습니다
+            </Text>
+            <View style={styles.failedButtons}>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={handleRetry}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.retryBtnText}>다시 시도</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={handleSaveWithoutScrape}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.skipBtnText}>정보 없이 저장</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <View style={styles.buttons}>
           <TouchableOpacity
             style={styles.cancelBtn}
-            onPress={() => router.back()}
+            onPress={() => isFromShare ? router.replace('/') : router.back()}
           >
             <Text style={styles.cancelText}>취소</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.saveBtn, loading && styles.saveBtnDisabled]}
+            style={[styles.saveBtn, (loading || scrapeFailed) && styles.saveBtnDisabled]}
             onPress={handleSave}
-            disabled={loading}
+            disabled={loading || scrapeFailed}
           >
             {loading ? (
               <ActivityIndicator size="small" color="#000000" />
@@ -221,6 +283,7 @@ export default function AddItemModal() {
 
       {/* Hidden WebView — 쿠팡 페이지 스크래핑 */}
       <CoupangScraper
+        key={scrapeKeyRef.current}
         url={scrapeUrl}
         onResult={handleScrapeResult}
         onError={handleScrapeError}
@@ -298,5 +361,50 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: {
     opacity: 0.6,
+  },
+  failedBox: {
+    backgroundColor: 'rgba(255, 68, 68, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 68, 68, 0.3)',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    alignItems: 'center',
+    gap: 12,
+  },
+  failedText: {
+    color: '#FF6666',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  failedButtons: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  retryBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: theme.primary,
+    alignItems: 'center',
+  },
+  retryBtnText: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  skipBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+  },
+  skipBtnText: {
+    color: theme.subtext,
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
