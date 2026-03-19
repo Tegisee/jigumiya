@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, AppState } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, AppState, Share } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants/theme';
@@ -32,9 +33,27 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, [syncFromFirestore]);
 
+  const handleShareWishlist = async () => {
+    if (items.length === 0) return;
+    const lines = items.map((item, i) =>
+      `${i + 1}. ${item.productName}\n   ${item.currentPrice.toLocaleString()}원 (목표 ${item.targetPrice.toLocaleString()}원)\n   ${item.url}`
+    );
+    const message = `내 위시리스트\n\n${lines.join('\n\n')}\n\n이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.`;
+    try {
+      await Share.share({ message });
+    } catch {}
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>지금이야</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>지금이야</Text>
+        {items.length > 0 && (
+          <TouchableOpacity onPress={handleShareWishlist} style={styles.shareBtn}>
+            <Ionicons name="share-outline" size={22} color={theme.text} />
+          </TouchableOpacity>
+        )}
+      </View>
       <FlatList
         data={items}
         keyExtractor={(item) => item.id}
@@ -74,13 +93,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.background,
   },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: theme.text,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 12,
+  },
+  shareBtn: {
+    padding: 6,
   },
   list: {
     paddingHorizontal: 16,
