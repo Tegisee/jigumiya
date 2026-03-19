@@ -2,46 +2,73 @@ import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 
 const expo = new Expo();
 
-const MESSAGES = [
-  { title: '지금이야', body: '찜해둔 상품이 목표가 밑으로 떨어졌어요!' },
-  { title: '지금이야', body: '드디어 때가 왔습니다. 결제하러 가실 시간이에요!' },
-  { title: '지금이야', body: '헉! 방금 가격 내려갔어요. 언제 다시 오를지 몰라요!' },
-  { title: '지금이야', body: '잊고 계셨죠? 찜해둔 그 아이템, 지금이 줍줍할 타이밍!' },
-];
+export type AlertType = 'target_reached' | 'price_drop' | 'lowest_ever' | 'no_change';
 
-const DAILY_MESSAGES = [
-  { title: '지금이야', body: '오늘의 가격 현황을 확인해보세요!' },
-  { title: '지금이야', body: '찜한 상품들, 오늘 가격은 어떨까요?' },
-];
-
-function randomPick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-export interface PushTarget {
+export interface SmartPushTarget {
   token: string;
   itemId: string;
   productName: string;
+  alertType: AlertType;
   currentPrice: number;
   previousPrice: number;
+  targetPrice: number;
+  lowestPrice: number;
+  noChangeDays: number;
 }
 
-/** 가격 하락 알림 발송 */
-export async function sendPriceDropNotifications(
-  targets: PushTarget[],
+function buildMessage(t: SmartPushTarget): { title: string; body: string } {
+  const name = t.productName.slice(0, 20);
+  const cur = t.currentPrice.toLocaleString();
+  const prev = t.previousPrice.toLocaleString();
+
+  switch (t.alertType) {
+    case 'target_reached':
+      return {
+        title: '기다렸다, 지금이야!',
+        body: `${name} ${cur}원 — 목표가 도달!`,
+      };
+    case 'price_drop': {
+      const gap = t.targetPrice - t.currentPrice;
+      if (gap > 0) {
+        return {
+          title: '가격이 내려갔어요!',
+          body: `${name} ${prev}원 → ${cur}원! 목표가까지 ${gap.toLocaleString()}원`,
+        };
+      }
+      return {
+        title: '가격이 내려갔어요!',
+        body: `${name} ${prev}원 → ${cur}원!`,
+      };
+    }
+    case 'lowest_ever':
+      return {
+        title: '역대 최저가!',
+        body: `${name} ${cur}원 — 지금까지 가장 낮은 가격이에요!`,
+      };
+    case 'no_change':
+      return {
+        title: '가격 변동 없음',
+        body: `${name} ${t.noChangeDays}일째 같은 가격입니다 (${cur}원)`,
+      };
+  }
+}
+
+/** 스마트 알림 발송 */
+export async function sendSmartNotifications(
+  targets: SmartPushTarget[],
 ): Promise<void> {
   if (targets.length === 0) return;
 
   const messages: ExpoPushMessage[] = targets
     .filter((t) => Expo.isExpoPushToken(t.token))
     .map((t) => {
-      const msg = randomPick(MESSAGES);
+      const { title, body } = buildMessage(t);
       return {
         to: t.token,
         sound: 'default' as const,
-        title: msg.title,
-        body: `${t.productName} ${t.currentPrice.toLocaleString()}원 (${t.previousPrice.toLocaleString()}원에서 하락)`,
-        data: { itemId: t.itemId, screen: 'detail' },
+        title,
+        body,
+        data: { itemId: t.itemId, screen: 'detail', alertType: t.alertType },
       };
     });
 
@@ -54,32 +81,4 @@ export async function sendPriceDropNotifications(
       console.error('[Push] 발송 실패:', e);
     }
   }
-}
-
-/** 일간 요약 알림 발송 (21:00 KST) */
-export async function sendDailyNotifications(
-  tokens: string[],
-): Promise<void> {
-  if (tokens.length === 0) return;
-
-  const msg = randomPick(DAILY_MESSAGES);
-  const messages: ExpoPushMessage[] = tokens
-    .filter((t) => Expo.isExpoPushToken(t))
-    .map((t) => ({
-      to: t,
-      sound: 'default' as const,
-      title: msg.title,
-      body: msg.body,
-      data: { screen: 'home' },
-    }));
-
-  const chunks = expo.chunkPushNotifications(messages);
-  for (const chunk of chunks) {
-    try {
-      await expo.sendPushNotificationsAsync(chunk);
-    } catch (e) {
-      console.error('[Push] 일간 알림 발송 실패:', e);
-    }
-  }
-  console.log('[Push] 일간 알림 발송:', tokens.length, '명');
 }

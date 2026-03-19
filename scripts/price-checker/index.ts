@@ -2,9 +2,8 @@ import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { fetchCurrentPrice, extractProductId } from './coupang-api.js';
 import {
-  sendPriceDropNotifications,
-  sendDailyNotifications,
-  type PushTarget,
+  sendSmartNotifications,
+  type SmartPushTarget,
 } from './notifier.js';
 
 // Firebase Admin 초기화
@@ -13,13 +12,6 @@ const serviceAccount = JSON.parse(
 );
 initializeApp({ credential: cert(serviceAccount) });
 const db = getFirestore();
-
-// 21:00 KST 실행 여부 판별
-function isDailyRun(): boolean {
-  const now = new Date();
-  const kstHour = (now.getUTCHours() + 9) % 24;
-  return kstHour >= 20 && kstHour <= 22;
-}
 
 interface UserItem {
   id: string;
@@ -36,8 +28,7 @@ async function main() {
 
   // 전체 유저 조회
   const usersSnap = await db.collection('users').get();
-  const pushTargets: PushTarget[] = [];
-  const dailyTokens: string[] = [];
+  const pushTargets: SmartPushTarget[] = [];
 
   for (const userDoc of usersSnap.docs) {
     const userData = userDoc.data();
@@ -46,7 +37,6 @@ async function main() {
     const notifEnabled = userData.notificationEnabled !== false;
 
     if (!token || !notifEnabled) continue;
-    if (isDailyRun()) dailyTokens.push(token);
 
     // 유저의 상품 목록 조회
     const itemsSnap = await db
@@ -106,15 +96,51 @@ async function main() {
         `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원`,
       );
 
-      // 목표가 이하로 하락 감지
+      // ── 스마트 알림 조건 판별 ──
+      const allPrices = trimmed.map((h) => h.price);
+      const lowestPrice = Math.min(...allPrices);
+      const basePush = {
+        token,
+        itemId: item.id,
+        productName: item.productName,
+        currentPrice: newPrice,
+        previousPrice: prevPrice,
+        targetPrice: item.targetPrice,
+        lowestPrice,
+        noChangeDays: 0,
+      };
+
+      // 1) 목표가 도달 (최우선)
       if (newPrice <= item.targetPrice && prevPrice > item.targetPrice) {
-        pushTargets.push({
-          token,
-          itemId: item.id,
-          productName: item.productName,
-          currentPrice: newPrice,
-          previousPrice: prevPrice,
-        });
+        pushTargets.push({ ...basePush, alertType: 'target_reached' });
+        console.log(`  📢 목표가 도달!`);
+      }
+      // 2) 역대 최저가 갱신 (목표가 미도달이지만 최저가)
+      else if (newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 3) {
+        pushTargets.push({ ...basePush, alertType: 'lowest_ever' });
+        console.log(`  📢 역대 최저가!`);
+      }
+      // 3) 가격 하락 (일반)
+      else if (newPrice < prevPrice) {
+        pushTargets.push({ ...basePush, alertType: 'price_drop' });
+        console.log(`  📢 가격 하락`);
+      }
+      // 4) 7일 무변동
+      else if (trimmed.length >= 7) {
+        const last7 = trimmed.slice(-7);
+        const allSame = last7.every((h) => h.price === last7[0].price);
+        if (allSame) {
+          // 하루에 1번만 (21시대 실행 시)
+          const kstHour = (new Date().getUTCHours() + 9) % 24;
+          if (kstHour >= 20 && kstHour <= 22) {
+            pushTargets.push({
+              ...basePush,
+              alertType: 'no_change',
+              noChangeDays: 7,
+            });
+            console.log(`  📢 7일 무변동`);
+          }
+        }
       }
 
       // API 요청 간 딜레이 (레이트 리밋 방지)
@@ -122,16 +148,10 @@ async function main() {
     }
   }
 
-  // 가격 하락 알림 발송
+  // 스마트 알림 발송
   if (pushTargets.length > 0) {
-    console.log(`[PriceChecker] 가격 하락 ${pushTargets.length}건 → 푸시 발송`);
-    await sendPriceDropNotifications(pushTargets);
-  }
-
-  // 21:00 KST 일간 알림
-  if (isDailyRun() && dailyTokens.length > 0) {
-    console.log(`[PriceChecker] 일간 알림 → ${dailyTokens.length}명`);
-    await sendDailyNotifications(dailyTokens);
+    console.log(`[PriceChecker] 스마트 알림 ${pushTargets.length}건 → 푸시 발송`);
+    await sendSmartNotifications(pushTargets);
   }
 
   console.log('[PriceChecker] 완료:', new Date().toISOString());
