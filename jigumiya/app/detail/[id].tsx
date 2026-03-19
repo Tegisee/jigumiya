@@ -362,6 +362,9 @@ export default function DetailScreen() {
         >
           <Text style={styles.ctaText}>지금 구매하기</Text>
         </TouchableOpacity>
+        <Text style={styles.affiliateText}>
+          이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+        </Text>
       </View>
 
       {/* Target Price Edit Modal */}
@@ -619,6 +622,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
     color: '#000000',
+  },
+  affiliateText: {
+    color: theme.subtext,
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 8,
+    opacity: 0.6,
   },
   modalOverlay: {
     flex: 1,

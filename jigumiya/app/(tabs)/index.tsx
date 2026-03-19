@@ -73,25 +73,17 @@ export default function HomeScreen() {
   const [checkActive, setCheckActive] = useState(false);
   const lastCheckRef = useRef(0);
 
-  // 앱 포그라운드 복귀 시 가격 체크 (최소 30분 간격)
+  // 앱 최초 로드 시 1회만 가격 체크 (foreground 복귀 시 재실행 안 함)
   useEffect(() => {
-    // 앱 최초 로드 시에도 체크
-    const now = Date.now();
-    if (now - lastCheckRef.current > 30 * 60 * 1000) {
-      lastCheckRef.current = now;
+    if (lastCheckRef.current === 0) {
+      lastCheckRef.current = Date.now();
       setCheckActive(true);
-      setTimeout(() => setCheckActive(false), 60000);
+      setTimeout(() => setCheckActive(false), 120000);
     }
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         syncFromFirestore();
-        const elapsed = Date.now() - lastCheckRef.current;
-        if (elapsed > 30 * 60 * 1000) {
-          lastCheckRef.current = Date.now();
-          setCheckActive(true);
-          setTimeout(() => setCheckActive(false), 60000);
-        }
       }
       appStateRef.current = nextState;
     });
@@ -113,6 +105,13 @@ export default function HomeScreen() {
             </Text>
           </View>
         }
+        ListFooterComponent={
+          items.length > 0 ? (
+            <Text style={styles.affiliateText}>
+              이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+            </Text>
+          ) : null
+        }
       />
       <TouchableOpacity
         style={styles.fab}
@@ -122,8 +121,8 @@ export default function HomeScreen() {
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
-      {/* 포그라운드 가격 체크 (Hidden WebView) */}
-      <PriceChecker active={checkActive} />
+      {/* PriceChecker 비활성화 — 파트너스 API 승인 후 재활성화 예정 */}
+      {/* <PriceChecker active={checkActive} /> */}
     </SafeAreaView>
   );
 }
@@ -154,6 +153,14 @@ const styles = StyleSheet.create({
   emptyText: {
     color: theme.subtext,
     fontSize: 16,
+  },
+  affiliateText: {
+    color: theme.subtext,
+    fontSize: 10,
+    textAlign: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    opacity: 0.6,
   },
   fab: {
     position: 'absolute',
