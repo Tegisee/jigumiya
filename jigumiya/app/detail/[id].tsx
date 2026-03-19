@@ -11,6 +11,7 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
+  Share,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -103,6 +104,20 @@ export default function DetailScreen() {
 
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
+
+  // 가격 하락 여부 (이전 가격 대비)
+  const hasPriceDrop = item.priceHistory.length >= 2 &&
+    item.currentPrice < item.priceHistory[item.priceHistory.length - 2]?.price;
+
+  const handleShare = async () => {
+    const drop = hasPriceDrop
+      ? `${item.priceHistory[item.priceHistory.length - 2].price.toLocaleString()}원 → ${item.currentPrice.toLocaleString()}원으로 하락!`
+      : `현재 ${item.currentPrice.toLocaleString()}원`;
+    const message = `${item.productName}\n${drop}\n\n${item.url}\n\n이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.`;
+    try {
+      await Share.share({ message });
+    } catch {}
+  };
 
   const handleDelete = () => {
     Alert.alert('상품 삭제', '이 상품을 삭제하시겠습니까?', [
@@ -296,13 +311,22 @@ export default function DetailScreen() {
 
       {/* Bottom CTA */}
       <View style={styles.bottomBar}>
-        <TouchableOpacity
-          style={styles.ctaButton}
-          onPress={() => Linking.openURL(item.url)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.ctaText}>지금 구매하기</Text>
-        </TouchableOpacity>
+        <View style={styles.ctaRow}>
+          <TouchableOpacity
+            style={styles.ctaButton}
+            onPress={() => Linking.openURL(item.url)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.ctaText}>지금 구매하기</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.shareButton}
+            onPress={handleShare}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="share-outline" size={22} color={theme.text} />
+          </TouchableOpacity>
+        </View>
         <Text style={styles.affiliateText}>
           이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
         </Text>
@@ -553,10 +577,23 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: theme.border,
   },
+  ctaRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
   ctaButton: {
+    flex: 1,
     backgroundColor: theme.primary,
     borderRadius: 14,
     paddingVertical: 16,
+    alignItems: 'center',
+  },
+  shareButton: {
+    width: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
+    justifyContent: 'center',
     alignItems: 'center',
   },
   ctaText: {
