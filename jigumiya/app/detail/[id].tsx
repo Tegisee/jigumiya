@@ -18,73 +18,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
-import { TrackedItem } from '../../types';
 import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
-
-const MOCK_DATA: TrackedItem[] = [
-  {
-    id: 'mock-1',
-    url: 'https://www.coupang.com/vp/products/7335597913',
-    productName: '삼성 갤럭시 버즈3 프로 무선 블루투스 이어폰',
-    currentPrice: 259000,
-    targetPrice: 199000,
-    thumbnail: '',
-    priceHistory: [
-      { date: '2026-01-28', price: 289000 },
-      { date: '2026-02-04', price: 279000 },
-      { date: '2026-02-11', price: 269000 },
-      { date: '2026-02-18', price: 275000 },
-      { date: '2026-02-25', price: 259000 },
-      { date: '2026-03-01', price: 265000 },
-      { date: '2026-03-03', price: 259000 },
-    ],
-    createdAt: 1740700800000,
-  },
-  {
-    id: 'mock-2',
-    url: 'https://www.coupang.com/vp/products/7942516684',
-    productName: '다이슨 에어랩 멀티 스타일러 컴플리트 롱',
-    currentPrice: 598000,
-    targetPrice: 450000,
-    thumbnail: '',
-    priceHistory: [
-      { date: '2026-01-28', price: 649000 },
-      { date: '2026-02-04', price: 629000 },
-      { date: '2026-02-11', price: 619000 },
-      { date: '2026-02-18', price: 598000 },
-      { date: '2026-02-25', price: 609000 },
-      { date: '2026-03-01', price: 598000 },
-      { date: '2026-03-03', price: 598000 },
-    ],
-    createdAt: 1740700800000,
-  },
-  {
-    id: 'mock-3',
-    url: 'https://www.coupang.com/vp/products/8031756851',
-    productName: 'Apple 에어팟 프로 2세대 USB-C',
-    currentPrice: 329000,
-    targetPrice: 279000,
-    thumbnail: '',
-    priceHistory: [
-      { date: '2026-01-28', price: 359000 },
-      { date: '2026-02-04', price: 349000 },
-      { date: '2026-02-11', price: 339000 },
-      { date: '2026-02-18', price: 329000 },
-      { date: '2026-02-25', price: 335000 },
-      { date: '2026-03-01', price: 329000 },
-      { date: '2026-03-03', price: 329000 },
-    ],
-    createdAt: 1740700800000,
-  },
-];
 
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { trackedItems, removeItem, updateTargetPrice, updateItemPrice } = useAppStore();
 
-  const allItems = trackedItems.length > 0 ? trackedItems : MOCK_DATA;
-  const item = allItems.find((i) => i.id === id);
+  const item = trackedItems.find((i) => i.id === id);
 
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [newPrice, setNewPrice] = useState('');
@@ -93,7 +34,7 @@ export default function DetailScreen() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleRefresh = useCallback(() => {
-    if (!item || refreshing || item.id.startsWith('mock-')) return;
+    if (!item || refreshing) return;
     setRefreshing(true);
     const targetUrl = item.resolvedUrl || item.url;
     setScrapeUrl(targetUrl);
@@ -200,7 +141,7 @@ export default function DetailScreen() {
           <TouchableOpacity
             onPress={handleRefresh}
             style={styles.headerBtn}
-            disabled={refreshing || item.id.startsWith('mock-')}
+            disabled={refreshing}
           >
             {refreshing ? (
               <ActivityIndicator size="small" color={theme.primary} />
