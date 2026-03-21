@@ -84,10 +84,14 @@ async function main() {
         currentPrice: newPrice,
         priceHistory: trimmed,
       };
-      // 썸네일이 비어있으면 API 결과로 보충
+      // 썸네일/상품명이 비어있으면 API 결과로 보충
       const itemData = itemDoc.data();
       if (result.image && !itemData.thumbnail) {
         updateData.thumbnail = result.image;
+      }
+      if (itemData.productName === '상품 정보 없음' && result.name) {
+        updateData.productName = result.name;
+        console.log(`  → 상품명 보충: ${result.name.slice(0, 30)}`);
       }
 
       await itemDoc.ref.update(updateData);

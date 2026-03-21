@@ -86,7 +86,7 @@ export function extractProductId(url: string): string | null {
 export async function fetchCurrentPrice(
   productName: string,
   productId: string | null,
-): Promise<{ price: number; image: string } | null> {
+): Promise<{ price: number; image: string; name: string } | null> {
   if (!productName) return null;
 
   // 검색 키워드 전략: 구체적 → 포괄적 순서로 시도
@@ -126,7 +126,7 @@ export async function fetchCurrentPrice(
     const minScore = productId ? 110 : 30;
     if (best && best.score >= minScore) {
       console.log(`  [API] 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
-      return { price: best.productPrice, image: best.productImage };
+      return { price: best.productPrice, image: best.productImage, name: best.productName };
     }
     if (best) {
       console.log(`  [API] 매칭 후보 score=${best.score} 미달 (최소 ${minScore}): "${best.productName.slice(0, 40)}"`);

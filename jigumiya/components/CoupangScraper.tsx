@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
@@ -165,101 +165,91 @@ true;
 `;
 
 
-const FETCH_HEADERS = {
-  'User-Agent': USER_AGENT,
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'ko-KR,ko;q=0.9',
-};
-
 /**
- * iOS 전용: fetch + regex로 상품 정보 추출 (WebView 사용 안 함)
- * WKWebView가 coupang.com URL 로드 시 Universal Link를 트리거하므로
- * fetch로 HTML을 가져와서 regex로 파싱
+ * iOS 전용: WebView에 빈 HTML을 로드 → JS fetch로 쿠팡 페이지를 가져와 파싱
+ * WebView가 coupang.com으로 직접 내비게이션하지 않으므로 Universal Link 미트리거
+ * WebView 내 fetch는 실제 브라우저 엔진이므로 봇 차단 회피
  */
-async function fetchAndParse(rawUrl: string): Promise<ScrapedProduct | null> {
+function buildIosFetchHtml(targetUrl: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><script>
+(async function() {
   try {
-    // 1단계: 단축 URL resolve
-    let productUrl = rawUrl;
-    if (rawUrl.includes('link.coupang.com')) {
-      console.log('[iOS-Scraper] 단축 URL resolve:', rawUrl.slice(0, 60));
-      const res = await fetch(rawUrl, { redirect: 'manual', headers: FETCH_HEADERS });
-      const location = res.headers.get('location');
-      if (location && location.includes('coupang.com')) {
-        productUrl = location;
-      } else {
-        const res2 = await fetch(rawUrl, { redirect: 'follow', headers: FETCH_HEADERS });
-        if (res2.url.includes('coupang.com')) productUrl = res2.url;
-      }
-      console.log('[iOS-Scraper] resolved:', productUrl.slice(0, 80));
+    var url = ${JSON.stringify(targetUrl)};
+
+    // 단축 URL resolve
+    if (url.includes('link.coupang.com')) {
+      try {
+        var r = await fetch(url, { redirect: 'follow' });
+        if (r.url && r.url.includes('coupang.com')) url = r.url;
+      } catch(e) {}
     }
 
-    // 2단계: 상품 페이지 HTML fetch
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const pageRes = await fetch(productUrl, {
+    // 상품 페이지 fetch
+    var res = await fetch(url, {
       redirect: 'follow',
-      headers: FETCH_HEADERS,
-      signal: controller.signal,
+      headers: { 'Accept': 'text/html', 'Accept-Language': 'ko-KR,ko' }
     });
-    clearTimeout(timeout);
-    if (!pageRes.ok) {
-      console.warn('[iOS-Scraper] fetch 실패:', pageRes.status);
-      return null;
-    }
-    const html = await pageRes.text();
-    console.log('[iOS-Scraper] HTML:', html.length, '자');
+    var html = await res.text();
 
     if (html.length < 3000) {
-      console.warn('[iOS-Scraper] HTML 너무 짧음 (봇 차단)');
-      return null;
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ERROR', message: 'bot-blocked' }));
+      return;
     }
 
-    // 3단계: regex로 상품 정보 추출
-    const title = extractMeta(html, 'og:title') || extractMeta(html, 'twitter:title') || '';
-    const priceStr = extractMeta(html, 'product:price:amount');
-    const image = extractMeta(html, 'og:image') || '';
+    // DOM 파싱
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
 
-    // og:price 없으면 JSON-LD에서 추출
-    let price = priceStr ? parseInt(priceStr.replace(/[^0-9]/g, ''), 10) || 0 : 0;
+    // Title
+    var title = '';
+    var ogTitle = doc.querySelector('meta[property="og:title"]');
+    if (ogTitle) title = ogTitle.getAttribute('content') || '';
+    if (!title) {
+      var h2 = doc.querySelector('h2.prod-buy-header__title, .prod-buy-header__title');
+      if (h2) title = h2.textContent.trim();
+    }
+    if (!title) {
+      var tt = doc.querySelector('title');
+      if (tt) title = tt.textContent.trim();
+    }
+    title = title.replace(/\\s*[|\\-].*$/, '').trim();
+
+    // Price
+    var price = 0;
+    var ogPrice = doc.querySelector('meta[property="product:price:amount"]');
+    if (ogPrice) price = parseInt((ogPrice.getAttribute('content') || '').replace(/[^0-9]/g, ''), 10) || 0;
     if (!price) {
-      const ldMatch = html.match(/"price"\s*:\s*"?(\d[\d,]*)"?/);
-      if (ldMatch) price = parseInt(ldMatch[1].replace(/,/g, ''), 10) || 0;
+      var tp = doc.querySelector('.total-price strong');
+      if (tp) price = parseInt(tp.textContent.replace(/[^0-9]/g, ''), 10) || 0;
     }
-    // HTML DOM에서 가격 추출
     if (!price) {
-      const domPrice = html.match(/total-price[^>]*>[\s\S]*?(\d[\d,]+)\s*원/);
-      if (domPrice) price = parseInt(domPrice[1].replace(/,/g, ''), 10) || 0;
+      var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+      for (var s of scripts) {
+        try {
+          var ld = JSON.parse(s.textContent);
+          if (ld.offers && ld.offers.price) { price = parseInt(String(ld.offers.price).replace(/[^0-9]/g, ''), 10) || 0; break; }
+        } catch(e) {}
+      }
     }
 
-    const cleanTitle = title.replace(/\s*[|\-].*$/, '').trim();
-    const cleanImage = image.startsWith('//') ? `https:${image}` : image;
-    const finalUrl = pageRes.url || productUrl;
+    // Image
+    var image = '';
+    var ogImg = doc.querySelector('meta[property="og:image"]');
+    if (ogImg) image = ogImg.getAttribute('content') || '';
+    if (image && image.startsWith('//')) image = 'https:' + image;
 
-    console.log('[iOS-Scraper] 결과:', cleanTitle.slice(0, 30), price, '원');
-
-    if (!cleanTitle && !price) return null;
-
-    return {
-      title: cleanTitle || '상품 정보',
-      price,
-      image: cleanImage,
-      resolvedUrl: finalUrl,
-    };
-  } catch (e: any) {
-    console.warn('[iOS-Scraper] 실패:', e.message);
-    return null;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'SCRAPED',
+      url: res.url || url,
+      title: title,
+      price: price,
+      image: image
+    }));
+  } catch(e) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ERROR', message: e.message }));
   }
-}
-
-/** HTML에서 meta 태그 content 추출 */
-function extractMeta(html: string, property: string): string {
-  const regex = new RegExp(`<meta[^>]*property=["']${property}["'][^>]*content=["']([^"']*)["']`, 'i');
-  const match = html.match(regex);
-  if (match) return match[1];
-  // content가 property 앞에 오는 경우
-  const regex2 = new RegExp(`<meta[^>]*content=["']([^"']*)["'][^>]*property=["']${property}["']`, 'i');
-  const match2 = html.match(regex2);
-  return match2 ? match2[1] : '';
+})();
+</script></body></html>`;
 }
 
 export default function CoupangScraper({ url, html, baseUrl, onResult, onError }: Props) {
@@ -268,25 +258,12 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // iOS: fetch + regex (WebView 사용 안 함)
-  useEffect(() => {
-    if (!url || Platform.OS !== 'ios') return;
-    let cancelled = false;
-    fetchAndParse(url).then((result) => {
-      if (cancelled) return;
-      if (result && result.price > 0) {
-        onResult(result);
-      } else {
-        onError();
-      }
-    });
-    return () => { cancelled = true; };
-  }, [url]);
-
-  // Android: WebView 스크래핑
-  const activeHtml = html || null;
-  const activeBaseUrl = baseUrl || undefined;
-  const activeUrl = Platform.OS === 'ios' ? null : (activeHtml ? null : url);
+  // iOS: WebView에 로컬 HTML 로드 → JS fetch로 스크래핑 (Universal Link 우회)
+  // Android: WebView에 URL 직접 로드
+  const iosHtml = (Platform.OS === 'ios' && url) ? buildIosFetchHtml(url) : null;
+  const activeHtml = html || iosHtml || null;
+  const activeBaseUrl = baseUrl || (iosHtml ? 'about:blank' : undefined);
+  const activeUrl = activeHtml ? null : url;
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
