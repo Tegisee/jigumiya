@@ -35,7 +35,6 @@ export async function registerForPushNotifications(): Promise<string | null> {
     }
 
     if (finalStatus !== 'granted') {
-      console.log('[Notifications] 권한 거부됨');
       return null;
     }
 
@@ -47,7 +46,6 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
     const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     const token = tokenData.data;
-    console.log('[Notifications] Push Token:', token);
 
     await savePushToken(token);
     return token;

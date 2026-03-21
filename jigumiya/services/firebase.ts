@@ -44,7 +44,6 @@ export async function signInAnonymously(): Promise<string | null> {
     if (currentUser) return currentUser.uid;
 
     const credential = await firebaseSignInAnonymously(auth);
-    console.log('[Firebase] 익명 로그인 성공:', credential.user.uid);
     return credential.user.uid;
   } catch (e) {
     console.warn('[Firebase] 익명 로그인 실패:', e);
@@ -70,7 +69,6 @@ export async function savePushToken(token: string): Promise<void> {
       { expoPushToken: token, notificationEnabled: true },
       { merge: true },
     );
-    console.log('[Firebase] Push Token 저장 완료');
   } catch (e) {
     console.warn('[Firebase] Push Token 저장 실패:', e);
   }
@@ -169,7 +167,6 @@ export async function syncLocalToFirestore(
     }
 
     await batch.commit();
-    console.log('[Firebase] 로컬 → Firestore 동기화 완료:', items.length, '건');
   } catch (e) {
     console.warn('[Firebase] 동기화 실패:', e);
   }

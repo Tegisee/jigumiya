@@ -1,5 +1,6 @@
 import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
@@ -8,7 +9,26 @@ import { useAppStore } from '../../store/useAppStore';
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
 export default function SettingsScreen() {
-  const { isWowMember, toggleWowMember, notificationEnabled, toggleNotification } = useAppStore();
+  const router = useRouter();
+  const { isWowMember, toggleWowMember, notificationEnabled, toggleNotification, resetAllData } = useAppStore();
+
+  const handleReset = () => {
+    Alert.alert(
+      '전체 데이터 초기화',
+      '등록된 모든 상품과 설정이 삭제됩니다. 이 작업은 되돌릴 수 없습니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '초기화',
+          style: 'destructive',
+          onPress: () => {
+            resetAllData();
+            Alert.alert('완료', '모든 데이터가 초기화되었습니다.');
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -56,7 +76,7 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <TouchableOpacity
           style={styles.row}
-          onPress={() => Alert.alert('안내', '준비 중입니다')}
+          onPress={() => router.push('/modal/privacy')}
           activeOpacity={0.6}
         >
           <View style={styles.rowLeft}>
@@ -76,6 +96,28 @@ export default function SettingsScreen() {
           <Text style={styles.versionText}>{appVersion}</Text>
         </View>
       </View>
+
+      <Text style={styles.sectionTitle}>데이터</Text>
+      <View style={styles.card}>
+        <TouchableOpacity
+          style={styles.row}
+          onPress={handleReset}
+          activeOpacity={0.6}
+        >
+          <View style={styles.rowLeft}>
+            <Ionicons name="trash-outline" size={20} color="#FF4444" />
+            <View style={styles.rowText}>
+              <Text style={[styles.label, { color: '#FF4444' }]}>전체 데이터 초기화</Text>
+              <Text style={styles.desc}>모든 상품 및 설정 삭제</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.affiliate}>
+        이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+      </Text>
     </SafeAreaView>
   );
 }
@@ -139,5 +181,12 @@ const styles = StyleSheet.create({
   versionText: {
     fontSize: 15,
     color: theme.subtext,
+  },
+  affiliate: {
+    fontSize: 11,
+    color: theme.subtext,
+    textAlign: 'center',
+    lineHeight: 16,
+    opacity: 0.6,
   },
 });

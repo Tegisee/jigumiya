@@ -66,12 +66,10 @@ async function parseShortUrl(shortUrl: string): Promise<ShortUrlData> {
   };
 
   if (!shortUrl.includes('link.coupang.com')) {
-    console.log('[parseShortUrl] link.coupang.com 아님, 스킵');
     return empty;
   }
 
   try {
-    console.log('[parseShortUrl] fetch 시작:', shortUrl?.slice(0, 60));
     const res = await fetch(shortUrl, {
       headers: {
         'User-Agent':
@@ -80,10 +78,8 @@ async function parseShortUrl(shortUrl: string): Promise<ShortUrlData> {
       },
     });
 
-    console.log('[parseShortUrl] 응답:', res.status);
     if (!res.ok) return empty;
     const html = await res.text();
-    console.log('[parseShortUrl] HTML 길이:', html.length);
 
     // productId: pId%3D{id} 또는 products/{id}
     const pidMatch =
@@ -106,7 +102,6 @@ async function parseShortUrl(shortUrl: string): Promise<ShortUrlData> {
       }
     }
 
-    console.log('[parseShortUrl] 추출결과 — pId:', pidMatch?.[1], 'vid:', vidMatch?.[1], 'redirect:', redirectWebUrl?.slice(0, 60));
     return {
       productId: pidMatch ? pidMatch[1] : null,
       vendorItemId: vidMatch ? vidMatch[1] : null,
@@ -172,7 +167,6 @@ async function fetchCoupangPage(
   const empty = { price: 0, thumbnail: '', title: '' };
 
   try {
-    console.log('[fetchCoupangPage] fetch 시작:', url?.slice(0, 80));
     const res = await fetch(url, {
       headers: {
         'User-Agent':
@@ -184,22 +178,17 @@ async function fetchCoupangPage(
       redirect: 'follow',
     });
 
-    console.log('[fetchCoupangPage] 응답:', res.status, 'URL:', res.url?.slice(0, 80));
-
     if (!res.ok) {
       return empty;
     }
 
     const html = await res.text();
-    console.log('[fetchCoupangPage] HTML 길이:', html.length);
 
     const price = extractPriceFromHtml(html);
     const thumbnail =
       extractOgTag(html, 'og:image') || extractOgTag(html, 'twitter:image');
     const title =
       extractOgTag(html, 'og:title') || extractOgTag(html, 'twitter:title');
-
-    console.log('[fetchCoupangPage] 파싱결과 — 가격:', price, '이미지:', !!thumbnail, '제목:', title?.slice(0, 30));
 
     return {
       price,
@@ -230,30 +219,20 @@ export async function fetchProductMeta(
   shareText: string = ''
 ): Promise<ProductMeta> {
   try {
-    console.log('[ProductMeta] 시작 — URL:', rawUrl?.slice(0, 60));
-    console.log('[ProductMeta] 공유텍스트:', shareText?.slice(0, 80));
-
     // 1단계: 공유 텍스트에서 상품명/가격 파싱 (항상 시도)
     const nameFromText = parseProductName(shareText);
     const priceFromText = parsePriceFromText(shareText);
-    console.log('[ProductMeta] 1단계 텍스트파싱 — 이름:', nameFromText?.slice(0, 30), '가격:', priceFromText);
 
     // 2단계: link.coupang.com에서 productId + redirectWebUrl 추출
-    console.log('[ProductMeta] 2단계 시작 — parseShortUrl');
     const shortData = await parseShortUrl(rawUrl);
-    console.log('[ProductMeta] 2단계 결과 — productId:', shortData.productId, 'redirectUrl:', shortData.redirectWebUrl?.slice(0, 60));
     const productId =
       shortData.productId || rawUrl.match(/\/products\/(\d+)/)?.[1] || null;
 
     // 3단계: 실제 쿠팡 페이지 fetch (앱 내 디바이스 네트워크)
     let pageData = { price: 0, thumbnail: '', title: '' };
     const fetchUrl = shortData.redirectWebUrl || rawUrl;
-    console.log('[ProductMeta] 3단계 시작 — fetchUrl:', fetchUrl?.slice(0, 80));
     if (fetchUrl.includes('coupang.com')) {
       pageData = await fetchCoupangPage(fetchUrl);
-      console.log('[ProductMeta] 3단계 결과 — 가격:', pageData.price, '이미지:', pageData.thumbnail?.slice(0, 50), '제목:', pageData.title?.slice(0, 30));
-    } else {
-      console.log('[ProductMeta] 3단계 스킵 — coupang.com 아님');
     }
 
     const result = {
@@ -262,7 +241,6 @@ export async function fetchProductMeta(
       currentPrice: pageData.price || priceFromText || 0,
       productId,
     };
-    console.log('[ProductMeta] 최종결과 —', result.productName?.slice(0, 20), result.currentPrice, '원');
     return result;
   } catch (e) {
     console.warn('[ProductMeta] 전체 파싱 실패:', e);
