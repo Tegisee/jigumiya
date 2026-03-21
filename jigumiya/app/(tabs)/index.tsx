@@ -19,6 +19,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { ProductCard } from '../../components/ProductCard';
 import PriceChecker from '../../components/PriceChecker';
 import { fetchGoldbox, hasCoupangApiKeys, type GoldboxProduct } from '../../services/coupangApi';
+import { getAppShareMessage } from '../../services/config';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -51,14 +52,9 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, [syncFromFirestore]);
 
-  const handleShareWishlist = async () => {
-    if (items.length === 0) return;
-    const lines = items.map((item, i) =>
-      `${i + 1}. ${item.productName}\n   ${item.currentPrice.toLocaleString()}원 (목표 ${item.targetPrice.toLocaleString()}원)\n   ${item.url}`
-    );
-    const message = `내 위시리스트\n\n${lines.join('\n\n')}\n\n이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.`;
+  const handleShareApp = async () => {
     try {
-      await Share.share({ message });
+      await Share.share({ message: getAppShareMessage() });
     } catch {}
   };
 
@@ -87,11 +83,9 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>지금이야</Text>
-        {items.length > 0 && (
-          <TouchableOpacity onPress={handleShareWishlist} style={styles.shareBtn}>
-            <Ionicons name="share-outline" size={22} color={theme.text} />
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity onPress={handleShareApp} style={styles.shareBtn}>
+          <Ionicons name="share-outline" size={22} color={theme.text} />
+        </TouchableOpacity>
       </View>
 
       {/* 골드박스 상단 고정 */}
@@ -110,6 +104,20 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
       )}
+
+      {/* 추적상품 가져오기 */}
+      <TouchableOpacity
+        style={styles.fetchBtn}
+        onPress={() => Linking.openURL('https://www.coupang.com')}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="cart-outline" size={22} color={theme.primary} />
+        <View style={styles.fetchBtnText}>
+          <Text style={styles.fetchBtnTitle}>추적상품 가져오기</Text>
+          <Text style={styles.fetchBtnSub}>쿠팡에서 마음에 드는 상품을 찾아오세요</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
+      </TouchableOpacity>
 
       {/* 카테고리 제목 고정 */}
       <View style={styles.sectionHeader}>
@@ -192,6 +200,33 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 16,
     paddingHorizontal: 20,
+  },
+
+  // ── 추적상품 가져오기 ──
+  fetchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginVertical: 8,
+    padding: 14,
+    backgroundColor: 'rgba(0, 229, 204, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 204, 0.25)',
+    borderRadius: 14,
+  },
+  fetchBtnText: {
+    flex: 1,
+  },
+  fetchBtnTitle: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  fetchBtnSub: {
+    color: theme.subtext,
+    fontSize: 12,
+    marginTop: 2,
   },
 
   // ── 섹션 헤더 ──

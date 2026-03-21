@@ -14,3 +14,15 @@ export function initCoupangApi() {
 }
 
 export { hasCoupangApiKeys };
+
+// 스토어 링크 (출시 후 업데이트)
+export const STORE_LINKS = {
+  ios: '', // App Store URL
+  android: '', // Google Play URL
+};
+
+export function getAppShareMessage(): string {
+  const links = [STORE_LINKS.ios, STORE_LINKS.android].filter(Boolean);
+  const linkText = links.length > 0 ? `\n\n${links.join('\n')}` : '';
+  return `쿠팡 가격 추적 앱 '지금이야'를 써보세요!\n원하는 가격에 알려주는 스마트 알림 📉${linkText}`;
+}
