@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
   Text,
@@ -44,9 +45,19 @@ export default function HomeScreen() {
       appStateRef.current = nextState;
     });
 
-    // 골드박스 로드
+    // 골드박스 로드 (캐시 우선 → API 갱신)
+    AsyncStorage.getItem('goldbox-cache').then((cached) => {
+      if (cached) {
+        try { setGoldbox(JSON.parse(cached)); } catch {}
+      }
+    });
     if (hasCoupangApiKeys()) {
-      fetchGoldbox().then(setGoldbox).catch(() => {});
+      fetchGoldbox().then((data) => {
+        if (data.length > 0) {
+          setGoldbox(data);
+          AsyncStorage.setItem('goldbox-cache', JSON.stringify(data)).catch(() => {});
+        }
+      }).catch(() => {});
     }
 
     return () => sub.remove();

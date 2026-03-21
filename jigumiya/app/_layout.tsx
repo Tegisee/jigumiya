@@ -29,12 +29,10 @@ function extractCoupangUrl(shareIntent: any): string | null {
 function ShareIntentHandler() {
   const router = useRouter();
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
-  const handledRef = useRef(false);
 
   useEffect(() => {
     console.log('[ShareIntentHandler] hasShareIntent:', hasShareIntent);
-    if (!hasShareIntent || handledRef.current) return;
-    handledRef.current = true;
+    if (!hasShareIntent) return;
 
     const coupangUrl = extractCoupangUrl(shareIntent);
     const sharedText = shareIntent?.text || '';

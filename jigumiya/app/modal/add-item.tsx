@@ -10,7 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
@@ -68,6 +68,19 @@ export default function AddItemModal() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrapeKeyRef = useRef(0);
   const parsedUrlRef = useRef('');
+
+  // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응)
+  useFocusEffect(
+    useCallback(() => {
+      setUrl(sharedUrl ?? '');
+      setTargetPrice('');
+      setStep('url');
+      setScraped(null);
+      setScrapeFailed(false);
+      setScrapeUrl(null);
+      setSaving(false);
+    }, [sharedUrl])
+  );
 
   const suggestedPrice = scraped?.price ? Math.round(scraped.price * 0.9) : null;
 
