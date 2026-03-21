@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, Platform, InteractionManager } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
 import { theme } from '../constants/theme';
@@ -14,6 +14,10 @@ function extractCoupangUrl(shareIntent: any): string | null {
   const urlMatch = text.match(/https?:\/\/[^\s]+coupang\.com[^\s]*/i);
   if (urlMatch) return urlMatch[0];
 
+  // 3순위: url 필드 (Android에서 URL 직접 전달 시)
+  const directUrl = shareIntent?.url || '';
+  if (directUrl.includes('coupang.com')) return directUrl;
+
   return null;
 }
 
@@ -23,21 +27,28 @@ export default function ShareIntentScreen() {
     useShareIntentContext();
 
   useEffect(() => {
+    console.log('[ShareIntent] hasShareIntent:', hasShareIntent, 'shareIntent:', JSON.stringify(shareIntent)?.slice(0, 100));
+
     if (!hasShareIntent) return;
 
     const coupangUrl = extractCoupangUrl(shareIntent);
     const sharedText = shareIntent?.text || '';
+    console.log('[ShareIntent] coupangUrl:', coupangUrl, 'sharedText:', sharedText?.slice(0, 50));
 
     // 홈으로 먼저 이동 후 모달을 push
     router.replace('/');
 
     if (coupangUrl) {
-      setTimeout(() => {
-        router.push({
-          pathname: '/modal/add-item',
-          params: { sharedUrl: coupangUrl, sharedText },
-        });
-      }, 300);
+      const delay = Platform.OS === 'android' ? 600 : 300;
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => {
+          console.log('[ShareIntent] pushing add-item modal');
+          router.push({
+            pathname: '/modal/add-item',
+            params: { sharedUrl: coupangUrl, sharedText },
+          });
+        }, delay);
+      });
     }
 
     resetShareIntent();

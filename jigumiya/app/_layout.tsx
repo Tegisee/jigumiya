@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { Platform, InteractionManager } from 'react-native';
 import { Slot, Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
-import { ShareIntentProvider } from 'expo-share-intent';
+import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { theme } from '../constants/theme';
 import { initCoupangApi } from '../services/config';
 import { signInAnonymously } from '../services/firebase';
@@ -10,10 +11,60 @@ import {
   registerForPushNotifications,
   getItemIdFromNotification,
 } from '../services/notifications';
+import { useAppStore } from '../store/useAppStore';
+import OnboardingScreen from '../components/OnboardingScreen';
+
+function extractCoupangUrl(shareIntent: any): string | null {
+  const webUrl = shareIntent?.webUrl || '';
+  if (webUrl.includes('coupang.com')) return webUrl;
+  const text = shareIntent?.text || '';
+  const urlMatch = text.match(/https?:\/\/[^\s]+coupang\.com[^\s]*/i);
+  if (urlMatch) return urlMatch[0];
+  const directUrl = shareIntent?.url || '';
+  if (directUrl.includes('coupang.com')) return directUrl;
+  return null;
+}
+
+/** Share Intent를 감지하여 add-item 모달로 라우팅 */
+function ShareIntentHandler() {
+  const router = useRouter();
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  const handledRef = useRef(false);
+
+  useEffect(() => {
+    console.log('[ShareIntentHandler] hasShareIntent:', hasShareIntent);
+    if (!hasShareIntent || handledRef.current) return;
+    handledRef.current = true;
+
+    const coupangUrl = extractCoupangUrl(shareIntent);
+    const sharedText = shareIntent?.text || '';
+    console.log('[ShareIntentHandler] coupangUrl:', coupangUrl);
+
+    resetShareIntent();
+
+    if (coupangUrl) {
+      // 홈으로 이동 후 모달 push
+      router.replace('/');
+      const delay = Platform.OS === 'android' ? 600 : 300;
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => {
+          console.log('[ShareIntentHandler] pushing add-item');
+          router.push({
+            pathname: '/modal/add-item',
+            params: { sharedUrl: coupangUrl, sharedText },
+          });
+        }, delay);
+      });
+    }
+  }, [hasShareIntent]);
+
+  return null;
+}
 
 export default function RootLayout() {
   const router = useRouter();
   const notifListenerRef = useRef<Notifications.EventSubscription>(null);
+  const { hasSeenOnboarding, completeOnboarding } = useAppStore();
 
   useEffect(() => {
     initCoupangApi();
@@ -45,6 +96,15 @@ export default function RootLayout() {
     };
   }, []);
 
+  if (!hasSeenOnboarding) {
+    return (
+      <>
+        <StatusBar style="light" />
+        <OnboardingScreen onComplete={completeOnboarding} />
+      </>
+    );
+  }
+
   return (
     <ShareIntentProvider
       options={{
@@ -54,6 +114,7 @@ export default function RootLayout() {
       }}
     >
       <StatusBar style="light" />
+      <ShareIntentHandler />
       <Stack
         screenOptions={{
           headerShown: false,
