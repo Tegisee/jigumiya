@@ -145,7 +145,7 @@ export default function DetailScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
@@ -307,6 +307,10 @@ export default function DetailScreen() {
             </View>
           )}
         </View>
+
+        <Text style={styles.affiliateText}>
+          이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+        </Text>
       </ScrollView>
 
       {/* Bottom CTA */}
@@ -327,9 +331,6 @@ export default function DetailScreen() {
             <Ionicons name="share-outline" size={22} color={theme.text} />
           </TouchableOpacity>
         </View>
-        <Text style={styles.affiliateText}>
-          이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
-        </Text>
       </View>
 
       {/* Target Price Edit Modal */}
@@ -415,7 +416,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingBottom: 100,
+    paddingBottom: 20,
   },
   productSection: {
     alignItems: 'center',
@@ -566,13 +567,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 36,
+    paddingBottom: 8,
     backgroundColor: theme.background,
     borderTopWidth: 1,
     borderTopColor: theme.border,
@@ -602,11 +599,10 @@ const styles = StyleSheet.create({
     color: '#000000',
   },
   affiliateText: {
-    color: theme.subtext,
-    fontSize: 10,
+    color: '#888888',
+    fontSize: 11,
     textAlign: 'center',
-    marginTop: 8,
-    opacity: 0.6,
+    marginTop: 20,
   },
   modalOverlay: {
     flex: 1,

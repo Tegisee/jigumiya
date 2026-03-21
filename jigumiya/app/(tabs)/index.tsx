@@ -73,14 +73,13 @@ export default function HomeScreen() {
         <Image source={{ uri: product.productImage }} style={styles.goldboxImage} />
       ) : (
         <View style={[styles.goldboxImage, styles.goldboxImagePlaceholder]}>
-          <Ionicons name="bag-outline" size={20} color={theme.subtext} />
+          <Ionicons name="bag-outline" size={16} color={theme.subtext} />
         </View>
       )}
-      <Text style={styles.goldboxName} numberOfLines={2}>{product.productName}</Text>
-      <Text style={styles.goldboxPrice}>{product.productPrice.toLocaleString()}원</Text>
-      {product.isRocket && (
-        <Text style={styles.goldboxRocket}>로켓배송</Text>
-      )}
+      <View style={styles.goldboxInfo}>
+        <Text style={styles.goldboxName} numberOfLines={1}>{product.productName}</Text>
+        <Text style={styles.goldboxPrice}>{product.productPrice.toLocaleString()}원</Text>
+      </View>
     </TouchableOpacity>
   );
 
@@ -94,28 +93,35 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* 골드박스 상단 고정 */}
+      {goldbox.length > 0 && (
+        <View style={styles.goldboxSection}>
+          <View style={styles.goldboxHeader}>
+            <Ionicons name="flash" size={14} color="#FFD700" />
+            <Text style={styles.goldboxTitle}>오늘의 특가</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.goldboxScroll}
+          >
+            {goldbox.map(renderGoldboxItem)}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* 카테고리 제목 고정 */}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>가격 추적 중</Text>
+        <Text style={styles.sectionCount}>{items.length}개</Text>
+      </View>
+
       <FlatList
         data={items}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <ProductCard item={item} />}
         contentContainerStyle={styles.list}
-        ListHeaderComponent={
-          goldbox.length > 0 ? (
-            <View style={styles.goldboxSection}>
-              <View style={styles.goldboxHeader}>
-                <Ionicons name="flash" size={18} color="#FFD700" />
-                <Text style={styles.goldboxTitle}>오늘의 특가</Text>
-              </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.goldboxScroll}
-              >
-                {goldbox.map(renderGoldboxItem)}
-              </ScrollView>
-            </View>
-          ) : null
-        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyText}>
@@ -181,66 +187,86 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   affiliateText: {
-    color: theme.subtext,
-    fontSize: 10,
+    color: '#888888',
+    fontSize: 11,
     textAlign: 'center',
     paddingVertical: 16,
     paddingHorizontal: 20,
-    opacity: 0.6,
   },
 
-  // ── 골드박스 ──
+  // ── 섹션 헤더 ──
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.text,
+  },
+  sectionCount: {
+    fontSize: 13,
+    color: theme.subtext,
+  },
+
+  // ── 골드박스 (상단 고정, 컴팩트) ──
   goldboxSection: {
-    marginBottom: 20,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.border,
   },
   goldboxHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 12,
+    gap: 4,
+    paddingHorizontal: 20,
+    marginBottom: 8,
   },
   goldboxTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '700',
     color: theme.text,
   },
   goldboxScroll: {
-    gap: 10,
+    gap: 8,
+    paddingHorizontal: 20,
   },
   goldboxCard: {
-    width: 130,
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: theme.card,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: theme.border,
-    padding: 10,
+    padding: 8,
+    gap: 8,
+    width: 200,
   },
   goldboxImage: {
-    width: 110,
-    height: 110,
+    width: 44,
+    height: 44,
     borderRadius: 8,
-    marginBottom: 8,
   },
   goldboxImagePlaceholder: {
     backgroundColor: '#1a1a2e',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  goldboxInfo: {
+    flex: 1,
+  },
   goldboxName: {
     color: theme.text,
     fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   goldboxPrice: {
     color: theme.primary,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
-  },
-  goldboxRocket: {
-    color: '#4A90D9',
-    fontSize: 10,
-    marginTop: 2,
   },
 
   fab: {
