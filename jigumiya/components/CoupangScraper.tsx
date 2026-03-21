@@ -213,17 +213,35 @@ async function fetchPageHtml(rawUrl: string): Promise<ResolvedPage> {
       }
     }
 
-    // 2단계: 상품 페이지 HTML fetch
-    const pageRes = await fetch(productUrl, { redirect: 'follow', headers: FETCH_HEADERS });
-    if (!pageRes.ok) {
-      console.warn('[Scraper] HTML fetch 실패:', pageRes.status);
+    // 2단계: 상품 페이지 HTML fetch (재시도 1회)
+    let pageHtml = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const pageRes = await fetch(productUrl, {
+          redirect: 'follow',
+          headers: FETCH_HEADERS,
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!pageRes.ok) {
+          console.warn(`[Scraper] HTML fetch 실패 (${attempt + 1}):`, pageRes.status);
+          continue;
+        }
+        pageHtml = await pageRes.text();
+        if (pageHtml.length >= 5000) break;
+        console.warn(`[Scraper] HTML 짧음 (${attempt + 1}):`, pageHtml.length);
+      } catch (fetchErr: any) {
+        console.warn(`[Scraper] fetch 에러 (${attempt + 1}):`, fetchErr.message);
+      }
+    }
+    if (!pageHtml) {
       return { html: null, finalUrl: productUrl };
     }
 
-    const pageHtml = await pageRes.text();
-
-    // 봇 차단 페이지 감지 (HTML이 너무 짧으면 실패)
-    if (pageHtml.length < 5000 || (!pageHtml.includes('og:title') && !pageHtml.includes('prod-buy'))) {
+    // 봇 차단 페이지 감지
+    if (!pageHtml.includes('og:title') && !pageHtml.includes('prod-buy')) {
       console.warn('[Scraper] 봇 차단 페이지 가능성:', pageHtml.length, '자');
       return { html: null, finalUrl: productUrl };
     }
@@ -268,10 +286,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
           setFetchedHtml(pageHtml);
           setFallbackUrl(null);
         } else {
-          // fetch 실패 → URL fallback (드물지만 발생 가능)
-          console.log('[Scraper] iOS fetch 실패 → URL fallback:', finalUrl.slice(0, 60));
-          setFetchedHtml(null);
-          setFallbackUrl(finalUrl);
+          // fetch 실패 → URL fallback 금지 (Universal Link 트리거 방지)
+          // 대신 에러로 처리하여 "다시 시도 / 정보 없이 저장" UI 표시
+          console.warn('[Scraper] iOS fetch 실패 → onError 호출');
+          doneRef.current = true;
+          onError();
         }
       });
     } else {
