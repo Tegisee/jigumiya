@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
@@ -165,40 +165,101 @@ true;
 `;
 
 
+const FETCH_HEADERS = {
+  'User-Agent': USER_AGENT,
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'ko-KR,ko;q=0.9',
+};
+
 /**
- * iOS: link.coupang.com 단축 URL → www.coupang.com 직접 URL로 resolve
- * 리다이렉트만 추적 (HTML 다운로드 없음 → 봇 차단 회피)
- * 목적: WebView 내 리다이렉트가 Universal Link를 트리거하는 것 방지
+ * iOS 전용: fetch + regex로 상품 정보 추출 (WebView 사용 안 함)
+ * WKWebView가 coupang.com URL 로드 시 Universal Link를 트리거하므로
+ * fetch로 HTML을 가져와서 regex로 파싱
  */
-async function resolveShortUrl(rawUrl: string): Promise<string> {
-  if (!rawUrl.includes('link.coupang.com')) return rawUrl;
+async function fetchAndParse(rawUrl: string): Promise<ScrapedProduct | null> {
   try {
-    console.log('[Scraper] iOS 단축 URL resolve:', rawUrl.slice(0, 60));
-    const res = await fetch(rawUrl, {
-      redirect: 'manual',
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html',
-      },
-    });
-    const location = res.headers.get('location');
-    if (location && location.includes('coupang.com')) {
-      console.log('[Scraper] resolve 성공:', location.slice(0, 80));
-      return location;
+    // 1단계: 단축 URL resolve
+    let productUrl = rawUrl;
+    if (rawUrl.includes('link.coupang.com')) {
+      console.log('[iOS-Scraper] 단축 URL resolve:', rawUrl.slice(0, 60));
+      const res = await fetch(rawUrl, { redirect: 'manual', headers: FETCH_HEADERS });
+      const location = res.headers.get('location');
+      if (location && location.includes('coupang.com')) {
+        productUrl = location;
+      } else {
+        const res2 = await fetch(rawUrl, { redirect: 'follow', headers: FETCH_HEADERS });
+        if (res2.url.includes('coupang.com')) productUrl = res2.url;
+      }
+      console.log('[iOS-Scraper] resolved:', productUrl.slice(0, 80));
     }
-    // manual 실패 → follow로 재시도
-    const res2 = await fetch(rawUrl, {
+
+    // 2단계: 상품 페이지 HTML fetch
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const pageRes = await fetch(productUrl, {
       redirect: 'follow',
-      headers: { 'User-Agent': USER_AGENT },
+      headers: FETCH_HEADERS,
+      signal: controller.signal,
     });
-    if (res2.url && res2.url.includes('coupang.com')) {
-      console.log('[Scraper] follow resolve:', res2.url.slice(0, 80));
-      return res2.url;
+    clearTimeout(timeout);
+    if (!pageRes.ok) {
+      console.warn('[iOS-Scraper] fetch 실패:', pageRes.status);
+      return null;
     }
+    const html = await pageRes.text();
+    console.log('[iOS-Scraper] HTML:', html.length, '자');
+
+    if (html.length < 3000) {
+      console.warn('[iOS-Scraper] HTML 너무 짧음 (봇 차단)');
+      return null;
+    }
+
+    // 3단계: regex로 상품 정보 추출
+    const title = extractMeta(html, 'og:title') || extractMeta(html, 'twitter:title') || '';
+    const priceStr = extractMeta(html, 'product:price:amount');
+    const image = extractMeta(html, 'og:image') || '';
+
+    // og:price 없으면 JSON-LD에서 추출
+    let price = priceStr ? parseInt(priceStr.replace(/[^0-9]/g, ''), 10) || 0 : 0;
+    if (!price) {
+      const ldMatch = html.match(/"price"\s*:\s*"?(\d[\d,]*)"?/);
+      if (ldMatch) price = parseInt(ldMatch[1].replace(/,/g, ''), 10) || 0;
+    }
+    // HTML DOM에서 가격 추출
+    if (!price) {
+      const domPrice = html.match(/total-price[^>]*>[\s\S]*?(\d[\d,]+)\s*원/);
+      if (domPrice) price = parseInt(domPrice[1].replace(/,/g, ''), 10) || 0;
+    }
+
+    const cleanTitle = title.replace(/\s*[|\-].*$/, '').trim();
+    const cleanImage = image.startsWith('//') ? `https:${image}` : image;
+    const finalUrl = pageRes.url || productUrl;
+
+    console.log('[iOS-Scraper] 결과:', cleanTitle.slice(0, 30), price, '원');
+
+    if (!cleanTitle && !price) return null;
+
+    return {
+      title: cleanTitle || '상품 정보',
+      price,
+      image: cleanImage,
+      resolvedUrl: finalUrl,
+    };
   } catch (e: any) {
-    console.warn('[Scraper] resolve 실패:', e.message);
+    console.warn('[iOS-Scraper] 실패:', e.message);
+    return null;
   }
-  return rawUrl;
+}
+
+/** HTML에서 meta 태그 content 추출 */
+function extractMeta(html: string, property: string): string {
+  const regex = new RegExp(`<meta[^>]*property=["']${property}["'][^>]*content=["']([^"']*)["']`, 'i');
+  const match = html.match(regex);
+  if (match) return match[1];
+  // content가 property 앞에 오는 경우
+  const regex2 = new RegExp(`<meta[^>]*content=["']([^"']*)["'][^>]*property=["']${property}["']`, 'i');
+  const match2 = html.match(regex2);
+  return match2 ? match2[1] : '';
 }
 
 export default function CoupangScraper({ url, html, baseUrl, onResult, onError }: Props) {
@@ -207,28 +268,25 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // iOS: 단축 URL을 resolve한 최종 URL
-  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
-
+  // iOS: fetch + regex (WebView 사용 안 함)
   useEffect(() => {
-    if (!url) {
-      setResolvedUrl(null);
-      return;
-    }
-    if (Platform.OS === 'ios' && url.includes('link.coupang.com')) {
-      let cancelled = false;
-      resolveShortUrl(url).then((resolved) => {
-        if (!cancelled) setResolvedUrl(resolved);
-      });
-      return () => { cancelled = true; };
-    } else {
-      setResolvedUrl(url);
-    }
+    if (!url || Platform.OS !== 'ios') return;
+    let cancelled = false;
+    fetchAndParse(url).then((result) => {
+      if (cancelled) return;
+      if (result && result.price > 0) {
+        onResult(result);
+      } else {
+        onError();
+      }
+    });
+    return () => { cancelled = true; };
   }, [url]);
 
+  // Android: WebView 스크래핑
   const activeHtml = html || null;
   const activeBaseUrl = baseUrl || undefined;
-  const activeUrl = activeHtml ? null : resolvedUrl;
+  const activeUrl = Platform.OS === 'ios' ? null : (activeHtml ? null : url);
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
