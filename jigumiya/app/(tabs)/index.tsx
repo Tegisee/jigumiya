@@ -119,7 +119,16 @@ export default function HomeScreen() {
       {/* 추적상품 가져오기 */}
       <TouchableOpacity
         style={styles.fetchBtn}
-        onPress={() => Linking.openURL('https://www.coupang.com')}
+        onPress={async () => {
+          try {
+            const canOpen = await Linking.canOpenURL('coupang://home');
+            if (canOpen) {
+              await Linking.openURL('coupang://home');
+              return;
+            }
+          } catch {}
+          Linking.openURL('https://www.coupang.com');
+        }}
         activeOpacity={0.8}
       >
         <Ionicons name="cart-outline" size={22} color={theme.primary} />
