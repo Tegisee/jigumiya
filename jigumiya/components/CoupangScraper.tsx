@@ -260,9 +260,10 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
 
   // iOS: WebView에 로컬 HTML 로드 → JS fetch로 스크래핑 (Universal Link 우회)
   // Android: WebView에 URL 직접 로드
-  const iosHtml = (Platform.OS === 'ios' && url) ? buildIosFetchHtml(url) : null;
+  const isIosFetch = Platform.OS === 'ios' && !!url;
+  const iosHtml = isIosFetch ? buildIosFetchHtml(url!) : null;
   const activeHtml = html || iosHtml || null;
-  const activeBaseUrl = baseUrl || (iosHtml ? 'about:blank' : undefined);
+  const activeBaseUrl = baseUrl || (iosHtml ? 'https://www.coupang.com' : undefined);
   const activeUrl = activeHtml ? null : url;
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
@@ -389,19 +390,24 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const handleLoadEnd = useCallback(() => {
     console.log('[Scraper] onLoadEnd 발생');
     if (doneRef.current || injectedRef.current) return;
+    if (isIosFetch) {
+      // iOS fetch HTML: 내장 script가 자동 실행 → 추가 인젝션 불필요
+      // handleMessage에서 결과 수신 대기
+      injectedRef.current = true;
+      return;
+    }
     if (activeHtml) {
-      // HTML 모드: navigation 없으므로 바로 인젝션 (1초 대기)
+      // 외부 html prop: 인젝션 필요
       injectedRef.current = true;
       setTimeout(() => {
         if (!doneRef.current && webViewRef.current) {
-          console.log('[Scraper] HTML 모드 인젝션 실행');
           webViewRef.current.injectJavaScript(SCRAPE_JS);
         }
       }, 1000);
     } else {
       tryInject();
     }
-  }, [tryInject, activeHtml]);
+  }, [tryInject, activeHtml, isIosFetch]);
 
   const handleError = useCallback((syntheticEvent: any) => {
     console.error('[Scraper] WebView 에러:', syntheticEvent.nativeEvent?.description);
