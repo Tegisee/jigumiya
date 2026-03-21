@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect } from 'react';
+import { useRef, useCallback } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
@@ -164,95 +164,6 @@ const SCRAPE_JS = `
 true;
 `;
 
-const FETCH_HEADERS = {
-  'User-Agent': USER_AGENT,
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'ko-KR,ko;q=0.9',
-};
-
-interface ResolvedPage {
-  html: string | null;
-  finalUrl: string;
-}
-
-/**
- * iOS Universal Link 완전 우회:
- * 1) link.coupang.com → www.coupang.com URL resolve
- * 2) www.coupang.com 상품 페이지 HTML fetch
- * 3) HTML을 WebView에 직접 로드 (네트워크 탐색 없음 → Universal Link 트리거 불가)
- *
- * fetch 실패 시 URL fallback (Android 등 Universal Link 문제 없는 플랫폼)
- */
-async function fetchPageHtml(rawUrl: string): Promise<ResolvedPage> {
-  console.log('[Scraper] 페이지 fetch 시작:', rawUrl.slice(0, 60));
-
-  try {
-    // 1단계: 단축 URL → 상품 URL resolve
-    let productUrl = rawUrl;
-
-    if (rawUrl.includes('link.coupang.com')) {
-      const res = await fetch(rawUrl, {
-        redirect: 'manual',
-        headers: FETCH_HEADERS,
-      });
-      const location = res.headers.get('location');
-      if (location && location.includes('coupang.com')) {
-        productUrl = location;
-        console.log('[Scraper] 단축 URL resolve:', productUrl.slice(0, 80));
-      } else {
-        // manual 실패 → follow로 재시도
-        const res2 = await fetch(rawUrl, { redirect: 'follow', headers: FETCH_HEADERS });
-        const body = await res2.text();
-        const match = body.match(/https?:\/\/(?:www|m)\.coupang\.com\/v[pm]\/products\/\d+[^"'\s<]*/);
-        if (match) {
-          productUrl = match[0].replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
-        } else if (res2.url.includes('coupang.com')) {
-          productUrl = res2.url;
-        }
-        console.log('[Scraper] follow resolve:', productUrl.slice(0, 80));
-      }
-    }
-
-    // 2단계: 상품 페이지 HTML fetch (재시도 1회)
-    let pageHtml = '';
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        const pageRes = await fetch(productUrl, {
-          redirect: 'follow',
-          headers: FETCH_HEADERS,
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (!pageRes.ok) {
-          console.warn(`[Scraper] HTML fetch 실패 (${attempt + 1}):`, pageRes.status);
-          continue;
-        }
-        pageHtml = await pageRes.text();
-        if (pageHtml.length >= 5000) break;
-        console.warn(`[Scraper] HTML 짧음 (${attempt + 1}):`, pageHtml.length);
-      } catch (fetchErr: any) {
-        console.warn(`[Scraper] fetch 에러 (${attempt + 1}):`, fetchErr.message);
-      }
-    }
-    if (!pageHtml) {
-      return { html: null, finalUrl: productUrl };
-    }
-
-    // 봇 차단 페이지 감지
-    if (!pageHtml.includes('og:title') && !pageHtml.includes('prod-buy')) {
-      console.warn('[Scraper] 봇 차단 페이지 가능성:', pageHtml.length, '자');
-      return { html: null, finalUrl: productUrl };
-    }
-
-    console.log('[Scraper] HTML fetch 성공:', pageHtml.length, '자');
-    return { html: pageHtml, finalUrl: productUrl };
-  } catch (e: any) {
-    console.warn('[Scraper] fetch 실패:', e.message);
-    return { html: null, finalUrl: rawUrl };
-  }
-}
 
 export default function CoupangScraper({ url, html, baseUrl, onResult, onError }: Props) {
   const webViewRef = useRef<WebView>(null);
@@ -260,52 +171,10 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // iOS: HTML 모드 (Universal Link 완전 우회)
-  // Android: URL 모드 (Universal Link 문제 없음)
-  const [fetchedHtml, setFetchedHtml] = useState<string | null>(null);
-  const [fetchedBaseUrl, setFetchedBaseUrl] = useState<string | undefined>(undefined);
-  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!url) {
-      setFetchedHtml(null);
-      setFetchedBaseUrl(undefined);
-      setFallbackUrl(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    if (Platform.OS === 'ios') {
-      // iOS: fetch HTML → WebView에 html 문자열로 로드 (Universal Link 우회)
-      fetchPageHtml(url).then(({ html: pageHtml, finalUrl }) => {
-        if (cancelled) return;
-        if (pageHtml) {
-          console.log('[Scraper] iOS HTML 모드:', finalUrl.slice(0, 60));
-          setFetchedBaseUrl(finalUrl);
-          setFetchedHtml(pageHtml);
-          setFallbackUrl(null);
-        } else {
-          // fetch 실패 → URL fallback 금지 (Universal Link 트리거 방지)
-          // 대신 에러로 처리하여 "다시 시도 / 정보 없이 저장" UI 표시
-          console.warn('[Scraper] iOS fetch 실패 → onError 호출');
-          doneRef.current = true;
-          onError();
-        }
-      });
-    } else {
-      // Android: URL 직접 로드 (Universal Link 문제 없음)
-      setFetchedHtml(null);
-      setFallbackUrl(url);
-    }
-
-    return () => { cancelled = true; };
-  }, [url]);
-
-  // 실제 로드 대상 결정
-  const activeHtml = html || fetchedHtml;
-  const activeBaseUrl = baseUrl || fetchedBaseUrl;
-  const activeUrl = activeHtml ? null : fallbackUrl;
+  // iOS/Android 공통: WebView에 URL 직접 로드
+  const activeHtml = html || null;
+  const activeBaseUrl = baseUrl || undefined;
+  const activeUrl = activeHtml ? null : url;
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
@@ -454,7 +323,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   }, []);
 
   // 딥링크 및 앱 리다이렉트 차단
-  const handleShouldStartLoad = useCallback((event: { url: string }) => {
+  const handleShouldStartLoad = useCallback((event: { url: string; navigationType?: string }) => {
     const reqUrl = event.url;
     // 비-HTTP 스킴 차단 (intent://, market://, coupang://)
     if (!reqUrl.startsWith('http://') && !reqUrl.startsWith('https://')) {
@@ -462,11 +331,12 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     }
     try {
       const host = new URL(reqUrl).hostname;
-      // 앱 리다이렉트 도메인 + Universal Link 트리거 도메인 차단
+      // 앱 리다이렉트 도메인 차단
       if (
         host === 'applink.coupang.com' ||
-        host === 'link.coupang.com' ||
-        host === 'play.google.com'
+        host === 'play.google.com' ||
+        host === 'apps.apple.com' ||
+        host === 'itunes.apple.com'
       ) {
         console.log('[Scraper] 차단된 도메인:', host);
         return false;
