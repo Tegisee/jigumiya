@@ -29,10 +29,11 @@ function extractCoupangUrl(shareIntent: any): string | null {
 function ShareIntentHandler() {
   const router = useRouter();
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  const processingRef = useRef(false);
 
   useEffect(() => {
-    console.log('[ShareIntentHandler] hasShareIntent:', hasShareIntent);
-    if (!hasShareIntent) return;
+    if (!hasShareIntent || processingRef.current) return;
+    processingRef.current = true;
 
     const coupangUrl = extractCoupangUrl(shareIntent);
     const sharedText = shareIntent?.text || '';
@@ -41,18 +42,20 @@ function ShareIntentHandler() {
     resetShareIntent();
 
     if (coupangUrl) {
-      // 홈으로 이동 후 모달 push
       router.replace('/');
       const delay = Platform.OS === 'android' ? 600 : 300;
       InteractionManager.runAfterInteractions(() => {
         setTimeout(() => {
-          console.log('[ShareIntentHandler] pushing add-item');
           router.push({
             pathname: '/modal/add-item',
             params: { sharedUrl: coupangUrl, sharedText },
           });
+          // 모달 push 완료 후 다음 share intent 수신 가능
+          setTimeout(() => { processingRef.current = false; }, 1000);
         }, delay);
       });
+    } else {
+      processingRef.current = false;
     }
   }, [hasShareIntent]);
 

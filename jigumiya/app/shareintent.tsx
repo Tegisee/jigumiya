@@ -1,57 +1,20 @@
 import { useEffect } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, Platform, InteractionManager } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
 import { theme } from '../constants/theme';
 
-function extractCoupangUrl(shareIntent: any): string | null {
-  // 1순위: webUrl (link.coupang.com 형태)
-  const webUrl = shareIntent?.webUrl || '';
-  if (webUrl.includes('coupang.com')) return webUrl;
-
-  // 2순위: text에서 URL 추출 (텍스트 속 URL 파싱)
-  const text = shareIntent?.text || '';
-  const urlMatch = text.match(/https?:\/\/[^\s]+coupang\.com[^\s]*/i);
-  if (urlMatch) return urlMatch[0];
-
-  // 3순위: url 필드 (Android에서 URL 직접 전달 시)
-  const directUrl = shareIntent?.url || '';
-  if (directUrl.includes('coupang.com')) return directUrl;
-
-  return null;
-}
-
 export default function ShareIntentScreen() {
   const router = useRouter();
-  const { hasShareIntent, shareIntent, resetShareIntent } =
-    useShareIntentContext();
+  const { hasShareIntent } = useShareIntentContext();
 
+  // Share Intent 처리는 _layout.tsx의 ShareIntentHandler에서 수행
+  // 이 화면은 자동 라우팅 대상으로만 존재
   useEffect(() => {
-    console.log('[ShareIntent] hasShareIntent:', hasShareIntent, 'shareIntent:', JSON.stringify(shareIntent)?.slice(0, 100));
-
-    if (!hasShareIntent) return;
-
-    const coupangUrl = extractCoupangUrl(shareIntent);
-    const sharedText = shareIntent?.text || '';
-    console.log('[ShareIntent] coupangUrl:', coupangUrl, 'sharedText:', sharedText?.slice(0, 50));
-
-    // 홈으로 먼저 이동 후 모달을 push
-    router.replace('/');
-
-    if (coupangUrl) {
-      const delay = Platform.OS === 'android' ? 600 : 300;
-      InteractionManager.runAfterInteractions(() => {
-        setTimeout(() => {
-          console.log('[ShareIntent] pushing add-item modal');
-          router.push({
-            pathname: '/modal/add-item',
-            params: { sharedUrl: coupangUrl, sharedText },
-          });
-        }, delay);
-      });
+    if (!hasShareIntent) {
+      // intent 없이 이 화면에 도달한 경우 홈으로 이동
+      router.replace('/');
     }
-
-    resetShareIntent();
   }, [hasShareIntent]);
 
   return (

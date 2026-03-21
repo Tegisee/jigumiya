@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
@@ -165,16 +165,70 @@ true;
 `;
 
 
+/**
+ * iOS: link.coupang.com 단축 URL → www.coupang.com 직접 URL로 resolve
+ * 리다이렉트만 추적 (HTML 다운로드 없음 → 봇 차단 회피)
+ * 목적: WebView 내 리다이렉트가 Universal Link를 트리거하는 것 방지
+ */
+async function resolveShortUrl(rawUrl: string): Promise<string> {
+  if (!rawUrl.includes('link.coupang.com')) return rawUrl;
+  try {
+    console.log('[Scraper] iOS 단축 URL resolve:', rawUrl.slice(0, 60));
+    const res = await fetch(rawUrl, {
+      redirect: 'manual',
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html',
+      },
+    });
+    const location = res.headers.get('location');
+    if (location && location.includes('coupang.com')) {
+      console.log('[Scraper] resolve 성공:', location.slice(0, 80));
+      return location;
+    }
+    // manual 실패 → follow로 재시도
+    const res2 = await fetch(rawUrl, {
+      redirect: 'follow',
+      headers: { 'User-Agent': USER_AGENT },
+    });
+    if (res2.url && res2.url.includes('coupang.com')) {
+      console.log('[Scraper] follow resolve:', res2.url.slice(0, 80));
+      return res2.url;
+    }
+  } catch (e: any) {
+    console.warn('[Scraper] resolve 실패:', e.message);
+  }
+  return rawUrl;
+}
+
 export default function CoupangScraper({ url, html, baseUrl, onResult, onError }: Props) {
   const webViewRef = useRef<WebView>(null);
   const doneRef = useRef(false);
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // iOS/Android 공통: WebView에 URL 직접 로드
+  // iOS: 단축 URL을 resolve한 최종 URL
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!url) {
+      setResolvedUrl(null);
+      return;
+    }
+    if (Platform.OS === 'ios' && url.includes('link.coupang.com')) {
+      let cancelled = false;
+      resolveShortUrl(url).then((resolved) => {
+        if (!cancelled) setResolvedUrl(resolved);
+      });
+      return () => { cancelled = true; };
+    } else {
+      setResolvedUrl(url);
+    }
+  }, [url]);
+
   const activeHtml = html || null;
   const activeBaseUrl = baseUrl || undefined;
-  const activeUrl = activeHtml ? null : url;
+  const activeUrl = activeHtml ? null : resolvedUrl;
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
