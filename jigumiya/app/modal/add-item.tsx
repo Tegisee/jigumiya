@@ -107,8 +107,23 @@ export default function AddItemModal() {
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      setScrapeFailed(true);
       setScrapeUrl(null);
+      // 첫 타임아웃 시 자동 재시도 1회
+      if (retryCountRef.current === 0 && parsedUrlRef.current) {
+        retryCountRef.current++;
+        console.log('[AddItem] 타임아웃 → 자동 재시도');
+        setTimeout(() => {
+          scrapeKeyRef.current++;
+          setScrapeUrl(parsedUrlRef.current);
+          // 재시도 타임아웃
+          timeoutRef.current = setTimeout(() => {
+            setScrapeFailed(true);
+            setScrapeUrl(null);
+          }, 30000);
+        }, 1000);
+        return;
+      }
+      setScrapeFailed(true);
     }, 30000 + scrapeDelay);
 
     setTimeout(() => {
