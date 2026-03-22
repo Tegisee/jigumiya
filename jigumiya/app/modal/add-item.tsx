@@ -27,6 +27,16 @@ function extractUrl(text: string): string {
   return match ? match[0] : text.trim();
 }
 
+/** URL에서 productId, vendorItemId 추출 */
+function extractIds(url: string): { productId?: string; vendorItemId?: string } {
+  const pidMatch = url.match(/\/products\/(\d+)/);
+  const vidMatch = url.match(/[?&]vendorItemId=(\d+)/);
+  return {
+    productId: pidMatch?.[1],
+    vendorItemId: vidMatch?.[1],
+  };
+}
+
 function parseProductName(text: string): string {
   if (!text) return '';
   const withoutUrl = text.replace(/https?:\/\/[^\s]+/g, '').trim();
@@ -177,10 +187,16 @@ export default function AddItemModal() {
     const currentPrice = scraped?.price || 0;
     const thumbnail = scraped?.image || '';
 
+    // URL에서 productId/vendorItemId 추출 (가격 매칭 정확도용)
+    const resolvedUrl = scraped?.resolvedUrl || parsedUrlRef.current;
+    const ids = extractIds(resolvedUrl);
+
     addItem({
       id: Date.now().toString(),
       url: affiliateUrl,
-      resolvedUrl: scraped?.resolvedUrl || '',
+      resolvedUrl,
+      productId: ids.productId,
+      vendorItemId: ids.vendorItemId,
       productName,
       currentPrice,
       targetPrice: Number(targetPrice),

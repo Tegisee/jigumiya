@@ -82,18 +82,18 @@ export function extractProductId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-/** productId로 검색 → 현재 가격 반환 (여러 키워드 전략) */
+/** productId 정확 매칭으로 가격 조회 — productId 없으면 이름 유사도 */
 export async function fetchCurrentPrice(
   productName: string,
   productId: string | null,
+  currentPrice: number = 0,
 ): Promise<{ price: number; image: string; name: string } | null> {
   if (!productName) return null;
 
-  // 검색 키워드 전략: 구체적 → 포괄적 순서로 시도
   const words = productName.split(/\s+/).map(w => w.replace(/[,()]/g, '')).filter(Boolean);
   const keywords = [
-    words.slice(0, 4).join(' '),  // 1차: 처음 4단어
-    words.slice(0, 2).join(' '),  // 2차: 처음 2단어
+    words.slice(0, 4).join(' '),
+    words.slice(0, 2).join(' '),
   ].filter((k) => k.length >= 2);
 
   for (const keyword of keywords) {
@@ -107,12 +107,42 @@ export async function fetchCurrentPrice(
 
     console.log(`  [API] ${products.length}개 결과`);
 
-    // productId + 상품명 유사도 결합 매칭
+    // productId가 있으면 정확 매칭 필수
+    if (productId) {
+      // 같은 productId 중 상품명 유사도가 가장 높은 것 선택
+      const exactMatches = products.filter((p) => String(p.productId) === productId);
+      if (exactMatches.length > 0) {
+        // 상품명 유사도로 정렬
+        const scored = exactMatches.map((p) => {
+          let nameScore = 0;
+          const pName = p.productName.replace(/[,()]/g, '');
+          for (const w of words) {
+            if (w.length >= 2 && pName.includes(w)) nameScore++;
+          }
+          return { ...p, nameScore };
+        });
+        scored.sort((a, b) => b.nameScore - a.nameScore);
+        const best = scored[0];
+
+        // 가격 변동 안전장치: 현재가 대비 30% 초과 변동 시 스킵
+        if (currentPrice > 0) {
+          const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
+          if (changeRate > 0.3) {
+            console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${best.productPrice})`);
+            return null;
+          }
+        }
+
+        console.log(`  [API] productId 정확 매칭: "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
+        return { price: best.productPrice, image: best.productImage, name: best.productName };
+      }
+      console.log(`  [API] productId=${productId} 매칭 실패`);
+      continue;
+    }
+
+    // productId 없으면 이름 유사도로 매칭 (기존 방식, 보수적 임계값)
     const scored = products.map((p) => {
       let score = 0;
-      // productId 매칭 보너스
-      if (productId && String(p.productId) === productId) score += 100;
-      // 상품명 단어 일치 수 (구두점 제거 후 비교)
       const pName = p.productName.replace(/[,()]/g, '');
       for (const w of words) {
         if (w.length >= 2 && pName.includes(w)) score += 10;
@@ -122,14 +152,20 @@ export async function fetchCurrentPrice(
     scored.sort((a, b) => b.score - a.score);
 
     const best = scored[0];
-    // productId 매칭 시 최소 110 (productId+단어1개), 이름만일 때 최소 30 (단어3개)
-    const minScore = productId ? 110 : 30;
-    if (best && best.score >= minScore) {
-      console.log(`  [API] 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
+    if (best && best.score >= 30) {
+      // 가격 변동 안전장치
+      if (currentPrice > 0) {
+        const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
+        if (changeRate > 0.3) {
+          console.log(`  [API] 이름 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵`);
+          return null;
+        }
+      }
+      console.log(`  [API] 이름 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
       return { price: best.productPrice, image: best.productImage, name: best.productName };
     }
     if (best) {
-      console.log(`  [API] 매칭 후보 score=${best.score} 미달 (최소 ${minScore}): "${best.productName.slice(0, 40)}"`);
+      console.log(`  [API] 매칭 후보 score=${best.score} 미달 (최소 30): "${best.productName.slice(0, 40)}"`);
     }
   }
 

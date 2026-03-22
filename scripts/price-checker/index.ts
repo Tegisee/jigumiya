@@ -17,6 +17,8 @@ interface UserItem {
   id: string;
   url: string;
   resolvedUrl?: string;
+  productId?: string;
+  vendorItemId?: string;
   productName: string;
   currentPrice: number;
   targetPrice: number;
@@ -96,12 +98,15 @@ async function main() {
 
       console.log(`[PriceChecker] 조회: ${item.productName?.slice(0, 30)}`);
 
+      // productId: Firestore 필드 우선 → URL에서 추출 fallback
       const productId =
+        item.productId ||
         extractProductId(item.resolvedUrl || '') ||
         extractProductId(item.url);
-      console.log(`  productId=${productId || 'none'} url=${(item.resolvedUrl || item.url).slice(0, 60)}`);
+      console.log(`  productId=${productId || 'none'} vendorItemId=${item.vendorItemId || 'none'}`);
 
-      const result = await fetchCurrentPrice(item.productName, productId);
+      // 가격 조회 (현재가 전달 → 30% 초과 변동 시 스킵)
+      const result = await fetchCurrentPrice(item.productName, productId, item.currentPrice);
 
       if (!result || result.price === 0) {
         console.log(`  → 가격 조회 실패, 건너뜀`);
