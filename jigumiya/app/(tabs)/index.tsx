@@ -20,7 +20,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { ProductCard } from '../../components/ProductCard';
 import PriceChecker from '../../components/PriceChecker';
 import { fetchGoldbox, hasCoupangApiKeys, type GoldboxProduct } from '../../services/coupangApi';
-import { getAppShareMessage } from '../../services/config';
+import { getAppShareMessage, STORE_LINKS } from '../../services/config';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -94,9 +94,11 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>지금이야</Text>
-        <TouchableOpacity onPress={handleShareApp} style={styles.shareBtn}>
-          <Ionicons name="share-outline" size={22} color={theme.text} />
-        </TouchableOpacity>
+        {(STORE_LINKS.ios || STORE_LINKS.android) && (
+          <TouchableOpacity onPress={handleShareApp} style={styles.shareBtn}>
+            <Ionicons name="share-outline" size={22} color={theme.text} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* 골드박스 상단 고정 */}
