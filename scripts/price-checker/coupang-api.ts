@@ -82,13 +82,16 @@ export function extractProductId(url: string): string | null {
   return match ? match[1] : null;
 }
 
-/** productId 정확 매칭으로 가격 조회 — productId 없으면 이름 유사도 */
+/** productId 정확 매칭으로 가격 조회 — productId 없으면 스킵 */
 export async function fetchCurrentPrice(
   productName: string,
   productId: string | null,
   currentPrice: number = 0,
 ): Promise<{ price: number; image: string; name: string } | null> {
-  if (!productName) return null;
+  if (!productName || !productId) {
+    console.log(`  [API] productId 없음 → 스킵`);
+    return null;
+  }
 
   const words = productName.split(/\s+/).map(w => w.replace(/[,()]/g, '')).filter(Boolean);
   const keywords = [
@@ -97,7 +100,7 @@ export async function fetchCurrentPrice(
   ].filter((k) => k.length >= 2);
 
   for (const keyword of keywords) {
-    console.log(`  [API] 검색: "${keyword}" (productId=${productId || 'none'})`);
+    console.log(`  [API] 검색: "${keyword}" (productId=${productId})`);
     const products = await searchProducts(keyword, 5);
 
     if (products.length === 0) {
@@ -105,68 +108,24 @@ export async function fetchCurrentPrice(
       continue;
     }
 
-    console.log(`  [API] ${products.length}개 결과`);
-
-    // productId가 있으면 정확 매칭 필수
-    if (productId) {
-      // 같은 productId 중 상품명 유사도가 가장 높은 것 선택
-      const exactMatches = products.filter((p) => String(p.productId) === productId);
-      if (exactMatches.length > 0) {
-        // 상품명 유사도로 정렬
-        const scored = exactMatches.map((p) => {
-          let nameScore = 0;
-          const pName = p.productName.replace(/[,()]/g, '');
-          for (const w of words) {
-            if (w.length >= 2 && pName.includes(w)) nameScore++;
-          }
-          return { ...p, nameScore };
-        });
-        scored.sort((a, b) => b.nameScore - a.nameScore);
-        const best = scored[0];
-
-        // 가격 변동 안전장치: 현재가 대비 30% 초과 변동 시 스킵
-        if (currentPrice > 0) {
-          const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
-          if (changeRate > 0.3) {
-            console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${best.productPrice})`);
-            return null;
-          }
-        }
-
-        console.log(`  [API] productId 정확 매칭: "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
-        return { price: best.productPrice, image: best.productImage, name: best.productName };
-      }
-      console.log(`  [API] productId=${productId} 매칭 실패`);
+    // productId 정확 매칭만 허용
+    const exact = products.find((p) => String(p.productId) === productId);
+    if (!exact) {
+      console.log(`  [API] productId=${productId} 매칭 실패 (${products.length}개 중 일치 없음)`);
       continue;
     }
 
-    // productId 없으면 이름 유사도로 매칭 (기존 방식, 보수적 임계값)
-    const scored = products.map((p) => {
-      let score = 0;
-      const pName = p.productName.replace(/[,()]/g, '');
-      for (const w of words) {
-        if (w.length >= 2 && pName.includes(w)) score += 10;
+    // 가격 변동 안전장치: 30% 초과 변동 시 스킵
+    if (currentPrice > 0) {
+      const changeRate = Math.abs(exact.productPrice - currentPrice) / currentPrice;
+      if (changeRate > 0.3) {
+        console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${exact.productPrice})`);
+        return null;
       }
-      return { ...p, score };
-    });
-    scored.sort((a, b) => b.score - a.score);
+    }
 
-    const best = scored[0];
-    if (best && best.score >= 30) {
-      // 가격 변동 안전장치
-      if (currentPrice > 0) {
-        const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
-        if (changeRate > 0.3) {
-          console.log(`  [API] 이름 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵`);
-          return null;
-        }
-      }
-      console.log(`  [API] 이름 매칭: score=${best.score} "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
-      return { price: best.productPrice, image: best.productImage, name: best.productName };
-    }
-    if (best) {
-      console.log(`  [API] 매칭 후보 score=${best.score} 미달 (최소 30): "${best.productName.slice(0, 40)}"`);
-    }
+    console.log(`  [API] productId 정확 매칭: "${exact.productName.slice(0, 40)}" → ${exact.productPrice}원`);
+    return { price: exact.productPrice, image: exact.productImage, name: exact.productName };
   }
 
   console.log(`  [API] 모든 검색 전략 실패`);
