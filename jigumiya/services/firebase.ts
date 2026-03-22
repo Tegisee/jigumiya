@@ -66,7 +66,7 @@ export async function savePushToken(token: string): Promise<void> {
   try {
     await setDoc(
       doc(db, 'users', uid),
-      { expoPushToken: token, notificationEnabled: true },
+      { expoPushToken: token, notificationEnabled: true, lastActiveAt: new Date().toISOString() },
       { merge: true },
     );
   } catch (e) {
@@ -161,6 +161,9 @@ export async function syncLocalToFirestore(
 
   try {
     const batch = writeBatch(db);
+
+    // lastActiveAt 업데이트
+    batch.set(doc(db, 'users', uid), { lastActiveAt: new Date().toISOString() }, { merge: true });
 
     for (const item of items) {
       batch.set(doc(db, 'users', uid, 'items', item.id), item);

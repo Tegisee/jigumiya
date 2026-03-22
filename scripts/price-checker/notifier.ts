@@ -1,4 +1,4 @@
-import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 
 const expo = new Expo();
 
@@ -53,11 +53,15 @@ function buildMessage(t: SmartPushTarget): { title: string; body: string } {
   }
 }
 
-/** 스마트 알림 발송 */
+/**
+ * 스마트 알림 발송 — 실패한 토큰 목록 반환 (고아 데이터 정리용)
+ */
 export async function sendSmartNotifications(
   targets: SmartPushTarget[],
-): Promise<void> {
-  if (targets.length === 0) return;
+): Promise<string[]> {
+  if (targets.length === 0) return [];
+
+  const invalidTokens: string[] = [];
 
   const messages: ExpoPushMessage[] = targets
     .filter((t) => Expo.isExpoPushToken(t.token))
@@ -73,12 +77,31 @@ export async function sendSmartNotifications(
     });
 
   const chunks = expo.chunkPushNotifications(messages);
+  const tickets: ExpoPushTicket[] = [];
+
   for (const chunk of chunks) {
     try {
-      const receipts = await expo.sendPushNotificationsAsync(chunk);
-      console.log('[Push] 발송:', receipts.length, '건');
+      const result = await expo.sendPushNotificationsAsync(chunk);
+      tickets.push(...result);
+      console.log('[Push] 발송:', result.length, '건');
     } catch (e) {
       console.error('[Push] 발송 실패:', e);
     }
   }
+
+  // 발송 실패 토큰 수집 (DeviceNotRegistered = 앱 삭제/토큰 만료)
+  tickets.forEach((ticket, i) => {
+    if (ticket.status === 'error') {
+      const token = messages[i]?.to as string;
+      if (
+        ticket.details?.error === 'DeviceNotRegistered' ||
+        ticket.details?.error === 'InvalidCredentials'
+      ) {
+        console.log('[Push] 만료 토큰:', token?.slice(0, 30));
+        if (token) invalidTokens.push(token);
+      }
+    }
+  });
+
+  return invalidTokens;
 }

@@ -1,5 +1,5 @@
 import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { fetchCurrentPrice, extractProductId } from './coupang-api.js';
 import {
   sendSmartNotifications,
@@ -23,10 +23,53 @@ interface UserItem {
   priceHistory: { date: string; price: number }[];
 }
 
+/** 만료 토큰의 유저 데이터 정리 (앱 삭제 대응) */
+async function cleanupInvalidUsers(invalidTokens: string[]) {
+  if (invalidTokens.length === 0) return;
+
+  const usersSnap = await db.collection('users').get();
+  for (const userDoc of usersSnap.docs) {
+    const token = userDoc.data().expoPushToken;
+    if (!token || !invalidTokens.includes(token)) continue;
+
+    console.log(`[Cleanup] 만료 유저 정리: ${userDoc.id}`);
+
+    // 하위 items 컬렉션 삭제
+    const itemsSnap = await userDoc.ref.collection('items').get();
+    const batch = db.batch();
+    itemsSnap.docs.forEach((doc) => batch.delete(doc.ref));
+    batch.delete(userDoc.ref);
+    await batch.commit();
+    console.log(`[Cleanup] 삭제 완료: ${itemsSnap.size}개 상품 + 유저`);
+  }
+}
+
+/** 30일 이상 비활성 유저 정리 */
+async function cleanupInactiveUsers() {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const usersSnap = await db.collection('users').get();
+  for (const userDoc of usersSnap.docs) {
+    const data = userDoc.data();
+    const lastActive = data.lastActiveAt?.toDate?.() || data.lastActiveAt;
+    if (!lastActive) continue; // lastActiveAt 없으면 스킵 (기존 유저)
+
+    if (new Date(lastActive) < thirtyDaysAgo) {
+      console.log(`[Cleanup] 비활성 유저 정리: ${userDoc.id} (lastActive: ${lastActive})`);
+      const itemsSnap = await userDoc.ref.collection('items').get();
+      const batch = db.batch();
+      itemsSnap.docs.forEach((doc) => batch.delete(doc.ref));
+      batch.delete(userDoc.ref);
+      await batch.commit();
+      console.log(`[Cleanup] 삭제 완료: ${itemsSnap.size}개 상품 + 유저`);
+    }
+  }
+}
+
 async function main() {
   console.log('[PriceChecker] 시작:', new Date().toISOString());
 
-  // 전체 유저 조회
   const usersSnap = await db.collection('users').get();
   const pushTargets: SmartPushTarget[] = [];
 
@@ -38,12 +81,14 @@ async function main() {
 
     if (!token || !notifEnabled) continue;
 
-    // 유저의 상품 목록 조회
     const itemsSnap = await db
       .collection('users')
       .doc(uid)
       .collection('items')
       .get();
+
+    // 상품이 없으면 스킵
+    if (itemsSnap.empty) continue;
 
     for (const itemDoc of itemsSnap.docs) {
       const item = itemDoc.data() as UserItem;
@@ -51,13 +96,11 @@ async function main() {
 
       console.log(`[PriceChecker] 조회: ${item.productName?.slice(0, 30)}`);
 
-      // URL에서 productId 추출 (resolvedUrl → url 순서로 시도)
       const productId =
         extractProductId(item.resolvedUrl || '') ||
         extractProductId(item.url);
       console.log(`  productId=${productId || 'none'} url=${(item.resolvedUrl || item.url).slice(0, 60)}`);
 
-      // 파트너스 API로 가격 조회
       const result = await fetchCurrentPrice(item.productName, productId);
 
       if (!result || result.price === 0) {
@@ -69,7 +112,6 @@ async function main() {
       const newPrice = result.price;
       const today = new Date().toISOString().slice(0, 10);
 
-      // Firestore 업데이트: currentPrice + priceHistory
       const history = item.priceHistory || [];
       const lastEntry = history[history.length - 1];
       if (!lastEntry || lastEntry.date !== today) {
@@ -77,14 +119,12 @@ async function main() {
       } else {
         lastEntry.price = newPrice;
       }
-      // 최근 30일만 유지
       const trimmed = history.slice(-30);
 
       const updateData: Record<string, any> = {
         currentPrice: newPrice,
         priceHistory: trimmed,
       };
-      // 썸네일/상품명이 비어있으면 API 결과로 보충
       const itemData = itemDoc.data();
       if (result.image && !itemData.thumbnail) {
         updateData.thumbnail = result.image;
@@ -114,27 +154,19 @@ async function main() {
         noChangeDays: 0,
       };
 
-      // 1) 목표가 도달 (최우선)
       if (newPrice <= item.targetPrice && prevPrice > item.targetPrice) {
         pushTargets.push({ ...basePush, alertType: 'target_reached' });
         console.log(`  📢 목표가 도달!`);
-      }
-      // 2) 역대 최저가 갱신 (목표가 미도달이지만 최저가)
-      else if (newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 3) {
+      } else if (newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 3) {
         pushTargets.push({ ...basePush, alertType: 'lowest_ever' });
         console.log(`  📢 역대 최저가!`);
-      }
-      // 3) 가격 하락 (일반)
-      else if (newPrice < prevPrice) {
+      } else if (newPrice < prevPrice) {
         pushTargets.push({ ...basePush, alertType: 'price_drop' });
         console.log(`  📢 가격 하락`);
-      }
-      // 4) 7일 무변동
-      else if (trimmed.length >= 7) {
+      } else if (trimmed.length >= 7) {
         const last7 = trimmed.slice(-7);
         const allSame = last7.every((h) => h.price === last7[0].price);
         if (allSame) {
-          // 하루에 1번만 (21시대 실행 시)
           const kstHour = (new Date().getUTCHours() + 9) % 24;
           if (kstHour >= 20 && kstHour <= 22) {
             pushTargets.push({
@@ -147,15 +179,24 @@ async function main() {
         }
       }
 
-      // API 요청 간 딜레이 (레이트 리밋 방지)
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
-  // 스마트 알림 발송
+  // 스마트 알림 발송 + 만료 토큰 수집
+  let invalidTokens: string[] = [];
   if (pushTargets.length > 0) {
     console.log(`[PriceChecker] 스마트 알림 ${pushTargets.length}건 → 푸시 발송`);
-    await sendSmartNotifications(pushTargets);
+    invalidTokens = await sendSmartNotifications(pushTargets);
+  }
+
+  // 만료 토큰 유저 정리
+  await cleanupInvalidUsers(invalidTokens);
+
+  // 21시(KST) 실행 시에만 비활성 유저 정리
+  const kstHour = (new Date().getUTCHours() + 9) % 24;
+  if (kstHour >= 20 && kstHour <= 22) {
+    await cleanupInactiveUsers();
   }
 
   console.log('[PriceChecker] 완료:', new Date().toISOString());
