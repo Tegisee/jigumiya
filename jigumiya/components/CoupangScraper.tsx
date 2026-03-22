@@ -165,92 +165,8 @@ true;
 `;
 
 
-/**
- * iOS 전용: WebView에 빈 HTML을 로드 → JS fetch로 쿠팡 페이지를 가져와 파싱
- * WebView가 coupang.com으로 직접 내비게이션하지 않으므로 Universal Link 미트리거
- * WebView 내 fetch는 실제 브라우저 엔진이므로 봇 차단 회피
- */
-function buildIosFetchHtml(targetUrl: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><script>
-(async function() {
-  try {
-    var url = ${JSON.stringify(targetUrl)};
-
-    // 단축 URL resolve
-    if (url.includes('link.coupang.com')) {
-      try {
-        var r = await fetch(url, { redirect: 'follow' });
-        if (r.url && r.url.includes('coupang.com')) url = r.url;
-      } catch(e) {}
-    }
-
-    // 상품 페이지 fetch
-    var res = await fetch(url, {
-      redirect: 'follow',
-      headers: { 'Accept': 'text/html', 'Accept-Language': 'ko-KR,ko' }
-    });
-    var html = await res.text();
-
-    if (html.length < 3000) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ERROR', message: 'bot-blocked' }));
-      return;
-    }
-
-    // DOM 파싱
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(html, 'text/html');
-
-    // Title
-    var title = '';
-    var ogTitle = doc.querySelector('meta[property="og:title"]');
-    if (ogTitle) title = ogTitle.getAttribute('content') || '';
-    if (!title) {
-      var h2 = doc.querySelector('h2.prod-buy-header__title, .prod-buy-header__title');
-      if (h2) title = h2.textContent.trim();
-    }
-    if (!title) {
-      var tt = doc.querySelector('title');
-      if (tt) title = tt.textContent.trim();
-    }
-    title = title.replace(/\\s*[|\\-].*$/, '').trim();
-
-    // Price
-    var price = 0;
-    var ogPrice = doc.querySelector('meta[property="product:price:amount"]');
-    if (ogPrice) price = parseInt((ogPrice.getAttribute('content') || '').replace(/[^0-9]/g, ''), 10) || 0;
-    if (!price) {
-      var tp = doc.querySelector('.total-price strong');
-      if (tp) price = parseInt(tp.textContent.replace(/[^0-9]/g, ''), 10) || 0;
-    }
-    if (!price) {
-      var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-      for (var s of scripts) {
-        try {
-          var ld = JSON.parse(s.textContent);
-          if (ld.offers && ld.offers.price) { price = parseInt(String(ld.offers.price).replace(/[^0-9]/g, ''), 10) || 0; break; }
-        } catch(e) {}
-      }
-    }
-
-    // Image
-    var image = '';
-    var ogImg = doc.querySelector('meta[property="og:image"]');
-    if (ogImg) image = ogImg.getAttribute('content') || '';
-    if (image && image.startsWith('//')) image = 'https:' + image;
-
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'SCRAPED',
-      url: res.url || url,
-      title: title,
-      price: price,
-      image: image
-    }));
-  } catch(e) {
-    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ERROR', message: e.message }));
-  }
-})();
-</script></body></html>`;
-}
+// iOS: Universal Link로 쿠팡 앱이 열리지만, WebView는 백그라운드에서 로딩 완료
+// → 앱 복귀 시 스크래핑 데이터 자동 처리
 
 export default function CoupangScraper({ url, html, baseUrl, onResult, onError }: Props) {
   const webViewRef = useRef<WebView>(null);
@@ -258,13 +174,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // iOS: WebView에 로컬 HTML 로드 → JS fetch로 스크래핑 (Universal Link 우회)
-  // Android: WebView에 URL 직접 로드
-  const isIosFetch = Platform.OS === 'ios' && !!url;
-  const iosHtml = isIosFetch ? buildIosFetchHtml(url!) : null;
-  const activeHtml = html || iosHtml || null;
-  const activeBaseUrl = baseUrl || (iosHtml ? 'https://www.coupang.com' : undefined);
+  // iOS/Android 공통: URL 직접 로드
+  const activeHtml = html || null;
+  const activeBaseUrl = baseUrl || undefined;
   const activeUrl = activeHtml ? null : url;
+
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
@@ -273,7 +187,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     injectedRef.current = false;
     retryIndexRef.current = 0;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    console.log('[Scraper] 시작:', activeUrl || 'html');
+    console.log('[Scraper] step2: WebView 시작! sourceKey=', typeof sourceKey === 'string' ? sourceKey.slice(0, 80) : sourceKey);
     // 20초 타임아웃
     timeoutRef.current = setTimeout(() => {
       if (!doneRef.current) {
@@ -290,11 +204,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      console.log('[Scraper] step5: postMessage 수신! done=', doneRef.current);
       if (doneRef.current) return;
       try {
         const data = JSON.parse(event.nativeEvent.data);
-        console.log(`[Scraper] 메시지 수신 (retry ${retryIndexRef.current}):`,
-          `price=${data.price} image=${data.image ? 'OK' : 'EMPTY'} title=${(data.title || '').slice(0, 30)}`);
+        console.log(`[Scraper] step5: price=${data.price} image=${data.image ? 'OK' : 'EMPTY'} title=${(data.title || '').slice(0, 30)} type=${data.type}`);
         if (data.debug) console.log('[Scraper] 디버그:', data.debug);
 
         if (data.type === 'SCRAPED' && data.price > 0 && data.image) {
@@ -353,10 +267,10 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     const delay = retryDelays[idx] ?? retryDelays[retryDelays.length - 1];
     retryIndexRef.current++;
     injectedRef.current = true;
-    console.log(`[Scraper] 인젝션 예약 #${idx} (${delay}ms 후)`);
+    console.log(`[Scraper] step4: 인젝션 예약 #${idx} (${delay}ms 후)`);
     setTimeout(() => {
       if (!doneRef.current && webViewRef.current) {
-        console.log(`[Scraper] 인젝션 실행 #${idx}`);
+        console.log(`[Scraper] step4: 인젝션 실행 #${idx}`);
         webViewRef.current.injectJavaScript(SCRAPE_JS);
       }
     }, delay);
@@ -373,7 +287,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
       if (doneRef.current) return;
 
       const navUrl = navState.url || '';
-      console.log(`[Scraper] nav: loading=${navState.loading} url=${navUrl.slice(0, 80)}`);
+      console.log(`[Scraper] step3: nav loading=${navState.loading} url=${navUrl.slice(0, 80)}`);
 
       const isProductPage =
         navUrl.includes('coupang.com/vp/products/') ||
@@ -388,16 +302,9 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   );
 
   const handleLoadEnd = useCallback(() => {
-    console.log('[Scraper] onLoadEnd 발생');
+    console.log('[Scraper] onLoadEnd');
     if (doneRef.current || injectedRef.current) return;
-    if (isIosFetch) {
-      // iOS fetch HTML: 내장 script가 자동 실행 → 추가 인젝션 불필요
-      // handleMessage에서 결과 수신 대기
-      injectedRef.current = true;
-      return;
-    }
     if (activeHtml) {
-      // 외부 html prop: 인젝션 필요
       injectedRef.current = true;
       setTimeout(() => {
         if (!doneRef.current && webViewRef.current) {
@@ -407,10 +314,10 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     } else {
       tryInject();
     }
-  }, [tryInject, activeHtml, isIosFetch]);
+  }, [tryInject, activeHtml]);
 
   const handleError = useCallback((syntheticEvent: any) => {
-    console.error('[Scraper] WebView 에러:', syntheticEvent.nativeEvent?.description);
+    console.error('[Scraper] WebView 에러:', syntheticEvent.nativeEvent?.description, syntheticEvent.nativeEvent?.code);
   }, []);
 
   const handleHttpError = useCallback((syntheticEvent: any) => {
@@ -418,29 +325,35 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   }, []);
 
   // 딥링크 및 앱 리다이렉트 차단
+  // 딥링크 및 앱 리다이렉트 차단 (link.coupang.com은 허용 — WebView 내 리다이렉트 필요)
   const handleShouldStartLoad = useCallback((event: { url: string; navigationType?: string }) => {
     const reqUrl = event.url;
+    console.log(`[Scraper] shouldStartLoad: type=${event.navigationType} url=${reqUrl.slice(0, 80)}`);
     // 비-HTTP 스킴 차단 (intent://, market://, coupang://)
     if (!reqUrl.startsWith('http://') && !reqUrl.startsWith('https://')) {
+      console.log('[Scraper] 차단: 비-HTTP 스킴');
       return false;
     }
     try {
       const host = new URL(reqUrl).hostname;
-      // 앱 리다이렉트 도메인 차단
       if (
         host === 'applink.coupang.com' ||
         host === 'play.google.com' ||
         host === 'apps.apple.com' ||
         host === 'itunes.apple.com'
       ) {
-        console.log('[Scraper] 차단된 도메인:', host);
+        console.log('[Scraper] 차단:', host);
         return false;
       }
     } catch {}
     return true;
   }, []);
 
-  if (!activeUrl && !activeHtml) return null;
+  if (!activeUrl && !activeHtml) {
+    console.log('[Scraper] WebView 미렌더 (activeUrl/activeHtml 모두 null)');
+    return null;
+  }
+  console.log('[Scraper] WebView 렌더! source=', activeHtml ? 'html' : activeUrl?.slice(0, 80));
 
   const source = activeHtml
     ? { html: activeHtml, baseUrl: activeBaseUrl || 'https://www.coupang.com' }

@@ -101,14 +101,19 @@ export default function AddItemModal() {
     setScraped(null);
     setScrapeFailed(false);
 
+    const isIos = Platform.OS === 'ios';
+    const scrapeDelay = isIos ? 4000 : 0;
+
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       setScrapeFailed(true);
       setScrapeUrl(null);
-    }, 20000);
+    }, 30000 + scrapeDelay);
 
-    scrapeKeyRef.current++;
-    setScrapeUrl(parsedUrl);
+    setTimeout(() => {
+      scrapeKeyRef.current++;
+      setScrapeUrl(parsedUrl);
+    }, scrapeDelay);
   };
 
   // 스크래핑 성공 → 2단계 진입
@@ -219,7 +224,13 @@ export default function AddItemModal() {
                 placeholder="상품 URL 붙여넣기"
                 placeholderTextColor={theme.subtext}
                 value={url}
-                onChangeText={isFromShare ? undefined : setUrl}
+                onChangeText={isFromShare ? undefined : (text: string) => {
+                  if (text.includes('https://') && text.length > 30 && text !== url) {
+                    const extracted = extractUrl(text);
+                    if (extracted.startsWith('https://')) { setUrl(extracted); return; }
+                  }
+                  setUrl(text);
+                }}
                 editable={!isFromShare}
                 autoCapitalize="none"
                 keyboardType="url"
@@ -249,6 +260,11 @@ export default function AddItemModal() {
               <>
                 <ActivityIndicator size="large" color={theme.primary} />
                 <Text style={styles.scrapingText}>상품 정보를 가져오는 중...</Text>
+                {Platform.OS === 'ios' && (
+                  <Text style={styles.iosHintText}>
+                    쿠팡 앱이 열리면 확인 후 돌아와주세요
+                  </Text>
+                )}
               </>
             ) : (
               <>
@@ -415,6 +431,12 @@ const styles = StyleSheet.create({
   scrapingText: {
     color: theme.subtext,
     fontSize: 15,
+  },
+  iosHintText: {
+    color: theme.primary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
   },
 
   // 실패
