@@ -97,6 +97,7 @@ export default function AddItemModal() {
     }
 
     parsedUrlRef.current = parsedUrl;
+    retryCountRef.current = 0;
     setStep('scraping');
     setScraped(null);
     setScrapeFailed(false);
@@ -124,9 +125,22 @@ export default function AddItemModal() {
     setStep('target');
   }, []);
 
+  const retryCountRef = useRef(0);
+
   const handleScrapeError = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setScrapeUrl(null);
+
+    // 첫 실패 시 자동 재시도 1회 (WebView 콜드 스타트 대응)
+    if (retryCountRef.current === 0 && parsedUrlRef.current) {
+      retryCountRef.current++;
+      console.log('[AddItem] 첫 실패 → 자동 재시도');
+      setTimeout(() => {
+        scrapeKeyRef.current++;
+        setScrapeUrl(parsedUrlRef.current);
+      }, 1000);
+      return;
+    }
     setScrapeFailed(true);
   }, []);
 
