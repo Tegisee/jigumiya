@@ -19,7 +19,7 @@ import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { ProductCard } from '../../components/ProductCard';
 import PriceChecker from '../../components/PriceChecker';
-import { fetchGoldbox, hasCoupangApiKeys, type GoldboxProduct } from '../../services/coupangApi';
+import { fetchGoldbox, hasCoupangApiKeys, generateDeepLink, type GoldboxProduct } from '../../services/coupangApi';
 import { getAppShareMessage, STORE_LINKS } from '../../services/config';
 
 export default function HomeScreen() {
@@ -122,12 +122,20 @@ export default function HomeScreen() {
       <TouchableOpacity
         style={styles.fetchBtn}
         onPress={async () => {
+          // 제휴 딥링크로 쿠팡 이동 (수수료 발생)
+          if (hasCoupangApiKeys()) {
+            try {
+              const deepLink = await generateDeepLink('https://www.coupang.com');
+              if (deepLink?.shortenUrl) {
+                Linking.openURL(deepLink.shortenUrl);
+                return;
+              }
+            } catch {}
+          }
+          // fallback: 쿠팡 앱 또는 웹
           try {
             const canOpen = await Linking.canOpenURL('coupang://home');
-            if (canOpen) {
-              await Linking.openURL('coupang://home');
-              return;
-            }
+            if (canOpen) { await Linking.openURL('coupang://home'); return; }
           } catch {}
           Linking.openURL('https://www.coupang.com');
         }}
