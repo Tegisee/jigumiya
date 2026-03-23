@@ -177,10 +177,21 @@ export default function AddItemModal() {
     let affiliateUrl = parsedUrlRef.current;
     if (hasCoupangApiKeys()) {
       try {
+        console.log('[AddItem] 딥링크 생성 시도:', parsedUrlRef.current?.slice(0, 60));
         const deepLink = await generateDeepLink(parsedUrlRef.current);
-        if (deepLink?.shortenUrl) affiliateUrl = deepLink.shortenUrl;
-      } catch {}
+        if (deepLink?.shortenUrl) {
+          affiliateUrl = deepLink.shortenUrl;
+          console.log('[AddItem] 제휴 링크 생성 성공:', affiliateUrl.slice(0, 60));
+        } else {
+          console.warn('[AddItem] 딥링크 null → 원본 URL 사용');
+        }
+      } catch (e: any) {
+        console.warn('[AddItem] 딥링크 생성 에러:', e.message);
+      }
+    } else {
+      console.warn('[AddItem] API 키 없음 → 원본 URL 사용');
     }
+    console.log('[AddItem] 최종 저장 URL:', affiliateUrl?.slice(0, 60));
 
     const nameFromText = parseProductName(sharedText || '');
     const productName = scraped?.title || nameFromText || '상품 정보 없음';

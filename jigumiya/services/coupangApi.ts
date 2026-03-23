@@ -58,12 +58,14 @@ export async function generateDeepLink(
     });
 
     const json = await res.json();
+    console.log('[CoupangAPI] 딥링크 응답:', json.rCode, json.data?.[0]?.shortenUrl?.slice(0, 60) || 'null');
     if (json.rCode === '0' && json.data?.[0]) {
       return {
         shortenUrl: json.data[0].shortenUrl,
         originalUrl: json.data[0].originalUrl,
       };
     }
+    console.warn('[CoupangAPI] 딥링크 생성 실패:', json.rCode, json.rMessage);
     return null;
   } catch (e) {
     console.warn('[CoupangAPI] Deep link 생성 실패:', e);
