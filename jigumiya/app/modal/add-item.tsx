@@ -205,9 +205,22 @@ export default function AddItemModal() {
     if (!targetPrice.trim()) return;
     setSaving(true);
 
-    // handleNext에서 미리 생성한 제휴 링크 사용
-    const affiliateUrl = affiliateUrlRef.current || parsedUrlRef.current;
+    // 제휴 딥링크: handleNext에서 미리 생성 또는 scraped.resolvedUrl로 재시도
     const resolvedUrl = scraped?.resolvedUrl || resolvedUrlRef.current || parsedUrlRef.current;
+    let affiliateUrl = affiliateUrlRef.current || parsedUrlRef.current;
+
+    // handleNext에서 제휴 링크 생성 실패했으면 scraped.resolvedUrl로 재시도
+    if (affiliateUrl === parsedUrlRef.current && hasCoupangApiKeys() &&
+        (resolvedUrl.includes('/vp/') || resolvedUrl.includes('/vm/'))) {
+      try {
+        console.log('[AddItem] 딥링크 재시도:', resolvedUrl.slice(0, 60));
+        const deepLink = await generateDeepLink(resolvedUrl);
+        if (deepLink?.shortenUrl) {
+          affiliateUrl = deepLink.shortenUrl;
+          console.log('[AddItem] 제휴 링크 생성 성공:', affiliateUrl.slice(0, 60));
+        }
+      } catch {}
+    }
     console.log('[AddItem] 저장 URL:', affiliateUrl.slice(0, 60));
 
     const nameFromText = parseProductName(sharedText || '');
