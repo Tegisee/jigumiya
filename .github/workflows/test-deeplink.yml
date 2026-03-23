@@ -1,0 +1,22 @@
+name: Test Deeplink
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: scripts/price-checker
+        run: npm install
+      - name: Build
+        working-directory: scripts/price-checker
+        run: npx tsc
+      - name: Test deeplink
+        working-directory: scripts/price-checker
+        env:
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+        run: node dist/test-deeplink.js
