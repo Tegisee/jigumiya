@@ -78,6 +78,8 @@ export default function AddItemModal() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrapeKeyRef = useRef(0);
   const parsedUrlRef = useRef('');
+  const resolvedUrlRef = useRef('');
+  const affiliateUrlRef = useRef('');
 
   // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응)
   useFocusEffect(
@@ -94,8 +96,8 @@ export default function AddItemModal() {
 
   const suggestedPrice = scraped?.price ? Math.round(scraped.price * 0.9) : null;
 
-  // 1단계: "다음" 버튼 → 스크래핑 시작
-  const handleNext = () => {
+  // 1단계: "다음" 버튼 → URL resolve + 딥링크 생성 → 스크래핑 시작
+  const handleNext = async () => {
     const parsedUrl = extractUrl(url);
     if (!parsedUrl.includes('coupang.com')) {
       Alert.alert('지원하지 않는 링크', '현재 쿠팡 링크만 지원합니다.');
@@ -111,6 +113,35 @@ export default function AddItemModal() {
     setStep('scraping');
     setScraped(null);
     setScrapeFailed(false);
+
+    // URL resolve + 제휴 딥링크 생성 (WebView와 무관하게 선행)
+    let resolved = parsedUrl;
+    if (parsedUrl.includes('link.coupang.com')) {
+      try {
+        const res = await fetch(parsedUrl, { redirect: 'manual' });
+        const location = res.headers.get('location');
+        if (location && location.includes('coupang.com')) {
+          resolved = location;
+        } else {
+          const res2 = await fetch(parsedUrl, { redirect: 'follow' });
+          if (res2.url && res2.url.includes('coupang.com')) resolved = res2.url;
+        }
+      } catch {}
+    }
+    resolvedUrlRef.current = resolved;
+    console.log('[AddItem] resolved:', resolved.slice(0, 80));
+
+    // 제휴 딥링크 생성
+    affiliateUrlRef.current = parsedUrl; // fallback
+    if (hasCoupangApiKeys() && (resolved.includes('/vp/') || resolved.includes('/vm/'))) {
+      try {
+        const deepLink = await generateDeepLink(resolved);
+        if (deepLink?.shortenUrl) {
+          affiliateUrlRef.current = deepLink.shortenUrl;
+          console.log('[AddItem] 제휴 링크:', deepLink.shortenUrl.slice(0, 60));
+        }
+      } catch {}
+    }
 
     const isIos = Platform.OS === 'ios';
     const scrapeDelay = isIos ? 4000 : 0;
@@ -174,29 +205,10 @@ export default function AddItemModal() {
     if (!targetPrice.trim()) return;
     setSaving(true);
 
-    // 딥링크 생성: resolvedUrl(www.coupang.com) 사용 (link.coupang.com/a/... 는 API가 거부)
-    const resolvedUrl = scraped?.resolvedUrl || parsedUrlRef.current;
-    let affiliateUrl = parsedUrlRef.current;
-    if (hasCoupangApiKeys()) {
-      try {
-        // www.coupang.com URL을 우선 사용, 없으면 원본 URL
-        const urlForDeepLink = resolvedUrl.includes('coupang.com/vp/') || resolvedUrl.includes('coupang.com/vm/')
-          ? resolvedUrl : parsedUrlRef.current;
-        console.log('[AddItem] 딥링크 생성 시도:', urlForDeepLink?.slice(0, 60));
-        const deepLink = await generateDeepLink(urlForDeepLink);
-        if (deepLink?.shortenUrl) {
-          affiliateUrl = deepLink.shortenUrl;
-          console.log('[AddItem] 제휴 링크 생성 성공:', affiliateUrl.slice(0, 60));
-        } else {
-          console.warn('[AddItem] 딥링크 null → 원본 URL 사용');
-        }
-      } catch (e: any) {
-        console.warn('[AddItem] 딥링크 생성 에러:', e.message);
-      }
-    } else {
-      console.warn('[AddItem] API 키 없음 → 원본 URL 사용');
-    }
-    console.log('[AddItem] 최종 저장 URL:', affiliateUrl?.slice(0, 60));
+    // handleNext에서 미리 생성한 제휴 링크 사용
+    const affiliateUrl = affiliateUrlRef.current || parsedUrlRef.current;
+    const resolvedUrl = scraped?.resolvedUrl || resolvedUrlRef.current || parsedUrlRef.current;
+    console.log('[AddItem] 저장 URL:', affiliateUrl.slice(0, 60));
 
     const nameFromText = parseProductName(sharedText || '');
     const productName = scraped?.title || nameFromText || '상품 정보 없음';
