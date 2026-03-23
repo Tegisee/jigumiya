@@ -101,3 +101,8 @@
 1. 🚨 상품 등록 크래시 디버깅 (add-item.tsx)
 2. iOS TestFlight 테스트
 3. 수정 후 빌드 (횟수 아끼기 위해 모든 수정 모아서 한번에)
+
+## 출시 후 TODO
+- [ ] 앱 공유하기 버튼 활성화: services/config.ts의 STORE_LINKS에 스토어 URL 추가하면 홈 우측 상단 공유 버튼 자동 표시
+  - STORE_LINKS.ios: App Store URL
+  - STORE_LINKS.android: Google Play URL

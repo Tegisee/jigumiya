@@ -174,11 +174,16 @@ export default function AddItemModal() {
     if (!targetPrice.trim()) return;
     setSaving(true);
 
+    // 딥링크 생성: resolvedUrl(www.coupang.com) 사용 (link.coupang.com/a/... 는 API가 거부)
+    const resolvedUrl = scraped?.resolvedUrl || parsedUrlRef.current;
     let affiliateUrl = parsedUrlRef.current;
     if (hasCoupangApiKeys()) {
       try {
-        console.log('[AddItem] 딥링크 생성 시도:', parsedUrlRef.current?.slice(0, 60));
-        const deepLink = await generateDeepLink(parsedUrlRef.current);
+        // www.coupang.com URL을 우선 사용, 없으면 원본 URL
+        const urlForDeepLink = resolvedUrl.includes('coupang.com/vp/') || resolvedUrl.includes('coupang.com/vm/')
+          ? resolvedUrl : parsedUrlRef.current;
+        console.log('[AddItem] 딥링크 생성 시도:', urlForDeepLink?.slice(0, 60));
+        const deepLink = await generateDeepLink(urlForDeepLink);
         if (deepLink?.shortenUrl) {
           affiliateUrl = deepLink.shortenUrl;
           console.log('[AddItem] 제휴 링크 생성 성공:', affiliateUrl.slice(0, 60));
@@ -199,7 +204,6 @@ export default function AddItemModal() {
     const thumbnail = scraped?.image || '';
 
     // URL에서 productId/vendorItemId 추출 (가격 매칭 정확도용)
-    const resolvedUrl = scraped?.resolvedUrl || parsedUrlRef.current;
     const ids = extractIds(resolvedUrl);
 
     addItem({

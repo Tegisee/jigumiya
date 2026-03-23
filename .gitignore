@@ -41,6 +41,7 @@ service-account*.json
 .vscode/
 
 # Build
+builds/
 *.ipa
 *.apk
 *.aab
