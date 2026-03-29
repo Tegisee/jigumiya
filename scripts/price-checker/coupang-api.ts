@@ -108,24 +108,33 @@ export async function fetchCurrentPrice(
       continue;
     }
 
-    // productId 정확 매칭만 허용
-    const exact = products.find((p) => String(p.productId) === productId);
-    if (!exact) {
+    // productId 매칭 — 같은 productId가 여러 옵션(가격)으로 나올 수 있음
+    const matches = products.filter((p) => String(p.productId) === productId);
+    if (matches.length === 0) {
       console.log(`  [API] productId=${productId} 매칭 실패 (${products.length}개 중 일치 없음)`);
       continue;
     }
 
+    // 현재 가격과 가장 가까운 옵션 선택
+    let best = matches[0];
+    if (matches.length > 1 && currentPrice > 0) {
+      best = matches.reduce((a, b) =>
+        Math.abs(a.productPrice - currentPrice) <= Math.abs(b.productPrice - currentPrice) ? a : b
+      );
+      console.log(`  [API] productId 매칭 ${matches.length}개 → 현재가(${currentPrice})에 가장 가까운 ${best.productPrice}원 선택`);
+    }
+
     // 가격 변동 안전장치: 30% 초과 변동 시 스킵
     if (currentPrice > 0) {
-      const changeRate = Math.abs(exact.productPrice - currentPrice) / currentPrice;
+      const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
       if (changeRate > 0.3) {
-        console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${exact.productPrice})`);
+        console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${best.productPrice})`);
         return null;
       }
     }
 
-    console.log(`  [API] productId 정확 매칭: "${exact.productName.slice(0, 40)}" → ${exact.productPrice}원`);
-    return { price: exact.productPrice, image: exact.productImage, name: exact.productName };
+    console.log(`  [API] productId 정확 매칭: "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
+    return { price: best.productPrice, image: best.productImage, name: best.productName };
   }
 
   console.log(`  [API] 모든 검색 전략 실패`);

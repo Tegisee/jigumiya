@@ -73,7 +73,10 @@ async function main() {
   console.log('[PriceChecker] 시작:', new Date().toISOString());
 
   const usersSnap = await db.collection('users').get();
+  console.log(`[Debug] 전체 유저: ${usersSnap.size}명`);
   const pushTargets: SmartPushTarget[] = [];
+  let totalItems = 0;
+  let processedItems = 0;
 
   for (const userDoc of usersSnap.docs) {
     const userData = userDoc.data();
@@ -81,7 +84,10 @@ async function main() {
     const token = userData.expoPushToken as string | undefined;
     const notifEnabled = userData.notificationEnabled !== false;
 
-    if (!token || !notifEnabled) continue;
+    if (!token || !notifEnabled) {
+      console.log(`[Debug] 유저 스킵: uid=${uid.slice(0, 8)}... token=${!!token} notifEnabled=${notifEnabled}`);
+      continue;
+    }
 
     const itemsSnap = await db
       .collection('users')
@@ -89,12 +95,19 @@ async function main() {
       .collection('items')
       .get();
 
+    console.log(`[Debug] 유저 uid=${uid.slice(0, 8)}... 상품 ${itemsSnap.size}개`);
+    totalItems += itemsSnap.size;
+
     // 상품이 없으면 스킵
     if (itemsSnap.empty) continue;
 
     for (const itemDoc of itemsSnap.docs) {
       const item = itemDoc.data() as UserItem;
-      if (!item.url || !item.productName) continue;
+      if (!item.url || !item.productName) {
+        console.log(`[Debug] 상품 스킵: id=${itemDoc.id} url=${!!item.url} name=${!!item.productName}`);
+        continue;
+      }
+      processedItems++;
 
       console.log(`[PriceChecker] 조회: ${item.productName?.slice(0, 30)}`);
 
@@ -204,6 +217,7 @@ async function main() {
     await cleanupInactiveUsers();
   }
 
+  console.log(`[Debug] 처리 완료: 전체 ${totalItems}개 중 ${processedItems}개 조회`);
   console.log('[PriceChecker] 완료:', new Date().toISOString());
 }
 
