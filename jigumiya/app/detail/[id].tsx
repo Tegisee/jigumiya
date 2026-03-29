@@ -98,16 +98,64 @@ export default function DetailScreen() {
     };
   });
 
-  const targetLineData = item.priceHistory.map(() => ({
-    value: item.targetPrice,
-  }));
+  const hasTarget = item.targetPrice != null && item.targetPrice > 0;
+  const targetLineData = hasTarget
+    ? item.priceHistory.map(() => ({ value: item.targetPrice! }))
+    : [];
 
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
 
+  // 다음 가격 확인 시간 계산 (KST 08/14/21시)
+  const getNextCheckTime = () => {
+    const now = new Date();
+    const kstOffset = 9 * 60;
+    const kstMinutes = now.getUTCHours() * 60 + now.getUTCMinutes() + kstOffset;
+    const kstHour = Math.floor((kstMinutes % 1440) / 60);
+    const checkHours = [8, 14, 21];
+    const next = checkHours.find((h) => h > kstHour);
+    if (next !== undefined) return `오늘 ${next}:00`;
+    return '내일 08:00';
+  };
+
   // 가격 하락 여부 (이전 가격 대비)
   const hasPriceDrop = item.priceHistory.length >= 2 &&
     item.currentPrice < item.priceHistory[item.priceHistory.length - 2]?.price;
+
+  // 가격 인사이트 메시지 생성
+  const priceInsights: { icon: string; text: string; color: string }[] = [];
+  if (item.priceHistory.length >= 2) {
+    // 현재가 = 최저가
+    if (item.currentPrice <= minPrice) {
+      priceInsights.push({ icon: '🔥', text: `현재가가 ${trackingDays}일간 최저가입니다`, color: '#4CAF50' });
+    }
+    // 목표가 도달 (목표가 설정된 경우만)
+    if (hasTarget && item.currentPrice <= item.targetPrice!) {
+      priceInsights.push({ icon: '🎯', text: `목표가(${item.targetPrice!.toLocaleString()}원) 이하입니다`, color: theme.primary });
+    }
+    // 목표가까지 남은 금액 (목표가 설정된 경우만)
+    if (hasTarget && item.currentPrice > item.targetPrice!) {
+      const diff = item.currentPrice - item.targetPrice!;
+      const pct = Math.round((diff / item.currentPrice) * 100);
+      priceInsights.push({ icon: '📉', text: `목표가까지 ${diff.toLocaleString()}원 (${pct}%) 남음`, color: theme.subtext });
+    }
+    // N일간 가격 변동 없음 (동일가가 아닌 경우에도, 최근 3일 이상 동일 시)
+    if (!isAllSamePrice && prices.length >= 3) {
+      let noChangeDays = 1;
+      for (let i = prices.length - 2; i >= 0; i--) {
+        if (prices[i] === prices[prices.length - 1]) noChangeDays++;
+        else break;
+      }
+      if (noChangeDays >= 3) {
+        priceInsights.push({ icon: '➡️', text: `최근 ${noChangeDays}일간 가격변동 없음`, color: theme.subtext });
+      }
+    }
+    // 최저가 대비 현재가
+    if (item.currentPrice > minPrice) {
+      const diff = item.currentPrice - minPrice;
+      priceInsights.push({ icon: '💰', text: `${trackingDays}일간 최저가 ${minPrice.toLocaleString()}원 (현재보다 ${diff.toLocaleString()}원 낮음)`, color: theme.subtext });
+    }
+  }
 
   const handleShare = async () => {
     const drop = hasPriceDrop
@@ -196,7 +244,7 @@ export default function DetailScreen() {
         <TouchableOpacity
           style={styles.targetRow}
           onPress={() => {
-            setNewPrice(String(item.targetPrice));
+            setNewPrice(hasTarget ? String(item.targetPrice) : '');
             setShowPriceModal(true);
           }}
           activeOpacity={0.7}
@@ -205,9 +253,15 @@ export default function DetailScreen() {
             <Text style={styles.gridLabel}>목표가</Text>
             <Ionicons name="pencil" size={12} color={theme.subtext} />
           </View>
-          <Text style={[styles.gridValue, { color: theme.primary }]}>
-            {item.targetPrice.toLocaleString()}원
-          </Text>
+          {hasTarget ? (
+            <Text style={[styles.gridValue, { color: theme.primary }]}>
+              {item.targetPrice!.toLocaleString()}원
+            </Text>
+          ) : (
+            <Text style={[styles.gridValue, { color: theme.subtext }]}>
+              설정하기
+            </Text>
+          )}
         </TouchableOpacity>
 
         {/* Price Stats */}
@@ -249,16 +303,13 @@ export default function DetailScreen() {
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}
-                data2={targetLineData}
+                {...(hasTarget ? { data2: targetLineData } : {})}
                 width={300}
                 height={140}
                 color={theme.primary}
-                color2={theme.primary}
+                {...(hasTarget ? { color2: theme.primary, thickness2: 1, strokeDashArray2: [6, 4], hideDataPoints2: true } : {})}
                 thickness={2}
-                thickness2={1}
-                strokeDashArray2={[6, 4]}
                 hideDataPoints={false}
-                hideDataPoints2
                 dataPointsColor={theme.primary}
                 dataPointsRadius={3}
                 hideYAxisText
@@ -283,10 +334,12 @@ export default function DetailScreen() {
                   <View style={[styles.legendLine, { backgroundColor: theme.primary }]} />
                   <Text style={styles.legendText}>가격</Text>
                 </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDash, { borderColor: theme.primary }]} />
-                  <Text style={styles.legendText}>목표가 {item.targetPrice.toLocaleString()}원</Text>
-                </View>
+                {hasTarget && (
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDash, { borderColor: theme.primary }]} />
+                    <Text style={styles.legendText}>목표가 {item.targetPrice!.toLocaleString()}원</Text>
+                  </View>
+                )}
               </View>
               {isAllSamePrice && (
                 <Text style={styles.noChangeText}>
@@ -296,17 +349,58 @@ export default function DetailScreen() {
             </View>
           ) : (
             <View style={styles.chartEmpty}>
-              <Text style={styles.chartSinglePrice}>
-                {item.currentPrice > 0
-                  ? `${item.currentPrice.toLocaleString()}원`
-                  : '가격 정보 없음'}
-              </Text>
-              <Text style={styles.chartEmptySubtext}>
-                매일 3회 가격을 확인합니다 (08시/14시/21시)
-              </Text>
+              <View style={styles.emptyPriceRow}>
+                <Text style={styles.chartSinglePrice}>
+                  {item.currentPrice > 0
+                    ? `${item.currentPrice.toLocaleString()}원`
+                    : '가격 정보 없음'}
+                </Text>
+                {item.currentPrice > 0 && hasTarget && item.currentPrice > item.targetPrice! && (
+                  <Text style={styles.emptyTargetDiff}>
+                    목표가까지 -{(item.currentPrice - item.targetPrice!).toLocaleString()}원
+                  </Text>
+                )}
+                {item.currentPrice > 0 && hasTarget && item.currentPrice <= item.targetPrice! && (
+                  <Text style={[styles.emptyTargetDiff, { color: '#4CAF50' }]}>
+                    목표가 이하
+                  </Text>
+                )}
+                {item.currentPrice > 0 && !hasTarget && (
+                  <Text style={styles.emptyTargetDiff}>
+                    최저가 갱신 시 알림을 보내드려요
+                  </Text>
+                )}
+              </View>
+              <View style={styles.emptyDivider} />
+              <View style={styles.emptyInfoList}>
+                <View style={styles.emptyInfoRow}>
+                  <Ionicons name="calendar-outline" size={14} color={theme.subtext} />
+                  <Text style={styles.emptyInfoText}>추적 시작: {dateStr}</Text>
+                </View>
+                <View style={styles.emptyInfoRow}>
+                  <Ionicons name="time-outline" size={14} color={theme.subtext} />
+                  <Text style={styles.emptyInfoText}>다음 확인: {getNextCheckTime()}</Text>
+                </View>
+                <View style={styles.emptyInfoRow}>
+                  <Ionicons name="bar-chart-outline" size={14} color={theme.subtext} />
+                  <Text style={styles.emptyInfoText}>데이터 축적 중 — 내일부터 그래프가 표시됩니다</Text>
+                </View>
+              </View>
             </View>
           )}
         </View>
+
+        {/* Price Insights */}
+        {priceInsights.length > 0 && (
+          <View style={styles.insightSection}>
+            {priceInsights.map((insight, i) => (
+              <View key={i} style={styles.insightRow}>
+                <Text style={styles.insightIcon}>{insight.icon}</Text>
+                <Text style={[styles.insightText, { color: insight.color }]}>{insight.text}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         <Text style={styles.affiliateText}>
           이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
@@ -545,26 +639,71 @@ const styles = StyleSheet.create({
   chartEmpty: {
     backgroundColor: theme.card,
     borderRadius: 12,
-    padding: 32,
+    padding: 20,
     borderWidth: 1,
     borderColor: theme.border,
-    alignItems: 'center',
     gap: 8,
+  },
+  emptyPriceRow: {
+    alignItems: 'center',
+    paddingVertical: 8,
   },
   chartSinglePrice: {
     color: theme.text,
     fontSize: 24,
     fontWeight: 'bold',
   },
-  chartEmptySubtext: {
+  emptyTargetDiff: {
     color: theme.subtext,
     fontSize: 12,
     marginTop: 4,
+  },
+  emptyDivider: {
+    height: 1,
+    backgroundColor: theme.border,
+    marginVertical: 4,
+  },
+  emptyInfoList: {
+    gap: 10,
+    paddingVertical: 4,
+  },
+  emptyInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  emptyInfoText: {
+    color: theme.subtext,
+    fontSize: 13,
+    flex: 1,
   },
   noChangeText: {
     color: theme.subtext,
     fontSize: 12,
     marginTop: 10,
+  },
+  insightSection: {
+    marginTop: 12,
+    backgroundColor: theme.card,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 10,
+  },
+  insightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  insightIcon: {
+    fontSize: 14,
+    width: 20,
+    textAlign: 'center',
+  },
+  insightText: {
+    fontSize: 13,
+    flex: 1,
   },
   bottomBar: {
     paddingHorizontal: 20,

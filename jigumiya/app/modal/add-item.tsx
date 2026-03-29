@@ -202,7 +202,6 @@ export default function AddItemModal() {
 
   // 2단계: "저장" 버튼
   const handleSave = async () => {
-    if (!targetPrice.trim()) return;
     setSaving(true);
 
     // 제휴 딥링크: handleNext에서 미리 생성 또는 scraped.resolvedUrl로 재시도
@@ -239,7 +238,7 @@ export default function AddItemModal() {
       vendorItemId: ids.vendorItemId,
       productName,
       currentPrice,
-      targetPrice: Number(targetPrice),
+      targetPrice: targetPrice.trim() ? Number(targetPrice) : undefined,
       thumbnail,
       priceHistory: currentPrice
         ? [{ date: new Date().toISOString().slice(0, 10), price: currentPrice }]
@@ -257,12 +256,6 @@ export default function AddItemModal() {
 
   // 스크래핑 실패 → 정보 없이 저장
   const handleSaveWithoutScrape = () => {
-    if (!targetPrice.trim()) {
-      // 목표가 미입력 시 2단계로 이동 (scraped=null 상태)
-      setScrapeFailed(false);
-      setStep('target');
-      return;
-    }
     setScraped(null);
     setScrapeFailed(false);
     setStep('target');
@@ -385,7 +378,7 @@ export default function AddItemModal() {
 
             <TextInput
               style={styles.input}
-              placeholder="목표가 (원)"
+              placeholder="목표가 입력 (선택사항)"
               placeholderTextColor={theme.subtext}
               value={targetPrice}
               onChangeText={setTargetPrice}
@@ -405,20 +398,26 @@ export default function AddItemModal() {
               </TouchableOpacity>
             )}
 
+            {!targetPrice.trim() && (
+              <Text style={styles.skipHint}>
+                건너뛰면 최저가 갱신 시 알림을 보내드려요
+              </Text>
+            )}
+
             <View style={styles.buttons}>
               <TouchableOpacity style={styles.cancelBtn} onPress={goBack}>
                 <Text style={styles.cancelText}>뒤로</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.saveBtn, (!targetPrice.trim() || saving) && styles.saveBtnDisabled]}
+                style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
                 onPress={handleSave}
-                disabled={!targetPrice.trim() || saving}
+                disabled={saving}
                 activeOpacity={0.8}
               >
                 {saving ? (
                   <ActivityIndicator size="small" color="#000000" />
                 ) : (
-                  <Text style={styles.saveText}>저장</Text>
+                  <Text style={styles.saveText}>{targetPrice.trim() ? '저장' : '건너뛰고 저장'}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -590,6 +589,12 @@ const styles = StyleSheet.create({
     color: theme.primary,
     fontSize: 20,
     fontWeight: 'bold',
+  },
+  skipHint: {
+    color: theme.subtext,
+    fontSize: 12,
+    marginBottom: 8,
+    marginLeft: 4,
   },
   suggestBtn: {
     marginTop: -10,

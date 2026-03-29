@@ -11,12 +11,13 @@ interface Props {
 
 export function ProductCard({ item }: Props) {
   const router = useRouter();
+  const hasTarget = item.targetPrice != null && item.targetPrice > 0;
   const gap =
-    item.currentPrice > 0
-      ? Math.round(((item.currentPrice - item.targetPrice) / item.currentPrice) * 100)
+    item.currentPrice > 0 && hasTarget
+      ? Math.round(((item.currentPrice - item.targetPrice!) / item.currentPrice) * 100)
       : 0;
 
-  const isAchieved = item.currentPrice > 0 && item.currentPrice <= item.targetPrice;
+  const isAchieved = item.currentPrice > 0 && hasTarget && item.currentPrice <= item.targetPrice!;
 
   return (
     <TouchableOpacity
@@ -41,13 +42,19 @@ export function ProductCard({ item }: Props) {
             <Text style={styles.currentPrice}>
               {item.currentPrice.toLocaleString()}원
             </Text>
-            <Text style={styles.targetPrice}>
-              목표 {item.targetPrice.toLocaleString()}원
-            </Text>
+            {hasTarget && (
+              <Text style={styles.targetPrice}>
+                목표 {item.targetPrice!.toLocaleString()}원
+              </Text>
+            )}
           </View>
-          <Text style={[styles.gap, isAchieved && styles.gapAchieved]}>
-            {isAchieved ? '목표 달성!' : `목표까지 -${gap}%`}
-          </Text>
+          {hasTarget ? (
+            <Text style={[styles.gap, isAchieved && styles.gapAchieved]}>
+              {isAchieved ? '목표 달성!' : `목표까지 -${gap}%`}
+            </Text>
+          ) : (
+            <Text style={styles.gap}>가격 추적 중</Text>
+          )}
         </View>
       </View>
 

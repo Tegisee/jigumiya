@@ -172,9 +172,15 @@ async function main() {
         noChangeDays: 0,
       };
 
-      if (newPrice <= item.targetPrice && prevPrice > item.targetPrice) {
+      const hasTarget = item.targetPrice != null && item.targetPrice > 0;
+
+      if (hasTarget && newPrice <= item.targetPrice && prevPrice > item.targetPrice) {
         pushTargets.push({ ...basePush, alertType: 'target_reached' });
         console.log(`  📢 목표가 도달!`);
+      } else if (!hasTarget && newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 2) {
+        // 목표가 없는 상품: 최저가 갱신 시 알림
+        pushTargets.push({ ...basePush, alertType: 'lowest_no_target' });
+        console.log(`  📢 최저가 갱신 (목표가 없음)`);
       } else if (newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 3) {
         pushTargets.push({ ...basePush, alertType: 'lowest_ever' });
         console.log(`  📢 역대 최저가!`);

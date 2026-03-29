@@ -2,7 +2,7 @@ import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 
 const expo = new Expo();
 
-export type AlertType = 'target_reached' | 'price_drop' | 'lowest_ever' | 'no_change';
+export type AlertType = 'target_reached' | 'price_drop' | 'lowest_ever' | 'lowest_no_target' | 'no_change';
 
 export interface SmartPushTarget {
   token: string;
@@ -28,8 +28,9 @@ function buildMessage(t: SmartPushTarget): { title: string; body: string } {
         body: `${name} ${cur}원 — 목표가 도달!`,
       };
     case 'price_drop': {
-      const gap = t.targetPrice - t.currentPrice;
-      if (gap > 0) {
+      const hasTarget = t.targetPrice != null && t.targetPrice > 0;
+      const gap = hasTarget ? t.targetPrice - t.currentPrice : 0;
+      if (hasTarget && gap > 0) {
         return {
           title: '가격이 내려갔어요!',
           body: `${name} ${prev}원 → ${cur}원! 목표가까지 ${gap.toLocaleString()}원`,
@@ -44,6 +45,11 @@ function buildMessage(t: SmartPushTarget): { title: string; body: string } {
       return {
         title: '역대 최저가!',
         body: `${name} ${cur}원 — 지금까지 가장 낮은 가격이에요!`,
+      };
+    case 'lowest_no_target':
+      return {
+        title: '최저가 갱신!',
+        body: `${name} ${cur}원 — 추적 시작 후 가장 낮은 가격이에요`,
       };
     case 'no_change':
       return {
