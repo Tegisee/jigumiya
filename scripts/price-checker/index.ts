@@ -184,23 +184,22 @@ async function main() {
       } else if (newPrice < prevPrice && newPrice <= lowestPrice && trimmed.length >= 3) {
         pushTargets.push({ ...basePush, alertType: 'lowest_ever' });
         console.log(`  📢 역대 최저가!`);
-      } else if (newPrice < prevPrice) {
+      } else if (newPrice < prevPrice && trimmed.length >= 2) {
         pushTargets.push({ ...basePush, alertType: 'price_drop' });
         console.log(`  📢 가격 하락`);
-      } else if (trimmed.length >= 7) {
-        const last7 = trimmed.slice(-7);
-        const allSame = last7.every((h) => h.price === last7[0].price);
-        if (allSame) {
-          const kstHour = (new Date().getUTCHours() + 9) % 24;
-          if (kstHour >= 20 && kstHour <= 22) {
-            pushTargets.push({
-              ...basePush,
-              alertType: 'no_change',
-              noChangeDays: 7,
-            });
-            console.log(`  📢 7일 무변동`);
-          }
+      } else {
+        // 가격 무변동 — 매 체크마다 알림 발송
+        let noChangeDays = 1;
+        for (let i = trimmed.length - 2; i >= 0; i--) {
+          if (trimmed[i].price === newPrice) noChangeDays++;
+          else break;
         }
+        pushTargets.push({
+          ...basePush,
+          alertType: 'no_change',
+          noChangeDays,
+        });
+        console.log(`  📢 ${noChangeDays}일 무변동`);
       }
 
       await new Promise((r) => setTimeout(r, 1000));

@@ -1,95 +1,89 @@
 # Phase 2.5 — 버그 수정 및 기능 개선
 
-## 상태: ✅ 완료 (2026.03.23)
+## 현재 진행 상태 (2026.03.23)
 
-## 배경
-- iOS TestFlight + Android 실기기 테스트 중 발견된 버그 및 UX 개선사항
-- 쿠팡파트너스 수익 구조 강화를 위한 기능 추가
-- Claude AI + Gemini AI 3자 검토 완료
+### 완료된 작업
+- ✅ GitHub Actions + FCM 알림 디버깅 (스크래퍼→API 교체)
+- ✅ 저장 후 네비게이션 수정 (Share Intent router.replace)
+- ✅ 가격변동 그래프 + 무변동 안내문구
+- ✅ 상품추가 시 현재가 표시 + 추천 목표가 (2단계 플로우)
+- ✅ 스마트 알림 4종 (하락/도달/최저가/무변동)
+- ✅ 파트너스 필수 문구 노출
+- ✅ 온보딩 화면 (4단계 인터랙티브)
+- ✅ 가격 알림 공유 기능
+- ✅ 위시리스트 공유 → 앱 공유로 변경 (스토어 링크 없을 때 숨김)
+- ✅ 골드박스/특가 섹션 (상단 고정 컴팩트)
+- ✅ 추적상품 가져오기 버튼 (쿠팡 앱 우선 실행)
+- ✅ 홈 화면 "가격 추적 중" 카테고리 제목
+- ✅ Android 크래시 해결 (dataDetectorTypes iOS 분기)
+- ✅ iOS Universal Link 대응 (4초 안내 딜레이 + 자동 재시도)
+- ✅ URL 자동 추출 (붙여넣기 시 상품명 제거)
+- ✅ 고아 데이터 자동 정리 (FCM 토큰 만료 + 30일 비활성)
+- ✅ 가격 매칭 근본 개선 (productId 정확 매칭 + 30% 안전장치)
+- ✅ Android 아이콘 수정
+- ✅ 제휴 딥링크 생성 수정 (resolvedUrl 사용 + handleSave 재시도)
+- ✅ 추적상품 가져오기 제휴 링크로 변경
 
-## 작업 목록
+### 알려진 이슈
+- iOS 첫 번째 상품 등록 시 자동 재시도 필요 (30초 타임아웃 → 자동 재시도 1회)
+- iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리)
+- 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
 
-### 1. [버그] GitHub Actions + FCM 알림 디버깅 — ✅
-- 원인: 파트너스 API 코드 미push + limit 초과 + 상품명 매칭 오류
-- 해결: 스크래퍼→API 교체, limit 20→5, 구두점 제거 매칭, score 임계값
-- productId 정확 매칭 + 30% 가격 변동 안전장치 추가
+### 다음 작업
+- [ ] App Store 심사 제출: 버전 1.0.0 → 1.0.1로 올려서 새 빌드 필요 (스크린샷 업로드 stuck 문제 해결)
+- [ ] Google Play 비공개 테스트 심사 결과 확인
+- [ ] 24시간 모니터링: 가격 그래프 데이터 축적, 알림 정상 동작 확인
+- [ ] 가격 매칭 개선 효과 모니터링 (productId 정확 매칭 적용 후)
 
-### 2. [버그] 저장 후 네비게이션 수정 — ✅
-- Share Intent 경로에서 router.replace('/') 사용 (쿠팡 복귀 방지)
+### 출시 후 TODO
+- [ ] 앱 공유하기 버튼 활성화: services/config.ts STORE_LINKS에 스토어 URL 추가
+- [ ] 온보딩 플로우 강화: 첫 실행 시 앱 핵심 가치 전달 개선
+  - 1단계: "쿠팡 가격은 하루에도 몇 번씩 바뀌어요"
+  - 2단계: "목표가 설정하면 최저가 될 때 알려드려요"
+  - 3단계: "지금 바로 관심 상품 추가해보세요"
+- [ ] iOS 스크래핑 개선: vendorItemId 매칭 가능한 API 확인 시 추가
+- [ ] 검색 API 연동 → 유사 상품 추천 (다음 Phase)
+- [ ] 홈 대시보드 리디자인 (다음 Phase)
+- [ ] 프리미엄 구독 모델 검토 (사용자 1만명+)
 
-### 3. [개선] 가격변동 그래프 + 안내문구 — ✅
-- 데이터 1개: 현재가 크게 + "매일 3회 가격을 확인합니다"
-- 무변동: "최근 N일간 가격변동이 없었습니다"
-- x축 라벨: MM/DD 날짜 형식
+### 빌드 관리
+- EAS Starter 플랜 가입 완료 ($19/월)
+- 빌드 산출물: ~/jigumiya/builds/android/, ~/jigumiya/builds/ios/
+- API 키 노출 방지: 빌드/테스트는 터미널에서 직접, Claude Code는 코드 작성만
 
-### 4. [개선] 상품추가 시 2단계 플로우 — ✅
-- 1단계: URL 입력 → "다음"
-- 2단계: 현재가 표시 + 추천 목표가(90%) → 저장
-- iOS: 4초 안내 딜레이 + 쿠팡 앱 복귀 대기 (Universal Link 우회 불가)
+### 스크린샷
+- 경로: ~/jigumiya/"jigumiya screen"/
+- 65inch (1242x2688), 69inch (1320x2868) 등 모든 사이즈 준비 완료
+- App Store 메타데이터: docs/016_AppStore_메타데이터.md 참고
 
-### 5. [개선] 스마트 알림 (4종 분기) — ✅
-- 목표가 도달 / 가격 하락 / 역대 최저가 / 7일 무변동
-- 일간 요약 알림 제거, 스마트 알림으로 통합
+## 제휴 링크 상태 (2026.03.24)
 
-### 6. [개선] 파트너스 필수 문구 노출 — ✅
-- 홈 리스트 하단 + 상세 화면 스크롤 콘텐츠 내
+### 확인된 사항
+- ✅ 개발 빌드에서 제휴 딥링크 생성 성공 확인 (link.coupang.com/a/d94Wv9)
+- ✅ handleNext에서 fetch resolve + generateDeepLink 선행 생성 방식으로 수정
+- ✅ resolvedUrl(www.coupang.com) 사용 시 딥링크 API 정상 응답 (rCode=0)
+- ✅ 쿠팡 앱으로 열려도 제휴 쿠키는 서버에 기록됨 (제미나이 확인)
+- ✅ 브라우저로 강제 전환 불필요 (오히려 구매 전환율 저하)
 
-### 7. [신규] 온보딩 화면 — ✅
-- 4단계 인터랙티브 시뮬레이션 (앱소개/공유버튼/공유시트/완료)
-- MOCK_DATA 전체 제거
+### 근본 원인이었던 것
+- link.coupang.com/a/... (공유 단축 URL)로 딥링크 API 호출 → 400 에러
+- www.coupang.com/vp/products/... 으로 변환 후 호출해야 성공
+- iOS에서 WebView가 쿠팡 앱으로 튕겨서 resolvedUrl 못 가져오는 문제 → handleNext에서 fetch resolve로 선행 처리
 
-### 8. [신규] 가격 알림 공유 기능 — ✅
-- 상세 화면 구매 버튼 옆 공유 아이콘 (제휴 딥링크 포함)
+### 주의사항
+- 본인 계정 클릭/구매는 수수료 미인정 (자가 구매 금지)
+- 가족도 같은 배송지/결제수단이면 자가 구매 판정 가능
+- 반복 자가 구매 시 계정 정지 리스크
+- 제휴 링크 정상 동작 확인은 지인 테스트 필요 (타인 계정 + 다른 결제수단)
 
-### 9. [신규] 위시리스트 공유 → 앱 공유로 변경 — ✅
-- STORE_LINKS 설정 시에만 공유 버튼 표시
-- 출시 후 스토어 URL 추가하면 자동 활성화
+### 다음 단계
+- [ ] production 빌드 → TestFlight 외부 테스터 등록 → 지인 테스트
+- [ ] 지인 구매 후 다음날 파트너스 대시보드에서 실적 확인
+- [ ] App Store 심사 제출 (버전 1.0.1, 스크린샷 재업로드)
 
-### 10. [신규] 골드박스/특가 섹션 — ✅
-- 홈 화면 상단 고정, 컴팩트 가로 스크롤
-- AsyncStorage 캐싱 (앱 재시작 시에도 표시)
-
-## 추가 완료 항목
-
-### Android 크래시 해결 — ✅
-- 원인: CoupangScraper의 dataDetectorTypes="none" (iOS 전용 prop)이 Android Fabric에서 SIGSEGV
-- 해결: Platform.OS === 'ios' 조건부 적용
-
-### iOS 스크래핑 — ✅ (Universal Link 우회 불가, 대안 적용)
-- iOS에서 WebView가 coupang.com 로드 시 Universal Link 트리거 → 쿠팡 앱 열림
-- 시도한 방법: fetch+regex, WebView내 JS fetch, User-Agent 변경, about:blank → 모두 실패
-- 최종 방식: WebView 스크래핑 허용 + 쿠팡 앱으로 튕긴 후 돌아오면 자동 완료
-- 4초 안내 딜레이 + "정보 없이 진행" fallback
-- 첫 실패 시 자동 재시도 1회 (WebView 콜드 스타트 대응)
-
-### Share Intent 수정 — ✅
-- _layout.tsx에 ShareIntentHandler 추가 (shareintent 화면 미마운트 대응)
-- processingRef로 중복 처리 방지
-
-### 제휴 딥링크 생성 수정 — ✅
-- 원인: 딥링크 API가 link.coupang.com/a/... 단축 URL 거부 (400 에러)
-- 해결: scraped.resolvedUrl (www.coupang.com/vp/...) 사용
-- "추적상품 가져오기" 버튼도 제휴 딥링크로 변경
-
-### 가격 매칭 정확도 개선 — ✅
-- productId 정확 매칭만 허용 (상품명 유사도 매칭 제거)
-- 가격 변동 30% 초과 시 업데이트 스킵
-- TrackedItem에 productId/vendorItemId 필드 추가
-- 서버사이드: 상품명/이미지 자동 보충 (정보 없이 저장된 상품)
-
-### 고아 데이터 자동 정리 — ✅
-- FCM DeviceNotRegistered 토큰 → 유저+상품 자동 삭제
-- 30일 이상 비활성 유저 자동 정리 (21시 KST)
-- lastActiveAt 추적 (토큰 등록/동기화 시 갱신)
-
-### UI 개선 — ✅
-- 골드박스 상단 고정 + "가격 추적 중 N개" 섹션 헤더
-- 상세 화면 SafeArea bottom 추가
-- 파트너스 문구 시인성 개선
-- Android adaptive icon 수정
-- URL 자동 추출 (붙여넣기 시 텍스트에서 URL만 추출)
-
-## 출시 후 TODO
-- [ ] 앱 공유하기 버튼 활성화: services/config.ts의 STORE_LINKS에 스토어 URL 추가
-  - STORE_LINKS.ios: App Store URL
-  - STORE_LINKS.android: Google Play URL
+## 빌드 이력
+- 빌드 17: 1.0.0 (이전 production)
+- 빌드 18: 1.0.0 (이전 production)
+- 빌드 19: 1.0.1 (제휴 링크 수정)
+- 빌드 20: 1.0.1 (제휴 링크 디버그 로그 추가)
+- 빌드 21: 1.0.1 (제휴 링크 최종 - handleNext fetch resolve + 딥링크 선행 생성) ← 현재 최신

@@ -3,6 +3,8 @@ import {
   initializeAuth,
   getAuth,
   signInAnonymously as firebaseSignInAnonymously,
+  onAuthStateChanged,
+  type User,
 } from 'firebase/auth';
 // @ts-ignore — RN-specific export in @firebase/auth/dist/rn
 import { getReactNativePersistence } from '@firebase/auth/dist/rn/index.js';
@@ -37,11 +39,18 @@ const auth = initializeAuth(app, {
 });
 const db = getFirestore(app);
 
-/** Anonymous Auth 로그인 (자동) */
+/** Anonymous Auth 로그인 (자동) — AsyncStorage 복원 완료 대기 후 판단 */
 export async function signInAnonymously(): Promise<string | null> {
   try {
-    const currentUser = auth.currentUser;
-    if (currentUser) return currentUser.uid;
+    // Auth 상태 복원 완료 대기 (AsyncStorage에서 이전 UID 복원)
+    const restoredUser = await new Promise<User | null>((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        unsubscribe();
+        resolve(user);
+      });
+    });
+
+    if (restoredUser) return restoredUser.uid;
 
     const credential = await firebaseSignInAnonymously(auth);
     return credential.user.uid;

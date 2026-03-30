@@ -25,12 +25,21 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
 | 012 | FCM 푸시 알림 + 가격 체크 봇 | ✅ | 012_FCM푸시알림.md |
-| 013 | 쿠팡 파트너스 API 연동 | ✅ | 013_쿠팡파트너스API_활성화.md |
+| 013 | 쿠팡 파트너스 API 연동 | ✅ | (010, 012에 통합 — 별도 MD 없음) |
+
+### Phase 2.5 (버그 수정 + 개선)
+| 번호 | 작업 | 상태 | sub MD |
+|------|------|------|--------|
+| 015 | 버그 수정 및 개선 | 🔄 | 015_Phase2.5_버그수정_및_개선.md |
+| 016 | AppStore 메타데이터 | ✅ | 016_AppStore_메타데이터.md |
 
 ### Phase 3
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
 | 014 | Phase 3 전체 계획 | ⬜ | 014_Phase3계획.md |
+
+### 참고 문서 (작업 리스트 외)
+- 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
 
 ### TODO (미정)
 - [ ] 메인 화면에 쿠팡 이동 버튼 추가 (위치/형태 미정)
@@ -64,6 +73,14 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
   - 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 "다시 시도" 버튼
 - 앱 내 딥링크 변환: coupangApi.ts generateDeepLink() (클라이언트 HMAC)
+
+## 빌드 아티팩트
+- 네이밍: `jigumiya-{version}-{versionCode}[-dev].{aab|apk|ipa}`
+  - 예: `jigumiya-1.0.1-11.aab` (프로덕션), `jigumiya-1.0.1-10-dev.apk` (개발)
+- 저장 위치:
+  - Android: `~/jigumiya/builds/android/` (AAB, APK)
+  - iOS: `~/jigumiya/builds/ios/` (IPA)
+- .gitignore에 포함 — 빌드 파일은 커밋하지 않음
 
 ## 앱 기본 정보
 - 앱 이름: 지금이야 (Jigumiya)
