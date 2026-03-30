@@ -21,6 +21,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import type { TrackedItem } from '../types';
 
 const firebaseConfig = {
@@ -28,7 +29,9 @@ const firebaseConfig = {
   projectId: 'jigumiya',
   storageBucket: 'jigumiya.firebasestorage.app',
   messagingSenderId: '250441543259',
-  appId: '1:250441543259:ios:e189afc3afc8685d05197e',
+  appId: Platform.OS === 'android'
+    ? '1:250441543259:android:28d985603a4f995905197e'
+    : '1:250441543259:ios:e189afc3afc8685d05197e',
 };
 
 // Firebase 초기화 (중복 방지)

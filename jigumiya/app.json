@@ -27,6 +27,7 @@
     },
     "android": {
       "package": "com.jigumiya.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#000000",
         "foregroundImage": "./assets/icon_android_512.png"

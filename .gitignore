@@ -35,6 +35,8 @@ yarn-error.*
 # Firebase service account key
 *-firebase-adminsdk-*.json
 service-account*.json
+google-services.json
+GoogleService-Info.plist
 
 # IDE
 .idea/
