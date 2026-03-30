@@ -34,15 +34,14 @@ async function cleanupInvalidUsers(invalidTokens: string[]) {
     const token = userDoc.data().expoPushToken;
     if (!token || !invalidTokens.includes(token)) continue;
 
-    console.log(`[Cleanup] 만료 유저 정리: ${userDoc.id}`);
+    console.log(`[Cleanup] 만료 토큰 제거: ${userDoc.id}`);
 
-    // 하위 items 컬렉션 삭제
-    const itemsSnap = await userDoc.ref.collection('items').get();
-    const batch = db.batch();
-    itemsSnap.docs.forEach((doc) => batch.delete(doc.ref));
-    batch.delete(userDoc.ref);
-    await batch.commit();
-    console.log(`[Cleanup] 삭제 완료: ${itemsSnap.size}개 상품 + 유저`);
+    // 토큰만 제거 (유저 데이터 + 상품 보존, 앱 재실행 시 토큰 재등록)
+    await userDoc.ref.update({
+      expoPushToken: FieldValue.delete(),
+      notificationEnabled: false,
+    });
+    console.log(`[Cleanup] 토큰 제거 완료`);
   }
 }
 
