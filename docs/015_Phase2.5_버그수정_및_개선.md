@@ -1,6 +1,6 @@
 # Phase 2.5 — 버그 수정 및 기능 개선
 
-## 현재 진행 상태 (2026.03.23)
+## 현재 진행 상태 (2026.03.31)
 
 ### 완료된 작업
 - ✅ GitHub Actions + FCM 알림 디버깅 (스크래퍼→API 교체)
@@ -23,17 +23,28 @@
 - ✅ Android 아이콘 수정
 - ✅ 제휴 딥링크 생성 수정 (resolvedUrl 사용 + handleSave 재시도)
 - ✅ 추적상품 가져오기 제휴 링크로 변경
+- ✅ 알림 미수신 근본 원인 수정: Firebase Auth UID 불일치 (onAuthStateChanged 복원 대기)
+- ✅ Android Firebase 설정: google-services.json + appId 플랫폼별 분기
+- ✅ app.json → app.config.js 변환 (EAS Secret 파일 참조)
+- ✅ 알림 로직 개선: 가격 무변동 시 매 체크마다 no_change 알림 발송
+- ✅ price_drop 오탐 방지: trimmed.length >= 2 조건 추가
+- ✅ 만료 토큰 cleanup 개선: 유저 전체 삭제 → expoPushToken 필드만 제거
+- ✅ iOS 알림 정상 수신 확인 (2개 상품 모두)
+- ✅ App Store Connect: 대한민국 단일 국가로 변경, 6.9" 스크린샷 업로드 시도
 
 ### 알려진 이슈
 - iOS 첫 번째 상품 등록 시 자동 재시도 필요 (30초 타임아웃 → 자동 재시도 1회)
 - iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리)
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
+- Android 알림 미수신: Expo 대시보드에 FCM 서비스 계정 키 등록 필요
+- App Store 스크린샷 업로드 오류 지속 (Apple 지원팀 추가 문의 발송, 응답 대기)
+- 그래프 Y축 가격대 미표시 문제
 
 ### 다음 작업
-- [ ] App Store 심사 제출: 버전 1.0.0 → 1.0.1로 올려서 새 빌드 필요 (스크린샷 업로드 stuck 문제 해결)
-- [ ] Google Play 비공개 테스트 심사 결과 확인
+- [ ] Android 알림: Expo 대시보드 FCM 서비스 계정 키 등록 → 알림 테스트
+- [ ] App Store 심사 제출 (스크린샷 오류 Apple 응답 대기 중)
+- [ ] 그래프 Y축 가격대 표시 개선
 - [ ] 24시간 모니터링: 가격 그래프 데이터 축적, 알림 정상 동작 확인
-- [ ] 가격 매칭 개선 효과 모니터링 (productId 정확 매칭 적용 후)
 
 ### 출시 후 TODO
 - [ ] 앱 공유하기 버튼 활성화: services/config.ts STORE_LINKS에 스토어 URL 추가
@@ -86,4 +97,5 @@
 - 빌드 18: 1.0.0 (이전 production)
 - 빌드 19: 1.0.1 (제휴 링크 수정)
 - 빌드 20: 1.0.1 (제휴 링크 디버그 로그 추가)
-- 빌드 21: 1.0.1 (제휴 링크 최종 - handleNext fetch resolve + 딥링크 선행 생성) ← 현재 최신
+- 빌드 21: 1.0.1 (제휴 링크 최종 - handleNext fetch resolve + 딥링크 선행 생성)
+- 빌드 22: 1.0.1 (Auth UID 복원 + Android Firebase 설정 + 알림 로직 개선) ← 현재 최신
