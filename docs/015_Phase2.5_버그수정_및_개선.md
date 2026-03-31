@@ -31,20 +31,24 @@
 - ✅ 만료 토큰 cleanup 개선: 유저 전체 삭제 → expoPushToken 필드만 제거
 - ✅ iOS 알림 정상 수신 확인 (2개 상품 모두)
 - ✅ App Store Connect: 대한민국 단일 국가로 변경, 6.9" 스크린샷 업로드 시도
+- ✅ Expo 대시보드 FCM V1 서비스 계정 키 등록 완료
+- ✅ Android 알림 정상 수신 확인
+- ✅ iOS/Android 양쪽 알림 완전 정상화 확인
+- ✅ GitHub Actions Node.js 20 → 24 업그레이드
 
 ### 알려진 이슈
 - iOS 첫 번째 상품 등록 시 자동 재시도 필요 (30초 타임아웃 → 자동 재시도 1회)
 - iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리)
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
-- Android 알림 미수신: Expo 대시보드에 FCM 서비스 계정 키 등록 필요
-- App Store 스크린샷 업로드 오류 지속 (Apple 지원팀 추가 문의 발송, 응답 대기)
+- App Store 스크린샷 업로드 오류 지속 (Apple 지원팀 케이스 102845214001 응답 대기)
 - 그래프 Y축 가격대 미표시 문제
+- 일부 상품 가격 조회 실패 (productId 매칭 실패 또는 가격 변동 30% 초과로 스킵)
 
 ### 다음 작업
-- [ ] Android 알림: Expo 대시보드 FCM 서비스 계정 키 등록 → 알림 테스트
-- [ ] App Store 심사 제출 (스크린샷 오류 Apple 응답 대기 중)
+- [ ] Apple 답변 후 App Store 스크린샷 오류 해결 → 심사 제출
 - [ ] 그래프 Y축 가격대 표시 개선
-- [ ] 24시간 모니터링: 가격 그래프 데이터 축적, 알림 정상 동작 확인
+- [ ] Y축 수정 후 iOS + Android 동시 빌드
+- [ ] Google Play 공개 출시 준비
 
 ### 출시 후 TODO
 - [ ] 앱 공유하기 버튼 활성화: services/config.ts STORE_LINKS에 스토어 URL 추가

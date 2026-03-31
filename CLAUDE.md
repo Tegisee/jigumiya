@@ -52,9 +52,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인 (link.coupang.com/re/... 형태)
 - 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
 
-## 현재 상태: 알림 수신 확인 + 스토어 배포 진행 중
-- iOS: 알림 정상 수신 확인 (2개 상품 모두) — App Store 심사 제출 대기 (스크린샷 오류, Apple 응답 대기)
-- Android: FCM 서비스 계정 키 Expo 대시보드 등록 필요 → 알림 테스트 필요
+## 현재 상태: iOS/Android 알림 정상화 완료 + 스토어 배포 진행 중
+- iOS: 알림 정상 수신 ✅ — App Store 심사 제출 대기 (스크린샷 오류, Apple 케이스 102845214001 응답 대기)
+- Android: 알림 정상 수신 ✅ — Expo FCM V1 서비스 계정 키 등록 완료
+- Google Play 공개 출시 준비 예정
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
 - GitHub 레포: https://github.com/Tegisee/jigumiya (private)
@@ -66,7 +67,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
   - ✅ 알림 로직 개선: 가격 무변동 시 매 체크마다 no_change 알림 발송 + price_drop 오탐 방지
   - ✅ 만료 토큰 cleanup: 유저 삭제 → expoPushToken 필드만 제거 (상품 데이터 보존)
-  - GitHub Actions cron: 08:00/14:00/21:00 KST (3회/일)
+  - GitHub Actions cron: 08:00/14:00/21:00 KST (3회/일), Node.js 24
   - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY
 - 클라이언트: CoupangScraper (WebView DOM 스크래핑) — 상품 추가 시 + 수동 새로고침
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
