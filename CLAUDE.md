@@ -53,9 +53,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
 
 ## 현재 상태: iOS/Android 알림 정상화 완료 + 스토어 배포 진행 중
-- iOS: 알림 정상 수신 ✅ — App Store 심사 제출 대기 (스크린샷 오류, Apple 케이스 102845214001 응답 대기)
+- iOS: 알림 정상 수신 ✅ — App Store 심사 제출 대기 (스크린샷 오류, Apple 케이스 102845214001 — Tina에게 추가 자료 포함 재문의 완료)
 - Android: 알림 정상 수신 ✅ — Expo FCM V1 서비스 계정 키 등록 완료
-- Google Play 공개 출시 준비 예정
+- Google Play 프로덕션 액세스 신청 완료 (2026.04.01, 7일 내 결과)
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
 - GitHub 레포: https://github.com/Tegisee/jigumiya (private)
