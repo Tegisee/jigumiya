@@ -1,6 +1,6 @@
 # Phase 2.5 — 버그 수정 및 기능 개선
 
-## 현재 진행 상태 (2026.04.01)
+## 현재 진행 상태 (2026.04.13)
 
 ### 완료된 작업
 - ✅ GitHub Actions + FCM 알림 디버깅 (스크래퍼→API 교체)
@@ -45,22 +45,28 @@
 
 ### 알려진 이슈
 - iOS 첫 번째 상품 등록 시 자동 재시도 필요 (30초 타임아웃 → 자동 재시도 1회)
-- iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리)
+- iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리) — 앱 배너 CSS 차단 추가했으나 근본 해결 미완료
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
 - App Store 스크린샷 업로드 오류 지속 (Apple 지원팀 케이스 102845214001 응답 대기)
 - 그래프 Y축 가격대 미표시 문제
 - 일부 상품 가격 조회 실패 (productId 매칭 실패 또는 가격 변동 30% 초과로 스킵)
 
+### 2026.04.13 작업 완료
+- ✅ 스와이프 삭제 (왼쪽으로 밀면 삭제 버튼) — 아이고에서 이식, PanResponder + Animated
+- ✅ 길게 눌러서 삭제 오버레이 + 삭제 버튼 — 아이고에서 이식
+- ✅ 삭제 전 확인 다이얼로그 (Alert.alert)
+- ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 (CoupangScraper BLOCK_DEEPLINK_JS에 추가)
+- ✅ Android 로컬 빌드 완료: jigumiya-1.0.1-17.aab (versionCode 17, EAS remote 18)
+- ✅ iOS 로컬 빌드 완료: jigumiya-1.0.1-23.ipa (buildNumber 23, App Store 심사 제출 완료)
+- ✅ 로컬 빌드 환경 세팅: .easignore + fastlane 설치, CLAUDE.md에 주의사항 기재
+
 ### 다음 빌드 때 구현 (Phase 2.5 잔여)
 - [ ] 그래프 Y축 가격대 표시 수정
-- [ ] 스와이프 삭제 (왼쪽으로 밀면 삭제 버튼)
-- [ ] 길게 눌러서 삭제 버튼 생성
-- [ ] 삭제 전 확인 다이얼로그
-- [ ] 위 수정 후 iOS + Android 동시 빌드
 
 ### 대기 중
-- [ ] Apple 답변 후 App Store 스크린샷 오류 해결 → 심사 제출 (케이스 102845214001, Tina에게 추가 자료 재문의 완료)
+- [ ] App Store 심사 결과 대기 (buildNumber 23, 2026.04.13 제출)
 - [ ] Google Play 프로덕션 액세스 승인 대기 (2026.04.01 신청, 7일 내 결과)
+- [ ] Google Play에 jigumiya-1.0.1-17.aab 내부 테스트 업로드 (프로덕션 승인 후)
 
 ### 출시 후 TODO
 - [ ] 앱 공유하기 버튼 활성화: services/config.ts STORE_LINKS에 스토어 URL 추가
@@ -114,4 +120,6 @@
 - 빌드 19: 1.0.1 (제휴 링크 수정)
 - 빌드 20: 1.0.1 (제휴 링크 디버그 로그 추가)
 - 빌드 21: 1.0.1 (제휴 링크 최종 - handleNext fetch resolve + 딥링크 선행 생성)
-- 빌드 22: 1.0.1 (Auth UID 복원 + Android Firebase 설정 + 알림 로직 개선) ← 현재 최신
+- 빌드 22: 1.0.1 (Auth UID 복원 + Android Firebase 설정 + 알림 로직 개선)
+- Android vc17: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) — EAS remote vc18
+- iOS bn23: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) ← 현재 최신, App Store 심사 대기

@@ -52,10 +52,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인 (link.coupang.com/re/... 형태)
 - 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
 
-## 현재 상태: iOS/Android 알림 정상화 완료 + 스토어 배포 진행 중
-- iOS: 알림 정상 수신 ✅ — App Store 심사 제출 대기 (스크린샷 오류, Apple 케이스 102845214001 — Tina에게 추가 자료 포함 재문의 완료)
-- Android: 알림 정상 수신 ✅ — Expo FCM V1 서비스 계정 키 등록 완료
+## 현재 상태: 로컬 빌드 완료 + 스토어 배포 진행 중 (2026.04.13)
+- iOS: 알림 정상 수신 ✅ — buildNumber 23 App Store 심사 제출 완료 (심사 대기 중)
+- Android: 알림 정상 수신 ✅ — versionCode 18 (EAS remote), 실제 최신 빌드는 17
 - Google Play 프로덕션 액세스 신청 완료 (2026.04.01, 7일 내 결과)
+- 로컬 빌드 세팅 완료 (Android/iOS 모두) — EAS 크레딧 소진 시에도 빌드 가능
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
 - GitHub 레포: https://github.com/Tegisee/jigumiya (private)
@@ -71,7 +72,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY
 - 클라이언트: CoupangScraper (WebView DOM 스크래핑) — 상품 추가 시 + 수동 새로고침
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
+  - ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 추가 (아이고에서 이식)
+  - ⚠️ iOS 쿠팡 튕김 현상: 4초 딜레이 + 안내문구로 우회 처리 중 (근본 해결 미완료)
   - 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 "다시 시도" 버튼
+- 상품 삭제: 스와이프 삭제 (왼쪽) + 롱프레스 삭제 오버레이 + 상세페이지 삭제 (아이고에서 이식)
 - Firebase Auth: onAuthStateChanged로 AsyncStorage 복원 대기 후 UID 판단 (UID 불일치 해결)
 - Firebase Config: Platform.OS별 appId 분기 (iOS/Android), app.config.js로 변환
 - 앱 내 딥링크 변환: coupangApi.ts generateDeepLink() (클라이언트 HMAC)
