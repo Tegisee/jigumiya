@@ -63,6 +63,11 @@ const BLOCK_DEEPLINK_JS = `
       }
     }
   }, true);
+
+  // 앱 열기 유도 팝업/배너 차단: 쿠팡 앱 다운로드/열기 배너 숨기기
+  var style = document.createElement('style');
+  style.textContent = '[class*="app-banner"], [class*="app-download"], [id*="app-banner"], .top-app-bar, .smart-banner { display: none !important; }';
+  document.head.appendChild(style);
 })();
 true;
 `;

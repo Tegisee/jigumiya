@@ -1,0 +1,46 @@
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.DS_Store
+
+# env
+.env.local
+
+# Firebase service account key (google-services.json은 빌드에 필요하므로 제외하지 않음)
+*-firebase-adminsdk-*.json
+service-account*.json
+
+# IDE
+.idea/
+.vscode/
+
+# Build
+builds/
+*.ipa
+*.apk
+*.aab

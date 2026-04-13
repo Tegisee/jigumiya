@@ -1,4 +1,4 @@
-import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet, Share, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
@@ -11,6 +11,15 @@ const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 export default function SettingsScreen() {
   const router = useRouter();
   const { isWowMember, toggleWowMember, notificationEnabled, toggleNotification, resetAllData } = useAppStore();
+
+  const handleShareApp = async () => {
+    const link = Platform.OS === 'android'
+      ? 'https://play.google.com/store/apps/details?id=com.jigumiya.app'
+      : 'https://apps.apple.com/app/id6760587430';
+    try {
+      await Share.share({ message: `쿠팡 가격 추적 앱 '지금이야' 써보세요!\n${link}` });
+    } catch {}
+  };
 
   const handleReset = () => {
     Alert.alert(
@@ -32,7 +41,12 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>설정</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>설정</Text>
+        <TouchableOpacity onPress={handleShareApp} activeOpacity={0.6}>
+          <Ionicons name="share-social-outline" size={24} color={theme.primary} />
+        </TouchableOpacity>
+      </View>
 
       <Text style={styles.sectionTitle}>알림</Text>
       <View style={styles.card}>
@@ -128,12 +142,17 @@ const styles = StyleSheet.create({
     backgroundColor: theme.background,
     padding: 20,
   },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 16,
+    marginBottom: 24,
+  },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: theme.text,
-    paddingTop: 16,
-    marginBottom: 24,
   },
   sectionTitle: {
     fontSize: 14,
