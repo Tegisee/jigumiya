@@ -84,6 +84,20 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - iOS: `~/jigumiya/builds/ios/` (IPA)
 - .gitignore에 포함 — 빌드 파일은 커밋하지 않음
 
+## 로컬 빌드 주의사항 (Android)
+- 로컬 빌드 시 autoIncrement가 실패 빌드에도 적용되므로, 빌드 전 반드시 eas build:version:get으로 현재 versionCode 확인 필수
+- 빌드 파일명은 EAS remote versionCode 기준으로 맞출 것 (예: versionCode 18이면 jigumiya-1.0.1-18.aab)
+- google-services.json은 .gitignore에 있으므로 .easignore 파일을 git 루트(~/jigumiya/)에 생성해야 로컬 빌드 시 포함됨
+- 빌드 명령: eas build --local --profile production --platform android
+
+## 로컬 빌드 주의사항 (iOS)
+- Android와 동일하게 autoIncrement가 실패 빌드에도 적용됨 — 빌드 전 eas build:version:get --platform ios로 buildNumber 확인 필수
+- fastlane 필요 — 미설치 시 brew install fastlane
+- GoogleService-Info.plist도 .gitignore에 있으므로 .easignore에서 제외해야 빌드 포함됨 (Android와 동일 .easignore 사용)
+- ios/ 네이티브 디렉토리가 이미 있으면 prebuild 스킵됨 — 네이티브 설정 변경 시 ios/ 삭제 후 재빌드
+- 빌드 명령: eas build --local --profile production --platform ios
+- 결과물: app-store 서명된 IPA → eas submit --platform ios 또는 Transporter로 App Store Connect 업로드
+
 ## 앱 기본 정보
 - 앱 이름: 지금이야 (Jigumiya)
 - 번들 ID: com.jigumiya.app
