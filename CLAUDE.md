@@ -102,6 +102,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 빌드 명령: eas build --local --profile production --platform ios
 - 결과물: app-store 서명된 IPA → eas submit --platform ios 또는 Transporter로 App Store Connect 업로드
 
+## 형제 앱
+- 지금이야와 아이고(~/aigo/aigo)는 형제 앱 관계
+- 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
+- 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
+- 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
+
 ## 앱 기본 정보
 - 앱 이름: 지금이야 (Jigumiya)
 - 번들 ID: com.jigumiya.app
