@@ -73,6 +73,7 @@ export default function AddItemModal() {
   const [scraped, setScraped] = useState<ScrapedProduct | null>(null);
   const [scrapeFailed, setScrapeFailed] = useState(false);
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
+  const [scrapeHtml, setScrapeHtml] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const isFromShare = !!sharedUrl;
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,6 +91,7 @@ export default function AddItemModal() {
       setScraped(null);
       setScrapeFailed(false);
       setScrapeUrl(null);
+      setScrapeHtml(null);
       setSaving(false);
     }, [sharedUrl])
   );
@@ -143,34 +145,59 @@ export default function AddItemModal() {
       } catch {}
     }
 
-    const isIos = Platform.OS === 'ios';
-    const scrapeDelay = isIos ? 4000 : 0;
+    // iOS: fetch로 HTML 미리 받아서 WebView에 문자열로 로드 (Universal Link/딥링크 튕김 원천 차단)
+    // Android: resolved URL을 WebView에 직접 로드
+    const scrapeTarget = resolved.includes('coupang.com/vp/') || resolved.includes('coupang.com/vm/')
+      ? resolved : parsedUrl;
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       setScrapeUrl(null);
+      setScrapeHtml(null);
       // 첫 타임아웃 시 자동 재시도 1회
       if (retryCountRef.current === 0 && parsedUrlRef.current) {
         retryCountRef.current++;
         console.log('[AddItem] 타임아웃 → 자동 재시도');
         setTimeout(() => {
           scrapeKeyRef.current++;
-          setScrapeUrl(parsedUrlRef.current);
-          // 재시도 타임아웃
-          timeoutRef.current = setTimeout(() => {
-            setScrapeFailed(true);
-            setScrapeUrl(null);
-          }, 30000);
+          startScrape(scrapeTarget);
         }, 1000);
         return;
       }
       setScrapeFailed(true);
-    }, 30000 + scrapeDelay);
+    }, 30000);
 
-    setTimeout(() => {
-      scrapeKeyRef.current++;
-      setScrapeUrl(parsedUrl);
-    }, scrapeDelay);
+    scrapeKeyRef.current++;
+    startScrape(scrapeTarget);
+  };
+
+  /** iOS: HTML fetch → html prop, Android: URL 직접 로드 */
+  const startScrape = async (targetUrl: string) => {
+    if (Platform.OS === 'ios') {
+      try {
+        console.log('[AddItem] iOS: HTML fetch 시작 →', targetUrl.slice(0, 80));
+        const res = await fetch(targetUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'ko-KR,ko;q=0.9',
+          },
+          redirect: 'follow',
+        });
+        if (res.ok) {
+          const html = await res.text();
+          console.log('[AddItem] iOS: HTML fetch 성공, length=', html.length);
+          setScrapeHtml(html);
+          setScrapeUrl(null);
+          return;
+        }
+      } catch (e) {
+        console.warn('[AddItem] iOS: HTML fetch 실패, URL 폴백 →', e);
+      }
+    }
+    // Android 또는 iOS fetch 실패 시 URL 직접 로드
+    setScrapeHtml(null);
+    setScrapeUrl(targetUrl);
   };
 
   // 스크래핑 성공 → 2단계 진입
@@ -178,6 +205,7 @@ export default function AddItemModal() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setScraped(data);
     setScrapeUrl(null);
+    setScrapeHtml(null);
     setStep('target');
   }, []);
 
@@ -186,14 +214,17 @@ export default function AddItemModal() {
   const handleScrapeError = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setScrapeUrl(null);
+    setScrapeHtml(null);
 
     // 첫 실패 시 자동 재시도 1회 (WebView 콜드 스타트 대응)
-    if (retryCountRef.current === 0 && parsedUrlRef.current) {
+    if (retryCountRef.current === 0 && resolvedUrlRef.current) {
       retryCountRef.current++;
       console.log('[AddItem] 첫 실패 → 자동 재시도');
+      const target = resolvedUrlRef.current.includes('coupang.com/vp/') || resolvedUrlRef.current.includes('coupang.com/vm/')
+        ? resolvedUrlRef.current : parsedUrlRef.current;
       setTimeout(() => {
         scrapeKeyRef.current++;
-        setScrapeUrl(parsedUrlRef.current);
+        startScrape(target);
       }, 1000);
       return;
     }
@@ -267,14 +298,18 @@ export default function AddItemModal() {
     timeoutRef.current = setTimeout(() => {
       setScrapeFailed(true);
       setScrapeUrl(null);
+      setScrapeHtml(null);
     }, 20000);
+    const target = resolvedUrlRef.current.includes('coupang.com/vp/') || resolvedUrlRef.current.includes('coupang.com/vm/')
+      ? resolvedUrlRef.current : parsedUrlRef.current;
     scrapeKeyRef.current++;
-    setScrapeUrl(parsedUrlRef.current);
+    startScrape(target);
   };
 
   const goBack = () => {
     if (step === 'target' || step === 'scraping') {
       setScrapeUrl(null);
+      setScrapeHtml(null);
       setScraped(null);
       setScrapeFailed(false);
       setStep('url');
@@ -338,11 +373,7 @@ export default function AddItemModal() {
               <>
                 <ActivityIndicator size="large" color={theme.primary} />
                 <Text style={styles.scrapingText}>상품 정보를 가져오는 중...</Text>
-                {Platform.OS === 'ios' && (
-                  <Text style={styles.iosHintText}>
-                    쿠팡 앱이 열리면 확인 후 돌아와주세요
-                  </Text>
-                )}
+                {/* iOS 튕김 해결됨 — 안내문구 불필요 */}
               </>
             ) : (
               <>
@@ -428,6 +459,8 @@ export default function AddItemModal() {
       <CoupangScraper
         key={scrapeKeyRef.current}
         url={scrapeUrl}
+        html={scrapeHtml}
+        baseUrl="https://www.coupang.com"
         onResult={handleScrapeResult}
         onError={handleScrapeError}
       />
@@ -516,13 +549,6 @@ const styles = StyleSheet.create({
     color: theme.subtext,
     fontSize: 15,
   },
-  iosHintText: {
-    color: theme.primary,
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-
   // 실패
   failedText: {
     color: '#FF6666',
