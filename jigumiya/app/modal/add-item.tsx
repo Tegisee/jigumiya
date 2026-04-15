@@ -373,7 +373,11 @@ export default function AddItemModal() {
               <>
                 <ActivityIndicator size="large" color={theme.primary} />
                 <Text style={styles.scrapingText}>상품 정보를 가져오는 중...</Text>
-                {/* iOS 튕김 해결됨 — 안내문구 불필요 */}
+                {Platform.OS === 'ios' && (
+                  <Text style={styles.iosHintText}>
+                    쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요
+                  </Text>
+                )}
               </>
             ) : (
               <>
@@ -548,6 +552,12 @@ const styles = StyleSheet.create({
   scrapingText: {
     color: theme.subtext,
     fontSize: 15,
+  },
+  iosHintText: {
+    color: theme.primary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
   },
   // 실패
   failedText: {
