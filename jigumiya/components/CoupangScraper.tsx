@@ -329,9 +329,8 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     console.error('[Scraper] HTTP 에러:', syntheticEvent.nativeEvent?.statusCode, syntheticEvent.nativeEvent?.url?.slice(0, 80));
   }, []);
 
-  // 딥링크 및 앱 리다이렉트 차단
-  // 딥링크 및 앱 리다이렉트 차단 (link.coupang.com은 허용 — WebView 내 리다이렉트 필요)
-  const handleShouldStartLoad = useCallback((event: { url: string; navigationType?: string }) => {
+  // 딥링크 및 앱 리다이렉트 차단 + coupang.com은 WebView 내 처리 강제
+  const handleShouldStartLoad = useCallback((event: { url: string; navigationType?: string; lockIdentifier?: number }) => {
     const reqUrl = event.url;
     console.log(`[Scraper] shouldStartLoad: type=${event.navigationType} url=${reqUrl.slice(0, 80)}`);
     // 쿠팡 앱 딥링크 명시적 차단
@@ -346,6 +345,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     }
     try {
       const host = new URL(reqUrl).hostname;
+      // 앱스토어/앱링크 차단
       if (
         host === 'applink.coupang.com' ||
         host === 'play.google.com' ||
@@ -354,6 +354,10 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
       ) {
         console.log('[Scraper] 차단:', host);
         return false;
+      }
+      // coupang.com 도메인은 무조건 WebView 내에서 처리 (Universal Link 팝업 방지)
+      if (host.endsWith('coupang.com')) {
+        return true;
       }
     } catch {}
     return true;
@@ -384,6 +388,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
         setSupportMultipleWindows={false}
         allowsInlineMediaPlayback
         allowsLinkPreview={false}
+        allowsBackForwardNavigationGestures={false}
         {...(Platform.OS === 'ios' ? { dataDetectorTypes: 'none' } : {})}
         suppressesIncrementalRendering={true}
         javaScriptEnabled
