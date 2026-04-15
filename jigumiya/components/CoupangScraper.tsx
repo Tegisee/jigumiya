@@ -32,7 +32,7 @@ const USER_AGENT = Platform.select({
 // Android: intent://, market:// 추가 차단
 const BLOCK_DEEPLINK_JS = `
 (function() {
-  var blocked = ['coupang://', 'itms-appss://', 'intent://', 'market://'];
+  var blocked = ['coupang://', 'coupangapp://', 'itms-appss://', 'intent://', 'market://'];
   var origLocation = window.location;
   try {
     Object.defineProperty(window.__proto__, 'location', {
@@ -334,9 +334,14 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const handleShouldStartLoad = useCallback((event: { url: string; navigationType?: string }) => {
     const reqUrl = event.url;
     console.log(`[Scraper] shouldStartLoad: type=${event.navigationType} url=${reqUrl.slice(0, 80)}`);
-    // 비-HTTP 스킴 차단 (intent://, market://, coupang://)
+    // 쿠팡 앱 딥링크 명시적 차단
+    if (reqUrl.startsWith('coupang://') || reqUrl.startsWith('coupangapp://')) {
+      console.log('[Scraper] 차단: 쿠팡 앱 딥링크 →', reqUrl.slice(0, 60));
+      return false;
+    }
+    // 비-HTTP 스킴 차단 (intent://, market://, itms-appss:// 등)
     if (!reqUrl.startsWith('http://') && !reqUrl.startsWith('https://')) {
-      console.log('[Scraper] 차단: 비-HTTP 스킴');
+      console.log('[Scraper] 차단: 비-HTTP 스킴 →', reqUrl.slice(0, 60));
       return false;
     }
     try {
