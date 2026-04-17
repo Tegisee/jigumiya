@@ -125,6 +125,10 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="shareintent" options={{ headerShown: false }} />
         <Stack.Screen
+          name="settings"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
           name="detail/[id]"
           options={{ animation: 'slide_from_right' }}
         />

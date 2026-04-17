@@ -1,25 +1,22 @@
-import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet, Share, Platform } from 'react-native';
+import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
-import { theme } from '../../constants/theme';
-import { useAppStore } from '../../store/useAppStore';
+import { theme } from '../constants/theme';
+import { useAppStore } from '../store/useAppStore';
 
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { isWowMember, toggleWowMember, notificationEnabled, toggleNotification, resetAllData } = useAppStore();
-
-  const handleShareApp = async () => {
-    const link = Platform.OS === 'android'
-      ? 'https://play.google.com/store/apps/details?id=com.jigumiya.app'
-      : 'https://apps.apple.com/app/id6760587430';
-    try {
-      await Share.share({ message: `쿠팡 가격 추적 앱 '지금이야' 써보세요!\n${link}` });
-    } catch {}
-  };
+  const {
+    isWowMember,
+    toggleWowMember,
+    notificationEnabled,
+    toggleNotification,
+    resetAllData,
+  } = useAppStore();
 
   const handleReset = () => {
     Alert.alert(
@@ -42,10 +39,15 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>설정</Text>
-        <TouchableOpacity onPress={handleShareApp} activeOpacity={0.6}>
-          <Ionicons name="share-social-outline" size={24} color={theme.primary} />
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          activeOpacity={0.6}
+        >
+          <Ionicons name="chevron-back" size={26} color={theme.text} />
         </TouchableOpacity>
+        <Text style={styles.title}>설정</Text>
+        <View style={styles.headerRight} />
       </View>
 
       <Text style={styles.sectionTitle}>알림</Text>
@@ -149,9 +151,15 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     marginBottom: 24,
   },
+  backBtn: {
+    padding: 4,
+  },
+  headerRight: {
+    width: 34,
+  },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
     color: theme.text,
   },
   sectionTitle: {

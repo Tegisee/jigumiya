@@ -19,12 +19,21 @@ import {
   getDocs,
   query,
   orderBy,
+  where,
+  limit,
   writeBatch,
   increment,
+  onSnapshot,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import type { TrackedItem, SharedProduct, TrackedRef, FavoriteRef } from '../types';
+import type {
+  TrackedItem,
+  SharedProduct,
+  TrackedRef,
+  FavoriteRef,
+  PriceDrop,
+} from '../types';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyAMGMGrOJw1TqdytZqB_Y0-roiYRyKQ5Ho',
@@ -349,4 +358,75 @@ export async function removeFavoriteRef(
   } catch (e) {
     console.warn('[Firebase] favorites ref 삭제 실패:', e);
   }
+}
+
+// ──────────────────────────────────────────────────────────
+// Phase 3-D: 실시간 구독 래퍼 (favorites.tsx / feed.tsx 용)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * 현재 uid 변경 구독. 인증 상태 변화 시 callback 호출.
+ * 마운트 직후 현재 상태로 즉시 fire됨 (onAuthStateChanged 동작).
+ */
+export function subscribeAuthUid(
+  callback: (uid: string | null) => void,
+): () => void {
+  return onAuthStateChanged(auth, (user) => {
+    callback(user?.uid ?? null);
+  });
+}
+
+/**
+ * users/{uid}/favorites 실시간 구독 (addedAt 내림차순).
+ * Unsubscribe 함수 반환.
+ */
+export function subscribeFavorites(
+  uid: string,
+  callback: (favorites: FavoriteRef[]) => void,
+): () => void {
+  const q = query(
+    collection(db, 'users', uid, 'favorites'),
+    orderBy('addedAt', 'desc'),
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const refs = snapshot.docs.map((d) => d.data() as FavoriteRef);
+      callback(refs);
+    },
+    (error) => {
+      console.warn('[favorites] subscribe 실패:', error);
+    },
+  );
+}
+
+/**
+ * price_drops 실시간 구독 (최근 24시간, 하락률 큰 순, 최대 30건).
+ * Phase 3-A 시점에는 서버 쓰기 미구현 → 빈 결과 반환 (Phase 3-C에서 채워짐).
+ * Unsubscribe 함수 반환.
+ */
+export function subscribePriceDrops(
+  callback: (drops: PriceDrop[]) => void,
+  maxItems: number = 30,
+): () => void {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000; // 24h
+  const q = query(
+    collection(db, 'price_drops'),
+    where('createdAt', '>', cutoff),
+    orderBy('createdAt', 'desc'),
+    orderBy('dropRate', 'asc'),
+    limit(maxItems),
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const drops = snapshot.docs.map((d) => d.data() as PriceDrop);
+      callback(drops);
+    },
+    (error) => {
+      // Phase 3-C 이전에는 인덱스 미생성 상태일 수 있음 — warn만 하고 빈 배열 fallback
+      console.warn('[price_drops] subscribe 실패:', error);
+      callback([]);
+    },
+  );
 }

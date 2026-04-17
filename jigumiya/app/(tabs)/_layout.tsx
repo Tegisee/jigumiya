@@ -20,17 +20,38 @@ export default function TabLayout() {
         name="index"
         options={{
           title: '홈',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={size} color={color} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'home' : 'home-outline'}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />
       <Tabs.Screen
-        name="settings"
+        name="favorites"
         options={{
-          title: '설정',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+          title: '자주사는',
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'heart' : 'heart-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="feed"
+        options={{
+          title: '가격변동',
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'trending-down' : 'trending-down-outline'}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />

@@ -94,11 +94,24 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>지금이야</Text>
-        {(STORE_LINKS.ios || STORE_LINKS.android) && (
-          <TouchableOpacity onPress={handleShareApp} style={styles.shareBtn}>
-            <Ionicons name="share-outline" size={22} color={theme.text} />
+        <View style={styles.headerActions}>
+          {(STORE_LINKS.ios || STORE_LINKS.android) && (
+            <TouchableOpacity
+              onPress={handleShareApp}
+              style={styles.iconBtn}
+              hitSlop={8}
+            >
+              <Ionicons name="share-outline" size={22} color={theme.text} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => router.push('/settings')}
+            style={styles.iconBtn}
+            hitSlop={8}
+          >
+            <Ionicons name="settings-outline" size={22} color={theme.text} />
           </TouchableOpacity>
-        )}
+        </View>
       </View>
 
       {/* 골드박스 상단 고정 */}
@@ -208,6 +221,14 @@ const styles = StyleSheet.create({
     color: theme.text,
   },
   shareBtn: {
+    padding: 6,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  iconBtn: {
     padding: 6,
   },
   list: {
