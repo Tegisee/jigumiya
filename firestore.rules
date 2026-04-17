@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+// 지금이야 Firestore 보안 규칙 (source of truth)
+//
+// 배포 방법 (현재):
+//   Firebase Console → Firestore Database → 규칙 탭에 본 파일 내용 복사/붙여넣기
+//   → "게시" 클릭
+//
+// 향후 (firebase-tools 설치 후):
+//   firebase deploy --only firestore:rules
+//
+// 변경 이력:
+//   - Phase 1  : users/{uid}/{document=**} 재귀 허용
+//   - Phase 3-A: shared_products, price_drops 규칙 추가 (017.md §8-4)
+// ─────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── 유저 전용 데이터 (Phase 1 ~) ───
+    // users/{uid}/items/*       — 기존 추적 상품 (하위 호환 유지)
+    // users/{uid}/tracked/*     — Phase 3-A 신규 (홈 추적 참조)
+    // users/{uid}/favorites/*   — Phase 3-A 신규 (자주사는상품 참조)
+    // 재귀 와일드카드로 위 3개 모두 본인만 R/W 허용
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // ─── 전역 공유 상품 (Phase 3-A 신규) ───
+    // shared_products/{productId}
+    // - read : 모든 인증 유저 (피드/상세/홈 카드 메타데이터 조회)
+    // - write: Phase 3-A 한시적 허용 (클라이언트 이중 쓰기 구간 필요)
+    //
+    // ⚠️ Phase 3-C 이관 시 반드시 `allow write: if false;`로 강화할 것
+    //    서버(GitHub Actions + Firebase Admin SDK)만 쓰기 권한을 갖도록 하며
+    //    Admin SDK는 보안 규칙을 우회하므로 서버 쓰기는 영향 없음.
+    //    클라이언트는 이 시점부터 모든 가격 데이터를 읽기 전용으로만 사용.
+    match /shared_products/{productId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // ─── 가격 하락 피드 (Phase 3-A 선반영, 실제 쓰기는 Phase 3-C부터) ───
+    // price_drops/{dropId}
+    // - read : 모든 인증 유저 (가격변동 탭 조회)
+    // - write: 서버 전용 (Admin SDK bypass) — 클라이언트 쓰기 차단
+    //
+    // TTL 없음 (무제한 보관) — 스토리지 비용 대비 피드 가치 우선
+    match /price_drops/{dropId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+  }
+}

@@ -15,14 +15,16 @@ import {
   setDoc,
   deleteDoc,
   updateDoc,
+  getDoc,
   getDocs,
   query,
   orderBy,
   writeBatch,
+  increment,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import type { TrackedItem } from '../types';
+import type { TrackedItem, SharedProduct, TrackedRef, FavoriteRef } from '../types';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyAMGMGrOJw1TqdytZqB_Y0-roiYRyKQ5Ho',
@@ -184,5 +186,167 @@ export async function syncLocalToFirestore(
     await batch.commit();
   } catch (e) {
     console.warn('[Firebase] 동기화 실패:', e);
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+// Phase 3-A: shared_products / tracked / favorites CRUD
+// docs/017_앱구조개편_Phase3.md §8-2
+// 기존 items 경로 함수는 무수정 (하위 호환 유지)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * shared_products/{productId} 업서트 (merge)
+ *
+ * ⚠️ 시그니처를 Partial로 완화한 이유:
+ * - trackerCount/favoriteCount는 increment()로만 관리 → 절대 이 경로로 쓰지 말 것
+ * - priceHistory/lowestPrice/highestPrice는 서버(Phase 3-C)가 관리
+ * - 클라이언트는 메타데이터(url, productName, thumbnail, currentPrice 등)만 기록
+ */
+export async function upsertSharedProduct(
+  product: Partial<SharedProduct> & { productId: string },
+): Promise<void> {
+  try {
+    const { productId, ...rest } = product;
+    await setDoc(
+      doc(db, 'shared_products', productId),
+      { productId, ...rest },
+      { merge: true },
+    );
+    console.log('[shared] upsert', productId);
+  } catch (e) {
+    console.warn('[Firebase] shared_products upsert 실패:', e);
+  }
+}
+
+/**
+ * TrackedItem → SharedProduct 변환 헬퍼 (클라이언트 쓰기 전용)
+ *
+ * productId 없으면 null 반환 (shared_products 스킵).
+ * 카운터 / priceHistory / lowest·highestPrice 는 의도적으로 제외.
+ */
+export function trackedItemToSharedProduct(
+  item: TrackedItem,
+): (Partial<SharedProduct> & { productId: string }) | null {
+  if (!item.productId) return null;
+  return {
+    productId: item.productId,
+    url: item.url,
+    resolvedUrl: item.resolvedUrl ?? item.url,
+    ...(item.vendorItemId ? { vendorItemId: item.vendorItemId } : {}),
+    productName: item.productName,
+    thumbnail: item.thumbnail,
+    currentPrice: item.currentPrice,
+    lastCheckedAt: Date.now(),
+  };
+}
+
+/** shared_products/{productId} 단건 조회 */
+export async function getSharedProduct(
+  productId: string,
+): Promise<SharedProduct | null> {
+  try {
+    const snap = await getDoc(doc(db, 'shared_products', productId));
+    if (!snap.exists()) return null;
+    return snap.data() as SharedProduct;
+  } catch (e) {
+    console.warn('[Firebase] shared_products 조회 실패:', e);
+    return null;
+  }
+}
+
+/** trackerCount 원자적 증감 (+1 / -1) */
+export async function incrementTrackerCount(
+  productId: string,
+  delta: number,
+): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, 'shared_products', productId),
+      { trackerCount: increment(delta) },
+      { merge: true },
+    );
+    console.log('[shared] trackerCount', productId, delta > 0 ? '+' : '', delta);
+  } catch (e) {
+    console.warn('[Firebase] trackerCount 증감 실패:', e);
+  }
+}
+
+/** favoriteCount 원자적 증감 (+1 / -1) */
+export async function incrementFavoriteCount(
+  productId: string,
+  delta: number,
+): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, 'shared_products', productId),
+      { favoriteCount: increment(delta) },
+      { merge: true },
+    );
+    console.log('[shared] favoriteCount', productId, delta > 0 ? '+' : '', delta);
+  } catch (e) {
+    console.warn('[Firebase] favoriteCount 증감 실패:', e);
+  }
+}
+
+/** users/{uid}/tracked/{productId} 추가 (targetPrice 선택) */
+export async function addTrackedRef(
+  uid: string,
+  productId: string,
+  targetPrice?: number,
+): Promise<void> {
+  try {
+    const ref: TrackedRef = {
+      productId,
+      ...(targetPrice !== undefined ? { targetPrice } : {}),
+      addedAt: Date.now(),
+    };
+    await setDoc(doc(db, 'users', uid, 'tracked', productId), ref);
+    console.log('[tracked] add', uid, productId);
+  } catch (e) {
+    console.warn('[Firebase] tracked ref 추가 실패:', e);
+  }
+}
+
+/** users/{uid}/tracked/{productId} 삭제 */
+export async function removeTrackedRef(
+  uid: string,
+  productId: string,
+): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'tracked', productId));
+    console.log('[tracked] remove', uid, productId);
+  } catch (e) {
+    console.warn('[Firebase] tracked ref 삭제 실패:', e);
+  }
+}
+
+/** users/{uid}/favorites/{productId} 추가 */
+export async function addFavoriteRef(
+  uid: string,
+  productId: string,
+): Promise<void> {
+  try {
+    const ref: FavoriteRef = {
+      productId,
+      addedAt: Date.now(),
+    };
+    await setDoc(doc(db, 'users', uid, 'favorites', productId), ref);
+    console.log('[favorites] add', uid, productId);
+  } catch (e) {
+    console.warn('[Firebase] favorites ref 추가 실패:', e);
+  }
+}
+
+/** users/{uid}/favorites/{productId} 삭제 */
+export async function removeFavoriteRef(
+  uid: string,
+  productId: string,
+): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'favorites', productId));
+    console.log('[favorites] remove', uid, productId);
+  } catch (e) {
+    console.warn('[Firebase] favorites ref 삭제 실패:', e);
   }
 }

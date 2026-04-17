@@ -8,6 +8,13 @@ import {
   updateItemInFirestore,
   updateNotificationEnabled,
   fetchItemsFromFirestore,
+  // Phase 3-A: 이중 쓰기용 신규 함수 (기존 함수는 그대로 유지)
+  getCurrentUid,
+  upsertSharedProduct,
+  trackedItemToSharedProduct,
+  addTrackedRef,
+  removeTrackedRef,
+  incrementTrackerCount,
 } from '../services/firebase';
 
 interface AppState {
@@ -34,14 +41,52 @@ export const useAppStore = create<AppState>()(
       hasSeenOnboarding: false,
       trackedItems: [],
       addItem: (item) => {
+        // Phase 3-A: 추가 전 상태에 동일 productId 중복 여부 판단 (trackerCount 중복 증가 방지)
+        const alreadyTracking = item.productId
+          ? useAppStore
+              .getState()
+              .trackedItems.some((i) => i.productId === item.productId)
+          : false;
+
         set((state) => ({ trackedItems: [...state.trackedItems, item] }));
-        saveItemToFirestore(item);
+        saveItemToFirestore(item); // 기존 경로 유지 (하위 호환)
+
+        // shared_products 이중 쓰기 (productId 있고 + 첫 추적일 때만)
+        if (!alreadyTracking) {
+          const shared = trackedItemToSharedProduct(item);
+          if (shared) {
+            const uid = getCurrentUid();
+            upsertSharedProduct(shared);
+            if (uid) {
+              addTrackedRef(uid, shared.productId, item.targetPrice);
+            }
+            incrementTrackerCount(shared.productId, 1);
+          }
+        }
       },
       removeItem: (id) => {
+        // 삭제 직전 productId 포착 (필터링 이후엔 사라짐)
+        const target = useAppStore
+          .getState()
+          .trackedItems.find((i) => i.id === id);
+
         set((state) => ({
           trackedItems: state.trackedItems.filter((item) => item.id !== id),
         }));
-        removeItemFromFirestore(id);
+        removeItemFromFirestore(id); // 기존 경로 유지 (하위 호환)
+
+        // Phase 3-A: 삭제 후에도 같은 productId가 남아있으면 카운터 감소 스킵 (중복 추적 보호)
+        if (target?.productId) {
+          const stillTracking = useAppStore
+            .getState()
+            .trackedItems.some((i) => i.productId === target.productId);
+
+          if (!stillTracking) {
+            const uid = getCurrentUid();
+            if (uid) removeTrackedRef(uid, target.productId);
+            incrementTrackerCount(target.productId, -1);
+          }
+        }
       },
       updateTargetPrice: (id, price) => {
         set((state) => ({

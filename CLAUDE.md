@@ -33,17 +33,18 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 015 | 버그 수정 및 개선 | 🔄 | 015_Phase2.5_버그수정_및_개선.md |
 | 016 | AppStore 메타데이터 | ✅ | 016_AppStore_메타데이터.md |
 
-### Phase 3
+### Phase 3 (앱 구조 개편)
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
-| 014 | Phase 3 전체 계획 | ⬜ | 014_Phase3계획.md |
+| 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 | 017_앱구조개편_Phase3.md |
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
+- 014_Phase3계획.md — Phase 3 구 로드맵 (017로 대체됨, 이력 보존)
 
 ### TODO (미정)
 - [ ] 메인 화면에 쿠팡 이동 버튼 추가 (위치/형태 미정)
-- [x] 쿠팡 공유하기 진입 시 쿠팡 앱 이탈 버그 수정 (CoupangScraper URL resolve + Universal Link 차단)
+- [x] 쿠팡 공유하기 진입 시 쿠팡 앱 이탈 버그 수정 (resolved URL + HTML fetch + onShouldStartLoadWithRequest 차단)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -52,10 +53,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인 (link.coupang.com/re/... 형태)
 - 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
 
-## 현재 상태: 로컬 빌드 완료 + 스토어 배포 진행 중 (2026.04.13)
-- iOS: 알림 정상 수신 ✅ — buildNumber 23 App Store 심사 제출 완료 (심사 대기 중)
-- Android: 알림 정상 수신 ✅ — versionCode 18 (EAS remote), 실제 최신 빌드는 17
-- Google Play 프로덕션 액세스 신청 완료 (2026.04.01, 7일 내 결과)
+## 현재 상태: iOS 1.0.1 정식 출시 + 1.0.2 심사 대기 (2026.04.15)
+- iOS: 1.0.1 App Store 정식 출시 완료 ✅ — 1.0.2 buildNumber 28 심사 제출 완료 (심사 대기 중)
+- Android: 1.0.1 versionCode 17 프로덕션 승급 제출 완료 (승인 대기 중)
 - 로컬 빌드 세팅 완료 (Android/iOS 모두) — EAS 크레딧 소진 시에도 빌드 가능
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
@@ -73,7 +73,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 클라이언트: CoupangScraper (WebView DOM 스크래핑) — 상품 추가 시 + 수동 새로고침
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
   - ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 추가 (아이고에서 이식)
-  - ⚠️ iOS 쿠팡 튕김 현상: 4초 딜레이 + 안내문구로 우회 처리 중 (근본 해결 미완료)
+  - ✅ iOS 쿠팡 튕김 개선 (2~3회 → 1회): onShouldStartLoadWithRequest 딥링크 차단 + allowsBackForwardNavigationGestures={false} + resolved URL 직접 전달 + iOS HTML fetch 방식
+  - ⚠️ iOS 쿠팡 앱 열기 팝업 1회 잔존: "쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요" 안내문구 표시 중
   - 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 "다시 시도" 버튼
 - 상품 삭제: 스와이프 삭제 (왼쪽) + 롱프레스 삭제 오버레이 + 상세페이지 삭제 (아이고에서 이식)
 - Firebase Auth: onAuthStateChanged로 AsyncStorage 복원 대기 후 UID 판단 (UID 불일치 해결)
