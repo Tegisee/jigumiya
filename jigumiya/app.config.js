@@ -28,7 +28,7 @@ export default {
     },
     android: {
       package: "com.jigumiya.app",
-      versionCode: 35,
+      versionCode: 36,
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
       adaptiveIcon: {
         backgroundColor: "#000000",
