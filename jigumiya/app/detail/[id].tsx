@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,6 +20,15 @@ import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
+import {
+  getCurrentUid,
+  hasFavoriteRef,
+  addFavoriteRef,
+  removeFavoriteRef,
+  incrementFavoriteCount,
+  upsertSharedProduct,
+  trackedItemToSharedProduct,
+} from '../../services/firebase';
 
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -32,7 +41,48 @@ export default function DetailScreen() {
   const [newPrice, setNewPrice] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 자주사는상품 여부 조회 (productId 있는 상품만)
+  useEffect(() => {
+    if (!item?.productId) return;
+    const uid = getCurrentUid();
+    if (!uid) return;
+    let cancelled = false;
+    hasFavoriteRef(uid, item.productId).then((exists) => {
+      if (!cancelled) setIsFavorite(exists);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.productId]);
+
+  const handleToggleFavorite = useCallback(async () => {
+    if (!item?.productId || favoriteBusy) return;
+    const uid = getCurrentUid();
+    if (!uid) return;
+    setFavoriteBusy(true);
+    const nextValue = !isFavorite;
+    setIsFavorite(nextValue);
+    try {
+      if (nextValue) {
+        const shared = trackedItemToSharedProduct(item);
+        if (shared) await upsertSharedProduct(shared);
+        await addFavoriteRef(uid, item.productId);
+        await incrementFavoriteCount(item.productId, 1);
+      } else {
+        await removeFavoriteRef(uid, item.productId);
+        await incrementFavoriteCount(item.productId, -1);
+      }
+    } catch (e) {
+      console.warn('[favorites] toggle 실패:', e);
+      setIsFavorite(!nextValue);
+    } finally {
+      setFavoriteBusy(false);
+    }
+  }, [item, isFavorite, favoriteBusy]);
 
   const handleRefresh = useCallback(() => {
     if (!item || refreshing) return;
@@ -417,8 +467,22 @@ export default function DetailScreen() {
           >
             <Text style={styles.ctaText}>지금 구매하기</Text>
           </TouchableOpacity>
+          {item.productId && (
+            <TouchableOpacity
+              style={[styles.iconButton, isFavorite && styles.iconButtonActive]}
+              onPress={handleToggleFavorite}
+              activeOpacity={0.8}
+              disabled={favoriteBusy}
+            >
+              <Ionicons
+                name={isFavorite ? 'heart' : 'heart-outline'}
+                size={22}
+                color={isFavorite ? '#FF4D6D' : theme.text}
+              />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={styles.shareButton}
+            style={styles.iconButton}
             onPress={handleShare}
             activeOpacity={0.8}
           >
@@ -724,13 +788,17 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
   },
-  shareButton: {
+  iconButton: {
     width: 52,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: theme.border,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  iconButtonActive: {
+    borderColor: '#FF4D6D',
+    backgroundColor: 'rgba(255, 77, 109, 0.08)',
   },
   ctaText: {
     fontSize: 17,

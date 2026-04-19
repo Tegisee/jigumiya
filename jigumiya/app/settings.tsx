@@ -11,8 +11,6 @@ const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 export default function SettingsScreen() {
   const router = useRouter();
   const {
-    isWowMember,
-    toggleWowMember,
     notificationEnabled,
     toggleNotification,
     resetAllData,
@@ -63,25 +61,6 @@ export default function SettingsScreen() {
           <Switch
             value={notificationEnabled}
             onValueChange={toggleNotification}
-            trackColor={{ false: theme.border, true: theme.primary }}
-            thumbColor={theme.text}
-          />
-        </View>
-      </View>
-
-      <Text style={styles.sectionTitle}>일반</Text>
-      <View style={styles.card}>
-        <View style={styles.row}>
-          <View style={styles.rowLeft}>
-            <Ionicons name="star-outline" size={20} color={theme.primary} />
-            <View style={styles.rowText}>
-              <Text style={styles.label}>와우 회원</Text>
-              <Text style={styles.desc}>와우 회원가로 목표가 비교</Text>
-            </View>
-          </View>
-          <Switch
-            value={isWowMember}
-            onValueChange={toggleWowMember}
             trackColor={{ false: theme.border, true: theme.primary }}
             thumbColor={theme.text}
           />

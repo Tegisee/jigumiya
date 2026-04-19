@@ -15,6 +15,9 @@ export function initCoupangApi() {
 
 export { hasCoupangApiKeys };
 
+/** 홈 가격 추적 상품 최대 개수 (Phase 3 §4) */
+export const MAX_TRACKED_ITEMS = 10;
+
 // 스토어 링크 (출시 후 업데이트)
 export const STORE_LINKS = {
   ios: '', // App Store URL

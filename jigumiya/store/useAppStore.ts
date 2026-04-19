@@ -1,7 +1,9 @@
+import { Alert } from 'react-native';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TrackedItem } from '../types';
+import { MAX_TRACKED_ITEMS } from '../services/config';
 import {
   saveItemToFirestore,
   removeItemFromFirestore,
@@ -18,7 +20,6 @@ import {
 } from '../services/firebase';
 
 interface AppState {
-  isWowMember: boolean;
   notificationEnabled: boolean;
   hasSeenOnboarding: boolean;
   trackedItems: TrackedItem[];
@@ -27,7 +28,6 @@ interface AppState {
   updateTargetPrice: (id: string, price: number) => void;
   updateItemPrice: (id: string, price: number) => void;
   syncFromFirestore: () => Promise<void>;
-  toggleWowMember: () => void;
   toggleNotification: () => void;
   completeOnboarding: () => void;
   resetAllData: () => Promise<void>;
@@ -36,7 +36,6 @@ interface AppState {
 export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
-      isWowMember: false,
       notificationEnabled: true,
       hasSeenOnboarding: false,
       trackedItems: [],
@@ -47,6 +46,18 @@ export const useAppStore = create<AppState>()(
               .getState()
               .trackedItems.some((i) => i.productId === item.productId)
           : false;
+
+        // Phase 3 §4: 홈 10개 제한 — 중복 추가는 한도 소모 없음
+        if (
+          !alreadyTracking &&
+          useAppStore.getState().trackedItems.length >= MAX_TRACKED_ITEMS
+        ) {
+          Alert.alert(
+            '가격 추적 한도',
+            `가격 추적은 최대 ${MAX_TRACKED_ITEMS}개까지 할 수 있어요.\n기존 상품을 삭제한 후 다시 시도해주세요.`,
+          );
+          return;
+        }
 
         set((state) => ({ trackedItems: [...state.trackedItems, item] }));
         saveItemToFirestore(item); // 기존 경로 유지 (하위 호환)
@@ -125,8 +136,6 @@ export const useAppStore = create<AppState>()(
           set({ trackedItems: items });
         }
       },
-      toggleWowMember: () =>
-        set((state) => ({ isWowMember: !state.isWowMember })),
       completeOnboarding: () => set({ hasSeenOnboarding: true }),
       toggleNotification: () =>
         set((state) => {
@@ -141,7 +150,6 @@ export const useAppStore = create<AppState>()(
         }
         set({
           trackedItems: [],
-          isWowMember: false,
           notificationEnabled: true,
         });
         await AsyncStorage.removeItem('jonber-alimi-storage');

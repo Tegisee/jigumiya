@@ -360,6 +360,20 @@ export async function removeFavoriteRef(
   }
 }
 
+/** users/{uid}/favorites/{productId} 존재 여부 단건 조회 */
+export async function hasFavoriteRef(
+  uid: string,
+  productId: string,
+): Promise<boolean> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'favorites', productId));
+    return snap.exists();
+  } catch (e) {
+    console.warn('[Firebase] favorites ref 조회 실패:', e);
+    return false;
+  }
+}
+
 // ──────────────────────────────────────────────────────────
 // Phase 3-D: 실시간 구독 래퍼 (favorites.tsx / feed.tsx 용)
 // ──────────────────────────────────────────────────────────
