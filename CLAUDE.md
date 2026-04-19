@@ -36,7 +36,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 ### Phase 3 (앱 구조 개편)
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
-| 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 | 017_앱구조개편_Phase3.md |
+| 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
+
+**진행 경과**:
+- Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
+- Phase 3-D MVP 완료 (2026-04-19): 3탭 구조, 자주사는 토글(홈 카드 + 상세), 스와이프 삭제, 피드 정적 배너, 10개 제한, 뱃지 초기화
+- 다음: 1.0.4 (35/36) 빌드 검증 → Phase 3-B 백필 스크립트 또는 Phase 3-C 서버 이관
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -45,6 +50,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 ### TODO (미정)
 - [ ] 메인 화면에 쿠팡 이동 버튼 추가 (위치/형태 미정)
 - [x] 쿠팡 공유하기 진입 시 쿠팡 앱 이탈 버그 수정 (resolved URL + HTML fetch + onShouldStartLoadWithRequest 차단)
+- [ ] **검증**: 뱃지 카운트 0 초기화 — 다음 푸시 알림 수신 후 foreground 전환 시 뱃지 제거 확인 (1.0.4 35/36)
+- [ ] **검증**: 파트너스 실적 — 2026-04-20 지인 구매 결과 확인 (쿠팡앱 공유 → 파트너스 실적 집계 여부 조사 중)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -53,10 +60,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인 (link.coupang.com/re/... 형태)
 - 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
 
-## 현재 상태: iOS 1.0.1 정식 출시 + 1.0.2 심사 대기 (2026.04.15)
-- iOS: 1.0.1 App Store 정식 출시 완료 ✅ — 1.0.2 buildNumber 28 심사 제출 완료 (심사 대기 중)
-- Android: 1.0.1 versionCode 17 프로덕션 승급 제출 완료 (승인 대기 중)
-- 로컬 빌드 세팅 완료 (Android/iOS 모두) — EAS 크레딧 소진 시에도 빌드 가능
+## 현재 상태: 1.0.4 로컬 빌드 중 (2026.04.19)
+- 현재 빌드 타겟: **iOS 1.0.4 buildNumber 35 / Android 1.0.4 versionCode 36**
+- `eas.json` `appVersionSource: local` + `autoIncrement` 제거 → `app.config.js`가 버전 source of truth
+- iOS 이전 출시: 1.0.1 App Store 정식 출시 ✅, 1.0.2 buildNumber 28 심사 제출 이력 있음
+- Android 이전 출시: 1.0.1 versionCode 17 프로덕션 승급 제출 이력 있음
+- 1.0.4 주요 변경: Phase 3-D MVP(3탭/자주사는/피드 배너), 뱃지 초기화, 홈/상세 하트 토글, 스와이프 삭제, 10개 제한, 하트 시인성 개선
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
 - GitHub 레포: https://github.com/Tegisee/jigumiya (private)
@@ -74,9 +83,13 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
   - ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 추가 (아이고에서 이식)
   - ✅ iOS 쿠팡 튕김 개선 (2~3회 → 1회): onShouldStartLoadWithRequest 딥링크 차단 + allowsBackForwardNavigationGestures={false} + resolved URL 직접 전달 + iOS HTML fetch 방식
-  - ⚠️ iOS 쿠팡 앱 열기 팝업 1회 잔존: "쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요" 안내문구 표시 중
+  - ⚠️ iOS 쿠팡 앱 열기 팝업 1회 잔존: "쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요." 안내문구로 대응 (취소 유도 → 복귀 유도로 1.0.4에서 변경)
   - 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 "다시 시도" 버튼
-- 상품 삭제: 스와이프 삭제 (왼쪽) + 롱프레스 삭제 오버레이 + 상세페이지 삭제 (아이고에서 이식)
+- Phase 3-D 탭 구조: 홈(추적 10개) / 자주사는(무제한) / 가격변동(정적 배너, 3-C 대기), 설정은 Stack 화면으로 이동
+- 자주사는 토글: 홈 카드 우상단 하트(반투명 원형 배경) + 상세화면 CTA 옆 — `useFavoriteToggle` 훅 공용, `shared_products` 보장 + `favoriteCount` 증감
+- 상품 삭제: 스와이프 삭제 (왼쪽) + 롱프레스 삭제 오버레이 + 상세페이지 삭제 (홈 카드 + 자주사는 카드 동일 패턴)
+- 홈 10개 제한: `MAX_TRACKED_ITEMS = 10` (services/config.ts) — `addItem` 가드 + `modal/add-item.tsx` 선제 가드로 이중 적용
+- 뱃지 초기화: `services/notifications.ts` `clearBadgeCount` + `_layout.tsx`에서 앱 실행 + AppState active 전환 시 호출 (iOS 앱 아이콘/Android 알림 센터)
 - Firebase Auth: onAuthStateChanged로 AsyncStorage 복원 대기 후 UID 판단 (UID 불일치 해결)
 - Firebase Config: Platform.OS별 appId 분기 (iOS/Android), app.config.js로 변환
 - 앱 내 딥링크 변환: coupangApi.ts generateDeepLink() (클라이언트 HMAC)
@@ -89,19 +102,28 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - iOS: `~/jigumiya/builds/ios/` (IPA)
 - .gitignore에 포함 — 빌드 파일은 커밋하지 않음
 
+## 버전 관리 정책 (2026-04-19 변경)
+- `eas.json` `appVersionSource: "local"` — `app.config.js`가 진실 원천, EAS remote 값 무시
+- `production.autoIncrement` 제거 — 실패 빌드가 버전을 먹지 않음 (이전에는 실패해도 증가했던 함정 제거)
+- 버전 bump 시 수정 대상:
+  1. `app.config.js` — `version`, `ios.buildNumber`, `android.versionCode`
+  2. `android/app/build.gradle` — `versionCode`, `versionName` (gitignored, 로컬 동기화만)
+- `android/`가 로컬에 존재하면 prebuild 스킵되어 `build.gradle` 값이 최종 사용됨 → 양쪽 동기화 필수
+- Play Store / App Store는 단조 증가만 허용 — 다운그레이드 불가
+
 ## 로컬 빌드 주의사항 (Android)
-- 로컬 빌드 시 autoIncrement가 실패 빌드에도 적용되므로, 빌드 전 반드시 eas build:version:get으로 현재 versionCode 확인 필수
-- 빌드 파일명은 EAS remote versionCode 기준으로 맞출 것 (예: versionCode 18이면 jigumiya-1.0.1-18.aab)
-- google-services.json은 .gitignore에 있으므로 .easignore 파일을 git 루트(~/jigumiya/)에 생성해야 로컬 빌드 시 포함됨
-- 빌드 명령: eas build --local --profile production --platform android
+- 빌드 전 `app.config.js` `android.versionCode` + `build.gradle` `versionCode`/`versionName` 동기화 확인
+- 빌드 파일명은 app.config.js versionCode 기준 (예: `jigumiya-1.0.4-36.aab`)
+- google-services.json은 .gitignore에 있으므로 `.easignore` 파일을 git 루트(`~/jigumiya/`)에 생성해야 로컬 빌드 시 포함됨
+- 빌드 명령: `eas build --local --profile production --platform android`
 
 ## 로컬 빌드 주의사항 (iOS)
-- Android와 동일하게 autoIncrement가 실패 빌드에도 적용됨 — 빌드 전 eas build:version:get --platform ios로 buildNumber 확인 필수
-- fastlane 필요 — 미설치 시 brew install fastlane
-- GoogleService-Info.plist도 .gitignore에 있으므로 .easignore에서 제외해야 빌드 포함됨 (Android와 동일 .easignore 사용)
-- ios/ 네이티브 디렉토리가 이미 있으면 prebuild 스킵됨 — 네이티브 설정 변경 시 ios/ 삭제 후 재빌드
-- 빌드 명령: eas build --local --profile production --platform ios
-- 결과물: app-store 서명된 IPA → eas submit --platform ios 또는 Transporter로 App Store Connect 업로드
+- 빌드 전 `app.config.js` `ios.buildNumber` 확인 (autoIncrement OFF 상태라 자동 증가 없음)
+- fastlane 필요 — 미설치 시 `brew install fastlane`
+- `GoogleService-Info.plist`도 .gitignore에 있으므로 `.easignore`에서 제외해야 빌드 포함됨 (Android와 동일 `.easignore` 사용)
+- `ios/` 네이티브 디렉토리가 이미 있으면 prebuild 스킵됨 — 네이티브 설정 변경 시 `ios/` 삭제 후 재빌드
+- 빌드 명령: `eas build --local --profile production --platform ios`
+- 결과물: app-store 서명된 IPA → Transporter로 App Store Connect 수동 업로드 (`eas submit` 금지 — §017 §12 빌드/배포 정책)
 
 ## 형제 앱
 - 지금이야와 아이고(~/aigo/aigo)는 형제 앱 관계

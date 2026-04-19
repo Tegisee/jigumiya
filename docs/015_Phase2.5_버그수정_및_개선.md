@@ -1,6 +1,6 @@
 # Phase 2.5 — 버그 수정 및 기능 개선
 
-## 현재 진행 상태 (2026.04.13)
+## 현재 진행 상태 (2026.04.15)
 
 ### 완료된 작업
 - ✅ GitHub Actions + FCM 알림 디버깅 (스크래퍼→API 교체)
@@ -45,11 +45,11 @@
 
 ### 알려진 이슈
 - iOS 첫 번째 상품 등록 시 자동 재시도 필요 (30초 타임아웃 → 자동 재시도 1회)
-- iOS 상품 등록 시 쿠팡 앱으로 일시 이동 (Universal Link, 돌아오면 자동 처리) — 앱 배너 CSS 차단 추가했으나 근본 해결 미완료
+- iOS 쿠팡 앱 열기 팝업 1회 잔존 (Universal Link) — 안내문구 "쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요." (2026-04-19 변경: 취소 유도 → 복귀 유도)
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
-- App Store 스크린샷 업로드 오류 지속 (Apple 지원팀 케이스 102845214001 응답 대기)
 - 그래프 Y축 가격대 미표시 문제
 - 일부 상품 가격 조회 실패 (productId 매칭 실패 또는 가격 변동 30% 초과로 스킵)
+- 🔬 조사 중: 쿠팡앱 공유 경로 → 파트너스 실적 미집계 여부 (2026-04-20 지인 구매 결과 확인 예정)
 
 ### 2026.04.13 작업 완료
 - ✅ 스와이프 삭제 (왼쪽으로 밀면 삭제 버튼) — 아이고에서 이식, PanResponder + Animated
@@ -60,13 +60,41 @@
 - ✅ iOS 로컬 빌드 완료: jigumiya-1.0.1-23.ipa (buildNumber 23, App Store 심사 제출 완료)
 - ✅ 로컬 빌드 환경 세팅: .easignore + fastlane 설치, CLAUDE.md에 주의사항 기재
 
+### 2026.04.15 작업 완료
+- ✅ iOS 1.0.1 App Store 정식 출시 완료
+- ✅ iOS 1.0.2 심사 제출 (buildNumber 28) — 쿠팡 튕김 개선 포함
+- ✅ Android 1.0.1 프로덕션 승급 제출 (versionCode 17)
+- ✅ iOS 쿠팡 튕김 2~3회 → 1회 개선: onShouldStartLoadWithRequest coupang/coupangapp 딥링크 차단, allowsBackForwardNavigationGestures={false}
+- ✅ iOS 상품 추가 시 resolved URL + HTML fetch 방식 전환 (link.coupang.com 직접 로드 제거, 4초 딜레이 제거)
+- ✅ BLOCK_DEEPLINK_JS에 coupangapp:// 스킴 추가
+- ✅ coupang.com 도메인 명시적 WebView 내 처리 (Universal Link 팝업 방지)
+- ✅ iOS 대기 안내문구 변경: "쿠팡 앱이 열리면 확인 후 돌아와주세요" → "쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요"
+- ✅ 앱 버전 1.0.1 → 1.0.2 업데이트
+
+### 2026.04.19 작업 완료 (1.0.4 패치)
+> Phase 3-D MVP 구조(017 §참고)는 `docs/017_앱구조개편_Phase3.md` 참조. 여기에는 2.5 범위의 버그픽스 + UX 개선만 기록.
+
+- ✅ 뱃지 카운트 초기화: `Notifications.setBadgeCountAsync(0)` → `services/notifications.ts` `clearBadgeCount` + `_layout.tsx` mount + AppState active 전환 시 호출
+- ✅ 홈 카드 하트 버튼 시인성 개선: 32×32 원형 반투명(rgba 0,0,0,0.45) 배경, 비활성 색상 #ffffff로 대비 확보
+- ✅ 홈 카드 상품명 `paddingRight: 40` — 2줄 상품명이 하트 버튼과 겹치지 않도록 (Galaxy S20 기준 약 11~13자/줄)
+- ✅ 자주사는 탭 X버튼 → 왼쪽 스와이프 삭제로 변경 (홈 카드 PanResponder 패턴 이식)
+- ✅ iOS 쿠팡 앱 안내문구 재변경: "쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요" → "쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요." (쿠팡 앱 실행 허용 + 복귀 유도로 전환)
+- ✅ `modal/add-item.tsx` 하드코딩 20개 제한 제거 → `MAX_TRACKED_ITEMS` 참조로 통일 (store 가드와 일치)
+- ✅ `useFavoriteToggle` 훅 추출 — 상세화면/홈 카드가 동일 토글 로직 공유 (Phase 3-D §하트 부분)
+- ✅ 앱 버전 1.0.3 → 1.0.4
+- ✅ 버전 관리 방식 전환: `appVersionSource: remote → local`, `autoIncrement` 제거 → `app.config.js`가 진실 원천, 실패 빌드가 버전 먹는 문제 해결
+- ✅ iOS buildNumber 35 / Android versionCode 35→36 고정 (app.config.js + build.gradle)
+
+#### 1.0.4 검증 대기
+- [ ] 뱃지 초기화 실기기 확인 — 푸시 알림 수신 후 앱 foreground 전환 시 뱃지 제거 여부
+- [ ] 파트너스 실적 검증 — 2026-04-20 지인 구매 결과 확인 (쿠팡앱 공유 → 실적 집계 여부)
+
 ### 다음 빌드 때 구현 (Phase 2.5 잔여)
 - [ ] 그래프 Y축 가격대 표시 수정
 
 ### 대기 중
-- [ ] App Store 심사 결과 대기 (buildNumber 23, 2026.04.13 제출)
-- [ ] Google Play 프로덕션 액세스 승인 대기 (2026.04.01 신청, 7일 내 결과)
-- [ ] Google Play에 jigumiya-1.0.1-17.aab 내부 테스트 업로드 (프로덕션 승인 후)
+- [ ] App Store 1.0.2 심사 결과 대기 (buildNumber 28, 2026.04.15 제출)
+- [ ] Android 1.0.1 프로덕션 승급 승인 대기 (versionCode 17, 2026.04.15 제출)
 
 ### 출시 후 TODO
 - [ ] 앱 공유하기 버튼 활성화: services/config.ts STORE_LINKS에 스토어 URL 추가
@@ -121,5 +149,9 @@
 - 빌드 20: 1.0.1 (제휴 링크 디버그 로그 추가)
 - 빌드 21: 1.0.1 (제휴 링크 최종 - handleNext fetch resolve + 딥링크 선행 생성)
 - 빌드 22: 1.0.1 (Auth UID 복원 + Android Firebase 설정 + 알림 로직 개선)
-- Android vc17: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) — EAS remote vc18
-- iOS bn23: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) ← 현재 최신, App Store 심사 대기
+- Android vc17: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) — 프로덕션 승급 제출 완료
+- iOS bn23: 1.0.1 (스와이프/롱프레스 삭제 + 쿠팡 배너 차단, 로컬 빌드) — App Store 정식 출시 완료 ✅
+- iOS bn28: 1.0.2 (쿠팡 튕김 개선 + Universal Link 차단 + 안내문구, 로컬 빌드) — App Store 심사 제출
+- iOS bn29: 1.0.2 (안내문구 추가, 로컬 빌드) — 테스트용
+- 1.0.3: Phase 3-A shared_products 이중 쓰기 + 1.0.2 트레인 갱신 (빌드 산출물 없음, 1.0.4로 건너뜀)
+- **1.0.4 (iOS bn35 / Android vc36)**: Phase 3-D MVP + 뱃지 초기화 + 하트 토글 + 스와이프 삭제 ← 현재 최신, 로컬 빌드 대상

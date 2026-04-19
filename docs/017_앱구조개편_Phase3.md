@@ -392,10 +392,16 @@ query(
 ---
 
 ### 8-7. 배포 (Phase 3-A 검증 완료 후) ⏳
+
+> ⚠️ **§13 빌드/배포 정책 준수** — `eas submit` 금지, Transporter 수동 업로드, 로컬 빌드 전용
+
 - [ ] 개발 서버 테스트 완료 (§8-6 통과)
-- [ ] 앱 버전 bump (1.0.2 → 1.0.3) — 버그픽스 없으면 스킵 가능
-- [ ] `eas build --local --profile production --platform all`
-- [ ] TestFlight / Play Console 내부 테스트 업로드
+- [ ] 앱 버전 bump — `app.config.js` 1.0.2 → **1.0.3** (1.0.2 트레인 닫힘)
+- [ ] iOS: `eas build --local --profile production --platform ios`
+- [ ] Android: `eas build --local --profile production --platform android`
+- [ ] 빌드 산출물 정리 (§13-3 수동 정리 명령)
+- [ ] Transporter로 IPA 업로드 → App Store Connect TestFlight 반영 확인
+- [ ] Google Play Console에서 AAB 내부 테스트 트랙 업로드
 - [ ] 지인 1~2명 검증 (제휴 링크 + 신규 유저 추가 플로우)
 - [ ] 문제없으면 스토어 정식 제출
 
@@ -417,21 +423,59 @@ query(
 - ✅ UI 파일 (`app/`, `components/`) 무수정
 - ✅ 스크래퍼 (`scripts/price-checker`) 무수정
 
-### 검증 결과 (§8-6 완료 후 기입)
-- [ ] TypeScript 컴파일: ___
-- [ ] Step 1 규칙 배포: ___
-- [ ] Step 3 첫 추가: ___
-- [ ] Step 4 중복 가드: ___
-- [ ] Step 5 삭제: ___
-- [ ] Step 6 productId 없는 상품: ___
-- [ ] 완료 일자: ___
-- [ ] 이슈 기록: ___
+### 검증 결과 ✅ Phase 3-A 100% 성공 (2026-04-18)
+- [x] **TypeScript 컴파일**: ✅ 0 errors (변경 파일 3개 모두 clean)
+- [x] **Step 1 규칙 배포**: ✅ Firebase Console 게시 완료
+- [x] **Step 3 신규 추가**: ✅ `shared_products/{productId}` 실시간 생성 확인, 3경로 동시 기록 확인
+- [x] **Step 4 중복 가드** (⭐ 핵심): ✅ 같은 productId 재추가 시 `trackerCount: 1` 유지 — 이중 증가 차단 성공
+- [x] **Step 5 삭제**:
+  - 중간 삭제 (중복 2개 중 1개 제거): `trackerCount: 1` 유지 ✅
+  - 마지막 삭제 (남은 1개 제거): `trackerCount: 0` + `tracked/{productId}` 문서 제거 ✅
+- [ ] **Step 6 productId 없는 상품**: 이번 세션 미테스트 (필요 시 추가 검증 예정)
+- [x] **완료 일자**: 2026-04-18
+- [x] **이슈 기록**: 없음 — 모든 핵심 기능 정상 작동
+
+### 핵심 성과
+1. `shared_products` 구조 기반 확립 — Phase 3-B 백필 진입 준비 완료
+2. 중복 추적 가드 동작 확인 — 다중 유저 환경에서도 `trackerCount` 정확성 보장
+3. 기존 `users/{uid}/items` 경로 무영향 — 하위 호환 유지
 
 ---
 
-## 10. 다음 단계 (Phase 3-B 착수 조건)
+## 10. Phase 3-D MVP 완료 기록 (2026-04-19)
 
-§8-6 모든 Step 통과 + §8-7 배포 후 **2주 관찰** → Phase 3-B (백필 스크립트) 착수.
+> Phase 3-A 검증 완료 후 UI 구조 개편을 먼저 진행하는 쪽으로 순서 변경.
+> Phase 3-B 백필 / Phase 3-C 서버 이관은 1.0.4 검증 후 착수 예정.
+
+### 완료된 범위
+- ✅ `app/(tabs)/_layout.tsx` 2탭 → 3탭 (홈/자주사는/가격변동), focused 상태 아이콘 분기
+- ✅ `app/(tabs)/favorites.tsx` 신설 — `subscribeFavorites` 실시간 구독 + `getSharedProduct` 메타 배치 페치 + 스와이프 삭제
+- ✅ `app/(tabs)/feed.tsx` 신설 — 초기엔 `subscribePriceDrops` 구독, 이후 **정적 "곧 출시될 기능이에요" 배너**로 단순화 (Phase 3-C까지 인덱스 쿼리 차단)
+- ✅ `app/settings.tsx` (tabs) 밖 Stack 화면으로 이동 + 뒤로가기 버튼, 3탭 모두 헤더 우상단 진입
+- ✅ 홈 우상단 공유 + 설정 2버튼 (기존 설정 화면에서 이동)
+- ✅ 자주사는 추가 경로: **홈 카드 우상단 + 상세화면 하단 CTA** 양쪽에 하트 토글 — `useFavoriteToggle` 훅 공용
+- ✅ 홈 10개 제한: `MAX_TRACKED_ITEMS = 10` (services/config.ts) — `addItem` 가드 + `modal/add-item.tsx` 선제 가드
+- ✅ `isWowMember` / `toggleWowMember` 전면 제거 (store + settings UI)
+- ✅ 홈 카드 하트 시인성 개선: 32×32 원형 반투명 배경 + 비활성 흰색, 상품명 `paddingRight: 40`으로 겹침 방지
+
+### 후속 (Phase 3-D+, 미완)
+- [ ] 11~20개 보유 유저 마이그레이션 모달 (§4) — 기존 유저 중 10개 초과자 대응
+- [ ] 가격변동 피드 실데이터 + 필터 칩 + `[📊 상세]` `[🛒 바로구매]` 2단 버튼 (Phase 3-C 완료 후 재활성)
+- [ ] 피드 카드 액션 영역 추가
+
+### 1.0.4 빌드 사양 (Phase 3-D MVP + 1.0.4 패치 통합)
+- version 1.0.4, iOS buildNumber 35, Android versionCode 36
+- `eas.json` `appVersionSource: local` + autoIncrement 제거 (2026-04-19 전환)
+
+### 검증 대기
+- [ ] 뱃지 카운트 초기화 실기기 확인
+- [ ] 파트너스 실적 재확인 (2026-04-20 지인 구매)
+
+---
+
+## 11. 다음 단계 (Phase 3-B 착수 조건)
+
+1.0.4 빌드 안정성 2주 관찰 → Phase 3-B (백필 스크립트) 착수.
 
 ### Phase 3-B 예상 작업
 - `scripts/migration/backfill-shared-products.ts` 작성
@@ -440,17 +484,142 @@ query(
 - `users/{uid}/tracked/{productId}` 재기입 (productId 있는 item만)
 - 배치 완료 후 샘플 검증 (무작위 10개 유저 대조)
 
-### 다음 대화창 프롬프트 (Phase 3-A 검증 완료 후)
+### 다음 대화창 프롬프트 (Phase 3-D MVP + 1.0.4 검증 완료 후)
 ```
 docs/000_MD_사용법.md 와 CLAUDE.md 읽고,
 017_앱구조개편_Phase3.md 도 읽어줘.
-Phase 3-A §8-6 검증 완료. Phase 3-B 백필 스크립트 작업 시작해.
+
+Phase 3-D MVP + 1.0.4 빌드 검증 완료 (날짜: YYYY-MM-DD).
+§13 빌드/배포 정책 준수 (Transporter 수동 업로드, 로컬 빌드 전용).
+
+Phase 3-B 백필 스크립트 작업 시작해.
 ```
 
 ---
 
-## 11. 비고
+## 12. 비고
 - 아이고 앱과의 선후 관계: 이번엔 **지금이야 선행** → 검증 후 아이고 이식
 - `014_Phase3계획.md`는 이력 보존 (삭제 X)
-- CLAUDE.md 작업 리스트: 014 → 017로 교체 완료 (Phase 3 상태 🔄)
-- Phase 3-A 완료 일자 + 검증 결과 본 문서 §9에 기록
+- CLAUDE.md 작업 리스트: 014 → 017로 교체 완료 (Phase 3 상태 🔄 3-D MVP 완료 / 2026-04-19)
+- Phase 3-A 완료 기록: §9 / Phase 3-D MVP 완료 기록: §10
+- **§13 빌드/배포 정책은 Phase 3-B / 3-C / 3-D+ / 3-E 전 구간에 일관 적용**
+
+---
+
+## 13. 빌드 및 배포 정책 (Phase 3 전체 공통) 🔒
+
+> **이 섹션의 정책은 Phase 3-A 이후 모든 하위 Phase (3-B, 3-C, 3-D, 3-E)에 일관되게 적용한다.**
+> Phase 3-A에서 확정 (2026-04-18) — 비용 통제 + 작업 일관성 목적.
+
+### 12-1. 유료 빌드 서비스 사용 금지
+
+| 명령 / 서비스 | 사용 | 대안 |
+|---------------|------|------|
+| `eas build --local` | ✅ **허용** (유일한 빌드 경로) | — |
+| `eas build` (remote) | ❌ **금지** | 로컬 빌드만 사용 |
+| `eas submit` | ❌ **금지** | **Transporter 앱**으로 수동 업로드 (iOS) |
+| EAS Update (OTA) | ❌ **금지** | 네이티브 재빌드 + 스토어 배포로만 반영 |
+
+**이유**:
+- EAS 크레딧 보전 (Starter 플랜 $19/월 한도 내 유지)
+- 빌드 재현성 (로컬 환경 일치 보장)
+- 비상시 오프라인 빌드 가능
+
+### 12-2. 빌드 실행 주체
+- **Claude Code는 빌드 명령을 직접 실행하지 않는다** (CLAUDE.md 정책 "빌드/테스트는 터미널에서 직접")
+- Claude의 역할: 코드 수정 + 버전 bump + 커밋 메시지 작성 + 정리 명령 제안
+- 사용자의 역할: 터미널에서 `eas build --local` 실행 + Transporter 업로드
+
+**이유**: Keychain / 2FA / fastlane 인증 등 interactive 프롬프트가 존재 — background 실행 시 hang 위험.
+
+### 12-3. 빌드 후 파일 정리 절차
+
+**빌드 직후 상태** (자동 정리 전)
+```
+~/jigumiya/jigumiya/
+├── build-{timestamp}.ipa       ← EAS 로컬 빌드 기본 출력 위치
+├── build-{timestamp}.tar.gz    ← EAS CLI 컨텍스트 임시 파일 (삭제 대상)
+└── app.app/                    ← iOS 중간 산출물 (삭제 대상)
+```
+
+**정리 후 기대 상태** (네이밍 규칙: `jigumiya-{version}-{buildNumber}.{ipa|aab}`)
+```
+~/jigumiya/builds/
+├── ios/
+│   └── jigumiya-1.0.3-30.ipa   ← 이동 + 리네임
+└── android/
+    └── jigumiya-1.0.3-18.aab
+```
+
+**수동 정리 명령 (iOS 예시)**
+```bash
+cd ~/jigumiya/jigumiya
+
+# 1. 현재 buildNumber 조회
+BUILD_NUMBER=$(eas build:version:get --platform ios 2>/dev/null | grep -oE '[0-9]+$' | tail -1)
+
+# 2. 버전 조회 (app.config.js)
+VERSION=$(node -e "console.log(require('./app.config.js').default.expo.version)")
+
+# 3. IPA 이동 + 리네임
+mv build-*.ipa ~/jigumiya/builds/ios/jigumiya-${VERSION}-${BUILD_NUMBER}.ipa
+
+# 4. 임시 파일 삭제
+rm -f build-*.tar.gz
+rm -rf app.app
+
+# 5. 결과 확인
+ls -la ~/jigumiya/builds/ios/ | tail -3
+```
+
+**Android 변형**: `platform ios` → `platform android`, `*.ipa` → `*.aab`, `builds/ios/` → `builds/android/`
+
+### 12-4. 자동화 스크립트 계획 (Phase 3-C 즈음 구현)
+
+**제안 위치**: `~/jigumiya/scripts/build-cleanup.sh`
+
+**기능**:
+- `--platform ios|android` 인자로 대상 선택
+- EAS remote buildNumber / versionCode 자동 조회
+- `app.config.js`에서 version 파싱 (node 1-liner)
+- `build-*.{ipa|aab}` 파일 존재 확인 → 리네임 + 이동
+- 임시 파일 (`build-*.tar.gz`, `app.app/`) 자동 삭제
+- 실패 빌드로 인한 잔존물 사전 정리 옵션 (`--clean` 플래그)
+
+**고려 사항**:
+- `.gitignore`에 `build-*.tar.gz`, `app.app/`, `jigumiya/build-*.ipa` 이미 포함 여부 확인 (미포함 시 추가)
+- `eas build:version:get` 출력 포맷 안정성 (EAS 버전 업데이트 시 파싱 깨질 수 있음)
+- 실패 빌드 감지: `build-*.ipa` 또는 `*.aab` 파일이 없으면 에러 메시지
+
+### 12-5. 업로드 절차 (eas submit 대체 — Transporter / Play Console)
+
+**iOS → App Store Connect**
+1. 정리된 IPA 확인: `~/jigumiya/builds/ios/jigumiya-{v}-{b}.ipa`
+2. Transporter 앱 실행 (Mac App Store 무료 설치)
+3. Apple ID 로그인 (최초 1회, 앱 암호 필요)
+4. IPA 파일 drag & drop → **Deliver** 클릭
+5. 처리 대기 (10~30분) → Processing 완료 알림
+6. App Store Connect → **TestFlight** 탭 또는 **버전 관리**에서 빌드 확인
+7. TestFlight 내부 테스터에 배포 or 심사 제출
+
+**Android → Google Play Console**
+1. 정리된 AAB 확인: `~/jigumiya/builds/android/jigumiya-{v}-{b}.aab`
+2. Google Play Console → 앱 선택 → **프로덕션** 또는 **내부 테스트** 트랙
+3. **새 출시 만들기** → App Bundle drag & drop
+4. 출시 노트 작성 → **검토** → **출시 시작**
+
+### 12-6. 빌드 전 공통 체크리스트
+
+이 체크리스트는 Phase 3 모든 하위 빌드에 적용:
+- [ ] `app.config.js` version 업데이트 (필요 시)
+- [ ] `eas build:version:get --platform {ios|android}` 로 현재 buildNumber / versionCode 확인 (autoIncrement 실패 빌드 영향)
+- [ ] 변경분 커밋 (빌드 후 롤백 대비 체크포인트)
+- [ ] `.easignore` 확인 (`google-services.json`, `GoogleService-Info.plist` 포함 여부)
+- [ ] 네이티브 변경 시 `ios/` 또는 `android/` 삭제 후 prebuild 재실행 검토
+- [ ] 빌드 명령 실행은 **터미널에서 사용자가 직접** (Claude 실행 금지)
+- [ ] 빌드 완료 후 §13-3 정리 절차 수행
+
+### 12-7. 정책 위반 시 대응
+- `eas build` (remote) 실수 실행 시: 즉시 Ctrl+C 중단, EAS 대시보드에서 job 취소
+- `eas submit` 실수 실행 시: 심사 제출 직전 App Store Connect에서 제출 취소 (timing 중요)
+- 정책 외 빌드 흔적 발견 시 (tar.gz 등): §13-3 정리 절차로 즉시 제거
