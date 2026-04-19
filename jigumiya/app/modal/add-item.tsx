@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
+import { MAX_TRACKED_ITEMS } from '../../services/config';
 import { generateDeepLink, hasCoupangApiKeys } from '../../services/coupangApi';
 import CoupangScraper, {
   ScrapedProduct,
@@ -105,8 +106,11 @@ export default function AddItemModal() {
       Alert.alert('지원하지 않는 링크', '현재 쿠팡 링크만 지원합니다.');
       return;
     }
-    if (trackedItems.length >= 20) {
-      Alert.alert('등록 제한', '상품은 최대 20개까지 등록할 수 있습니다.');
+    if (trackedItems.length >= MAX_TRACKED_ITEMS) {
+      Alert.alert(
+        '가격 추적 한도',
+        `가격 추적은 최대 ${MAX_TRACKED_ITEMS}개까지 할 수 있어요.\n기존 상품을 삭제한 후 다시 시도해주세요.`,
+      );
       return;
     }
 
@@ -375,7 +379,7 @@ export default function AddItemModal() {
                 <Text style={styles.scrapingText}>상품 정보를 가져오는 중...</Text>
                 {Platform.OS === 'ios' && (
                   <Text style={styles.iosHintText}>
-                    쿠팡 앱 열기 팝업이 뜨면 '취소'를 눌러주세요
+                    쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요.
                   </Text>
                 )}
               </>

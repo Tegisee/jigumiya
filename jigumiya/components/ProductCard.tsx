@@ -134,8 +134,8 @@ export function ProductCard({ item }: Props) {
             >
               <Ionicons
                 name={isFavorite ? 'heart' : 'heart-outline'}
-                size={20}
-                color={isFavorite ? '#FF4D6D' : theme.subtext}
+                size={18}
+                color={isFavorite ? '#FF4D6D' : '#ffffff'}
               />
             </TouchableOpacity>
           )}
@@ -295,9 +295,14 @@ const styles = StyleSheet.create({
   },
   heartBtn: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    padding: 4,
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
     zIndex: 5,
   },
 });
