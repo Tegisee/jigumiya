@@ -52,6 +52,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] 쿠팡 공유하기 진입 시 쿠팡 앱 이탈 버그 수정 (resolved URL + HTML fetch + onShouldStartLoadWithRequest 차단)
 - [ ] **검증**: 뱃지 카운트 0 초기화 — 다음 푸시 알림 수신 후 foreground 전환 시 뱃지 제거 확인 (1.0.4 35/36)
 - [ ] **검증**: 파트너스 실적 — 2026-04-20 지인 구매 결과 확인 (쿠팡앱 공유 → 파트너스 실적 집계 여부 조사 중)
+- [ ] **조치**: 아이고 price-checker cron 스케줄 1시간 어긋나게 조정 (파트너스 API 키 공유 상태)
+- [ ] **검토**: 가격 체크 3회 중 마지막 회차에만 알림 발송 구조로 개선 (파트너스 실적 검증 후)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -79,6 +81,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ 만료 토큰 cleanup: 유저 삭제 → expoPushToken 필드만 제거 (상품 데이터 보존)
   - GitHub Actions cron: 08:00/14:00/21:00 KST (3회/일), Node.js 24
   - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY
+  - 호출 방식: **완전 순차 for-of + 상품당 1초 딜레이** (scripts/price-checker/index.ts L204) → 실측 **분당 ~35회**, /products/search 분당 50회 한도 대비 30% 여유 (상세: docs/010 §Rate Limit)
+  - 개선 검토: 1~2회차는 가격 DB 갱신만, 21:00 회차에만 알림 발송 → 알림 피로 감소 (파트너스 실적 검증 후 착수)
 - 클라이언트: CoupangScraper (WebView DOM 스크래핑) — 상품 추가 시 + 수동 새로고침
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
   - ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 추가 (아이고에서 이식)
@@ -130,6 +134,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
+- ⚠️ **API 키 공유 리스크 (2026-04-19 확인)**: 쿠팡 파트너스 API 키를 양쪽 앱이 공유 중 → price-checker 동시 실행 시 `/products/search` 분당 50회 한도 합산 가능성
+  - **TODO**: 아이고 price-checker cron을 지금이야(08/14/21 KST)와 1시간 이상 어긋나게 조정 (예: 09/15/22 KST)
+  - 장기: 파트너스 계정 2개로 키 분리 검토
 
 ## 앱 기본 정보
 - 앱 이름: 지금이야 (Jigumiya)
