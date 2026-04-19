@@ -264,6 +264,7 @@ const styles = StyleSheet.create({
     color: theme.text,
     fontWeight: '600',
     lineHeight: 20,
+    paddingRight: 40,
   },
   priceRow: {
     flexDirection: 'row',
