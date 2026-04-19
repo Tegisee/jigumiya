@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Platform, InteractionManager } from 'react-native';
+import { Platform, InteractionManager, AppState } from 'react-native';
 import { Slot, Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -10,6 +10,7 @@ import { signInAnonymously } from '../services/firebase';
 import {
   registerForPushNotifications,
   getItemIdFromNotification,
+  clearBadgeCount,
 } from '../services/notifications';
 import { useAppStore } from '../store/useAppStore';
 import OnboardingScreen from '../components/OnboardingScreen';
@@ -75,6 +76,16 @@ export default function RootLayout() {
       await registerForPushNotifications();
     })();
 
+    // 앱 실행 직후 뱃지 초기화
+    clearBadgeCount();
+
+    // background → active 전환 시 뱃지 초기화
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        clearBadgeCount();
+      }
+    });
+
     // 알림 클릭 리스너
     notifListenerRef.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
@@ -94,6 +105,7 @@ export default function RootLayout() {
 
     return () => {
       notifListenerRef.current?.remove();
+      appStateSub.remove();
     };
   }, []);
 

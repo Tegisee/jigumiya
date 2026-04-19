@@ -62,3 +62,12 @@ export function getItemIdFromNotification(
   const data = response.notification.request.content.data;
   return (data?.itemId as string) ?? null;
 }
+
+/** 앱 아이콘/알림 센터 뱃지 카운트 0으로 초기화 */
+export async function clearBadgeCount(): Promise<void> {
+  try {
+    await Notifications.setBadgeCountAsync(0);
+  } catch (e) {
+    console.warn('[Notifications] 뱃지 초기화 실패:', e);
+  }
+}

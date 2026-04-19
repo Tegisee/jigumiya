@@ -8,6 +8,8 @@ import {
   StyleSheet,
   Alert,
   Linking,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +26,9 @@ import { generateDeepLink } from '../../services/coupangApi';
 import type { FavoriteRef, SharedProduct } from '../../types';
 
 type MetadataState = SharedProduct | null; // null = 조회 완료 but 부재 / undefined = 미조회
+
+const SWIPE_THRESHOLD = -80;
+const DELETE_BTN_WIDTH = 80;
 
 export default function FavoritesScreen() {
   const router = useRouter();
@@ -83,21 +88,6 @@ export default function FavoritesScreen() {
     };
   }, [favorites]);
 
-  const handleRemove = (productId: string) => {
-    Alert.alert('자주 사는 상품 삭제', '이 상품을 목록에서 제거할까요?', [
-      { text: '취소', style: 'cancel' },
-      {
-        text: '삭제',
-        style: 'destructive',
-        onPress: async () => {
-          if (!uid) return;
-          await removeFavoriteRef(uid, productId);
-          await incrementFavoriteCount(productId, -1);
-        },
-      },
-    ]);
-  };
-
   const handleBuy = async (product: SharedProduct) => {
     const targetUrl = product.resolvedUrl || product.url;
     try {
@@ -114,78 +104,63 @@ export default function FavoritesScreen() {
 
   const renderItem = ({ item }: { item: FavoriteRef }) => {
     const product = metadata[item.productId];
-
-    // 로딩 중 (메타데이터 아직 조회 전)
-    if (product === undefined) {
-      return (
-        <View style={styles.card}>
-          <View style={[styles.image, styles.imagePlaceholder]} />
-          <View style={styles.info}>
-            <Text style={styles.name} numberOfLines={1}>
-              불러오는 중...
-            </Text>
-          </View>
-        </View>
-      );
-    }
-
-    // 메타데이터 없음 (shared_products 미생성 상태)
-    if (product === null) {
-      return (
-        <View style={styles.card}>
-          <View style={[styles.image, styles.imagePlaceholder]}>
-            <Ionicons
-              name="help-circle-outline"
-              size={28}
-              color={theme.subtext}
-            />
-          </View>
-          <View style={styles.info}>
-            <Text style={styles.name}>정보 없음</Text>
-            <Text style={styles.desc}>상품 정보가 아직 준비되지 않았어요</Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => handleRemove(item.productId)}
-            style={styles.deleteBtn}
-            hitSlop={10}
-          >
-            <Ionicons name="close-circle" size={22} color={theme.subtext} />
-          </TouchableOpacity>
-        </View>
-      );
-    }
-
     return (
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => handleBuy(product)}
-        activeOpacity={0.8}
+      <SwipeableCard
+        onDelete={async () => {
+          if (!uid) return;
+          await removeFavoriteRef(uid, item.productId);
+          await incrementFavoriteCount(item.productId, -1);
+        }}
       >
-        {product.thumbnail ? (
-          <Image source={{ uri: product.thumbnail }} style={styles.image} />
-        ) : (
-          <View style={[styles.image, styles.imagePlaceholder]}>
-            <Ionicons name="bag-outline" size={28} color={theme.subtext} />
+        {product === undefined ? (
+          <View style={styles.cardInner}>
+            <View style={[styles.image, styles.imagePlaceholder]} />
+            <View style={styles.info}>
+              <Text style={styles.name} numberOfLines={1}>
+                불러오는 중...
+              </Text>
+            </View>
           </View>
+        ) : product === null ? (
+          <View style={styles.cardInner}>
+            <View style={[styles.image, styles.imagePlaceholder]}>
+              <Ionicons
+                name="help-circle-outline"
+                size={28}
+                color={theme.subtext}
+              />
+            </View>
+            <View style={styles.info}>
+              <Text style={styles.name}>정보 없음</Text>
+              <Text style={styles.desc}>상품 정보가 아직 준비되지 않았어요</Text>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.cardInner}
+            onPress={() => handleBuy(product)}
+            activeOpacity={0.8}
+          >
+            {product.thumbnail ? (
+              <Image source={{ uri: product.thumbnail }} style={styles.image} />
+            ) : (
+              <View style={[styles.image, styles.imagePlaceholder]}>
+                <Ionicons name="bag-outline" size={28} color={theme.subtext} />
+              </View>
+            )}
+            <View style={styles.info}>
+              <Text style={styles.name} numberOfLines={2}>
+                {product.productName}
+              </Text>
+              <Text style={styles.price}>
+                {product.currentPrice
+                  ? `${product.currentPrice.toLocaleString()}원`
+                  : '가격 정보 없음'}
+              </Text>
+            </View>
+          </TouchableOpacity>
         )}
-        <View style={styles.info}>
-          <Text style={styles.name} numberOfLines={2}>
-            {product.productName}
-          </Text>
-          <Text style={styles.price}>
-            {product.currentPrice
-              ? `${product.currentPrice.toLocaleString()}원`
-              : '가격 정보 없음'}
-          </Text>
-        </View>
-        <TouchableOpacity
-          onPress={() => handleRemove(item.productId)}
-          style={styles.deleteBtn}
-          hitSlop={10}
-        >
-          <Ionicons name="close-circle" size={22} color={theme.subtext} />
-        </TouchableOpacity>
-      </TouchableOpacity>
+      </SwipeableCard>
     );
   };
 
@@ -217,8 +192,8 @@ export default function FavoritesScreen() {
               />
               <Text style={styles.emptyTitle}>자주 사는 상품이 없어요</Text>
               <Text style={styles.emptyDesc}>
-                가격 변동 피드나 상품 상세 화면에서{'\n'}
-                자주 구매하는 상품을 여기에 추가할 수 있어요
+                상품 상세 화면에서 하트를 눌러{'\n'}
+                자주 구매하는 상품을 여기에 모을 수 있어요
               </Text>
             </View>
           )
@@ -232,6 +207,75 @@ export default function FavoritesScreen() {
         }
       />
     </SafeAreaView>
+  );
+}
+
+/** 왼쪽 스와이프로 빨간 삭제 버튼을 드러내는 래퍼 */
+function SwipeableCard({
+  onDelete,
+  children,
+}: {
+  onDelete: () => void | Promise<void>;
+  children: React.ReactNode;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+
+  const resetSwipe = () => {
+    Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
+  };
+
+  const confirmDelete = () => {
+    Alert.alert('자주 사는 상품 삭제', '이 상품을 목록에서 제거할까요?', [
+      { text: '취소', style: 'cancel', onPress: resetSwipe },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: () => {
+          onDelete();
+        },
+      },
+    ]);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        Math.abs(gesture.dx) > 10 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+      onPanResponderMove: (_, gesture) => {
+        if (gesture.dx < 0) {
+          translateX.setValue(Math.max(gesture.dx, -DELETE_BTN_WIDTH));
+        }
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dx < SWIPE_THRESHOLD) {
+          Animated.spring(translateX, {
+            toValue: -DELETE_BTN_WIDTH,
+            useNativeDriver: true,
+          }).start();
+        } else {
+          resetSwipe();
+        }
+      },
+    }),
+  ).current;
+
+  return (
+    <View style={styles.swipeContainer}>
+      <TouchableOpacity
+        style={styles.swipeDeleteBtn}
+        onPress={confirmDelete}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="trash-outline" size={22} color="#fff" />
+        <Text style={styles.swipeDeleteText}>삭제</Text>
+      </TouchableOpacity>
+      <Animated.View
+        style={{ transform: [{ translateX }] }}
+        {...panResponder.panHandlers}
+      >
+        {children}
+      </Animated.View>
+    </View>
   );
 }
 
@@ -260,7 +304,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 100,
   },
-  card: {
+  swipeContainer: {
+    marginBottom: 10,
+    overflow: 'hidden',
+    borderRadius: 12,
+  },
+  swipeDeleteBtn: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: DELETE_BTN_WIDTH,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    gap: 4,
+  },
+  swipeDeleteText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  cardInner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -269,7 +336,6 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     borderRadius: 12,
     padding: 10,
-    marginBottom: 10,
   },
   image: {
     width: 64,
@@ -298,9 +364,6 @@ const styles = StyleSheet.create({
     color: theme.primary,
     fontSize: 15,
     fontWeight: '700',
-  },
-  deleteBtn: {
-    padding: 4,
   },
   empty: {
     alignItems: 'center',

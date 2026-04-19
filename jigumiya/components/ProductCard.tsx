@@ -15,6 +15,7 @@ import { theme } from '../constants/theme';
 import { TrackedItem } from '../types';
 import { SparklineChart } from './SparklineChart';
 import { useAppStore } from '../store/useAppStore';
+import { useFavoriteToggle } from '../hooks/useFavoriteToggle';
 
 interface Props {
   item: TrackedItem;
@@ -28,6 +29,12 @@ export function ProductCard({ item }: Props) {
   const removeItem = useAppStore((s) => s.removeItem);
   const [showDeleteOverlay, setShowDeleteOverlay] = useState(false);
   const translateX = useRef(new Animated.Value(0)).current;
+  const {
+    isFavorite,
+    busy: favoriteBusy,
+    enabled: favoriteEnabled,
+    toggle: toggleFavorite,
+  } = useFavoriteToggle(item);
 
   const hasTarget = item.targetPrice != null && item.targetPrice > 0;
   const gap =
@@ -114,6 +121,23 @@ export function ProductCard({ item }: Props) {
                 <Text style={styles.deleteOverlayText}>삭제</Text>
               </TouchableOpacity>
             </View>
+          )}
+
+          {/* 자주사는 토글 (우상단) */}
+          {favoriteEnabled && (
+            <TouchableOpacity
+              style={styles.heartBtn}
+              onPress={toggleFavorite}
+              disabled={favoriteBusy}
+              hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={isFavorite ? 'heart' : 'heart-outline'}
+                size={20}
+                color={isFavorite ? '#FF4D6D' : theme.subtext}
+              />
+            </TouchableOpacity>
           )}
 
           <View style={styles.row}>
@@ -268,5 +292,12 @@ const styles = StyleSheet.create({
   chartWrap: {
     marginTop: 12,
     alignItems: 'center',
+  },
+  heartBtn: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    padding: 4,
+    zIndex: 5,
   },
 });
