@@ -139,7 +139,7 @@ export default function AddItemModal() {
 
     // 제휴 딥링크 생성
     affiliateUrlRef.current = parsedUrl; // fallback
-    if (hasCoupangApiKeys() && (resolved.includes('/vp/') || resolved.includes('/vm/'))) {
+    if (hasCoupangApiKeys() && resolved.includes('coupang.com')) {
       try {
         const deepLink = await generateDeepLink(resolved);
         if (deepLink?.shortenUrl) {
@@ -245,7 +245,7 @@ export default function AddItemModal() {
 
     // handleNext에서 제휴 링크 생성 실패했으면 scraped.resolvedUrl로 재시도
     if (affiliateUrl === parsedUrlRef.current && hasCoupangApiKeys() &&
-        (resolvedUrl.includes('/vp/') || resolvedUrl.includes('/vm/'))) {
+        resolvedUrl.includes('coupang.com')) {
       try {
         console.log('[AddItem] 딥링크 재시도:', resolvedUrl.slice(0, 60));
         const deepLink = await generateDeepLink(resolvedUrl);
