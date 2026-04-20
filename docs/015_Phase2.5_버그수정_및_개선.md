@@ -49,7 +49,7 @@
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
 - 그래프 Y축 가격대 미표시 문제
 - 일부 상품 가격 조회 실패 (productId 매칭 실패 또는 가격 변동 30% 초과로 스킵)
-- 🔬 조사 중: 쿠팡앱 공유 경로 → 파트너스 실적 미집계 여부 (2026-04-20 지인 구매 결과 확인 예정)
+- 🔍 원인 확정 (2026-04-20): `link.coupang.com/a/...` URL이 iOS Universal Link 흡수로 resolve 실패 → `/vp/` 조건 불통과 → `generateDeepLink` 미호출 → 원본 URL 저장으로 수수료 트래킹 끊김 (상세: docs/010 §파트너스 실적 미집계 원인 확정)
 
 ### 2026.04.13 작업 완료
 - ✅ 스와이프 삭제 (왼쪽으로 밀면 삭제 버튼) — 아이고에서 이식, PanResponder + Animated
@@ -87,7 +87,15 @@
 
 #### 1.0.4 검증 대기
 - [ ] 뱃지 초기화 실기기 확인 — 푸시 알림 수신 후 앱 foreground 전환 시 뱃지 제거 여부
-- [ ] 파트너스 실적 검증 — 2026-04-20 지인 구매 결과 확인 (쿠팡앱 공유 → 실적 집계 여부)
+- [ ] **파트너스 실적 검증 — 2026-04-21 15:00 KST 이후 확인** (가족 계정으로 구매 테스트 진행 중, 공유 링크 경유 → 실적 집계 여부)
+- [ ] `673c601` 임시 수정 로그 확인 — `link.coupang.com/a/...` 입력 시 `[CoupangAPI] 딥링크 응답: <rCode>` 값으로 `/deeplink` API 성공률 판단
+
+### 2026.04.20 추가 수정 (1.0.4 bn37/vc37)
+- ✅ `add-item.tsx` `generateDeepLink` 호출 조건 확장: `/vp/` `/vm/` → `coupang.com` 포함 (`673c601`)
+  - 원인: `link.coupang.com/a/...` URL이 iOS Universal Link 흡수로 resolve 실패 → `/vp/` 조건 불통과로 딥링크 미생성
+  - 한계: `link.coupang.com/a/...`를 직접 `/deeplink` API에 넣으면 실패 가능성 높음 — 로그로 성공률 검증 필요
+  - 근본 해결책: Firebase Functions 서버사이드 resolve (Phase 3-C 병합 검토, 상세: docs/010)
+- ✅ iOS buildNumber 35 → 37, Android versionCode 36 → 37 통일 (`cdfa7b5`)
 
 ### 다음 빌드 때 구현 (Phase 2.5 잔여)
 - [ ] 그래프 Y축 가격대 표시 수정
@@ -156,4 +164,4 @@
 - iOS bn28: 1.0.2 (쿠팡 튕김 개선 + Universal Link 차단 + 안내문구, 로컬 빌드) — App Store 심사 제출
 - iOS bn29: 1.0.2 (안내문구 추가, 로컬 빌드) — 테스트용
 - 1.0.3: Phase 3-A shared_products 이중 쓰기 + 1.0.2 트레인 갱신 (빌드 산출물 없음, 1.0.4로 건너뜀)
-- **1.0.4 (iOS bn35 / Android vc36)**: Phase 3-D MVP + 뱃지 초기화 + 하트 토글 + 스와이프 삭제 ← 현재 최신, 로컬 빌드 대상
+- **1.0.4 (iOS bn37 / Android vc37)**: Phase 3-D MVP + 뱃지 초기화 + 하트 토글 + 스와이프 삭제 + `generateDeepLink` 조건 확장 ← 현재 최신, 로컬 빌드 대상
