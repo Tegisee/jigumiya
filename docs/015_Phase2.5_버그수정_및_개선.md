@@ -49,7 +49,7 @@
 - 가격 매칭: vendorItemId 매칭 불가 (쿠팡파트너스 API 한계), productId + 30% 안전장치로 대응
 - 그래프 Y축 가격대 미표시 문제
 - 일부 상품 가격 조회 실패 (productId 매칭 실패 또는 가격 변동 30% 초과로 스킵)
-- 🔍 원인 확정 (2026-04-20): `link.coupang.com/a/...` URL이 iOS Universal Link 흡수로 resolve 실패 → `/vp/` 조건 불통과 → `generateDeepLink` 미호출 → 원본 URL 저장으로 수수료 트래킹 끊김 (상세: docs/010 §파트너스 실적 미집계 원인 확정)
+- 🔍 원인 확정 (2026-04-20): `link.coupang.com/a/...` URL이 iOS Universal Link 흡수로 resolve 실패 → `/vp/` 조건 불통과 → `generateDeepLink` 미호출 → 원본 URL 저장으로 수수료 트래킹 끊김. **쿠팡 파트너스 공식 가이드 p.13에서 "쿠팡 내 공유 기능 사용 링크는 수익 집계 안 됨" 공식 확정**. 아이고 앱(AQ-4)도 동일 문제. 근본 해결: Firebase Functions Resolver 2026-04-21 착수 (상세: docs/018_FirebaseFunctions_Resolver.md, docs/010 §파트너스 실적 미집계 원인 확정)
 
 ### 2026.04.13 작업 완료
 - ✅ 스와이프 삭제 (왼쪽으로 밀면 삭제 버튼) — 아이고에서 이식, PanResponder + Animated
@@ -87,8 +87,8 @@
 
 #### 1.0.4 검증 대기
 - [ ] 뱃지 초기화 실기기 확인 — 푸시 알림 수신 후 앱 foreground 전환 시 뱃지 제거 여부
-- [ ] **파트너스 실적 검증 — 2026-04-21 15:00 KST 이후 확인** (가족 계정으로 구매 테스트 진행 중, 공유 링크 경유 → 실적 집계 여부)
-- [ ] `673c601` 임시 수정 로그 확인 — `link.coupang.com/a/...` 입력 시 `[CoupangAPI] 딥링크 응답: <rCode>` 값으로 `/deeplink` API 성공률 판단
+- [ ] **파트너스 실적 검증 — 2026-04-21 15:00 KST 이후 확인** (가족 계정으로 Functions 경유 구매 테스트, 클릭/전환 집계 여부 — 상세: docs/018 §6)
+- [ ] `673c601` 임시 수정 로그 확인 — `link.coupang.com/a/...` 입력 시 `[CoupangAPI] 딥링크 응답: <rCode>` 값으로 `/deeplink` API 성공률 판단 (참고용, 018 배포 후에는 Functions 로그로 대체)
 
 ### 2026.04.20 추가 수정 (1.0.4 bn37/vc37)
 - ✅ `add-item.tsx` `generateDeepLink` 호출 조건 확장: `/vp/` `/vm/` → `coupang.com` 포함 (`673c601`)
