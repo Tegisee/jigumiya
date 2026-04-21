@@ -37,14 +37,15 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
 | 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
-| 018 | Firebase Functions 파트너스 링크 Resolver | 🔄 2026-04-21 착수 예정 | 018_FirebaseFunctions_Resolver.md |
+| 018 | Firebase Functions 파트너스 링크 Resolver | 🔄 배포 완료 (2026-04-21), 내일 실기기 테스트 | 018_FirebaseFunctions_Resolver.md |
 
 **진행 경과**:
 - Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
 - Phase 3-D MVP 완료 (2026-04-19): 3탭 구조, 자주사는 토글(홈 카드 + 상세), 스와이프 삭제, 피드 정적 배너, 10개 제한, 뱃지 초기화
 - 파트너스 실적 미집계 원인 공식 확정 (2026-04-20): 쿠팡 공식 가이드 p.13 "공유 기능 링크 수익 집계 안 됨" → Firebase Functions resolve 필수 (018)
 - 파트너스 API Rate Limit 2회 초과 (2026-04-21): 지금이야/아이고 cron 양쪽 긴급 비활성화. **원인 확정** — 파트너스 공식 사이트 **실적 상세 리포트 페이지** 접속 시 내부 대량 API 호출 (스크린샷 증거 확보). 기간별 리포트는 정상. 3회 시 계정 정지 위험. 2026-04-22 07:21 KST 자연 해제 후 공식 문의 + Resolver 완료 후 cron 재활성화. 상세: docs/010 §Rate Limit 초과 사건.
-- 다음: 018 Firebase Functions Resolver (2026-04-21) → 파트너스 실적 검증 → Phase 3-B/3-C
+- 018 Firebase Functions Resolver 배포 완료 (2026-04-21): `resolveAndGenerateAffiliateUrl` v2 callable, asia-northeast3, Node 22, Secrets 등록, Cleanup policy 설정. 클라이언트 dual-path(Functions → client fallback). 아이고 앱도 동일 적용. 내일 1.0.5 빌드 + 실기기 테스트 + 가족 구매 실적 검증 + cron 재활성화 예정. 상세: docs/018.
+- 다음: 2026-04-22 실기기 테스트 → 파트너스 실적 검증 → cron 재활성화 → Phase 3-B/3-C
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)

@@ -1,6 +1,24 @@
 # 018. Firebase Functions 파트너스 링크 Resolver
 
-## 상태: 🔄 2026-04-21 착수 예정
+## 상태: ✅ 배포 완료 (2026-04-21) — 내일 실기기 테스트 + 실적 검증
+
+## 진행 요약 (2026-04-21)
+- **§1 스캐폴드**: ✅ 수동 구성 (firebase init 대체) — `firebase.json`, `.firebaserc`, `functions/{package.json, tsconfig.json, src/index.ts}`
+- **§2 함수 작성**: ✅ `resolveAndGenerateAffiliateUrl` (onCall, asia-northeast3, Node 22)
+- **§3 클라이언트 통합**: ✅ `services/firebase.ts`에 `callResolveAffiliate` wrapper + `add-item.tsx` dual-path (Functions 우선 → 실패 시 client fallback)
+- **§4 로컬 에뮬레이터 테스트**: ⏭ 스킵 (Rate Limit 제약 + production 배포 검증으로 대체) — 내일 실기기 테스트에서 end-to-end 검증
+- **§5 배포**: ✅ Secrets 등록 + Node 22 배포 + Cleanup policy (1일 이미지 자동 삭제)
+  - IAM: `roles/cloudbuild.builds.builder`를 `250441543259-compute@developer.gserviceaccount.com`에 부여 (2024-07 정책 변경 대응)
+  - Node 20 → 22 선제 업그레이드 (2026-04-30 deprecation 대비)
+- **§6 실적 검증**: 🔄 2026-04-22 예정
+
+**형제 앱 (아이고)**: 동일한 Functions 기반 resolver를 아이고 프로젝트에도 적용 완료.
+
+**관련 커밋**:
+- `72e5792` feat: Firebase Functions resolver 클라이언트 통합 (§1~§3 WIP)
+- `b545633` chore: .easignore에 functions/ 제외
+- `5970bcd` chore: 1.0.5 bn38/vc38 버전 bump
+- `d64d750` chore: Functions runtime Node.js 20 → 22
 
 ## 배경
 
@@ -26,9 +44,9 @@
 - **Region**: `asia-northeast3` (서울) — 쿠팡 서버와 지연 최소화
 - **함수명**: `resolveAndGenerateAffiliateUrl` (HTTPS callable 또는 onRequest)
 
-## 내일 작업 순서 (2026-04-21)
+## 실행 이력 (2026-04-21 완료 작업)
 
-### 1. Firebase Functions 프로젝트 초기화
+### 1. Firebase Functions 프로젝트 초기화 ✅
 ```bash
 cd ~/jigumiya/jigumiya
 firebase init functions
@@ -44,7 +62,7 @@ firebase init functions
 - 기존 앱 Firestore 설정 유지 (`firestore.rules`, `firestore.indexes.json` 건드리지 말 것)
 - `functions/.env.local`에 `COUPANG_ACCESS_KEY`, `COUPANG_SECRET_KEY` 저장 (실제 배포 시 `firebase functions:secrets:set`로 이동)
 
-### 2. `resolveAndGenerateAffiliateUrl` 함수 작성
+### 2. `resolveAndGenerateAffiliateUrl` 함수 작성 ✅
 
 **입력 / 출력**
 ```ts
@@ -94,7 +112,7 @@ for (let i = 0; i < MAX_REDIRECTS; i++) {
 - 쿠팡 5xx: 최대 2회 재시도 (지수 백오프 200ms → 400ms)
 - 모든 에러는 `console.error` + Firestore 에러 로그 (선택, 우선은 로그만)
 
-### 3. 앱 `add-item.tsx` 수정
+### 3. 앱 `add-item.tsx` 수정 ✅
 
 **변경 전** (현재)
 ```ts
@@ -129,7 +147,7 @@ if (data.ok) {
 - 단, `searchProducts` 등 다른 호출은 유지 (별도 용도)
 - 1차 배포에서는 dual-path 유지, 2차 정리에서 키 제거
 
-### 4. 로컬 테스트
+### 4. 로컬 테스트 ⏭ (스킵 — production 배포 + 실기기 테스트로 대체)
 
 ```bash
 cd ~/jigumiya/jigumiya/functions
@@ -148,7 +166,7 @@ npm run serve  # Firebase Emulator 실행
 - Functions 로그에 `rCode`, resolve 단계별 URL, 최종 shortenUrl 출력
 - Firestore 에러 로그 컬렉션(옵션) 쓰기 확인
 
-### 5. 빌드 → 실기기 테스트
+### 5. 빌드 → 실기기 테스트 (배포만 ✅ / 빌드·기기 테스트는 2026-04-22)
 
 ```bash
 cd ~/jigumiya/jigumiya/functions
@@ -168,7 +186,7 @@ eas build --local --profile production --platform android
 - 로그 확인: Functions 응답 성공/실패, 최종 저장된 `url` 필드가 `link.coupang.com/re/...` 형태인지
 - 저장 후 상세화면 "쿠팡에서 보기" 버튼 탭 → 쿠팡 앱으로 이동 + 제휴 쿠키 세팅 여부 확인 (브라우저 devtools 대용으로 Charles/Proxyman으로 트래픽 검증 선택)
 
-### 6. 파트너스 실적 확인 (오후 3시 이후)
+### 6. 파트너스 실적 확인 🔄 (2026-04-22)
 
 - **일정**: 2026-04-21 15:00 KST 이후
 - **테스트 구매**: 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 완료
@@ -201,7 +219,17 @@ eas build --local --profile production --platform android
 - `functions/src/` 내 공통 모듈(HMAC 서명, 에러 로깅, rate limit)을 Phase 3-C 함수들이 재사용
 - 상세: `docs/017_앱구조개편_Phase3.md` §Phase 3-C
 
+## 2026-04-22 진행 예정 (Rate Limit 07:21 KST 해제 후)
+
+1. **Rate Limit 해제 확인** — 기간별 리포트로만 (실적 상세 리포트 접근 절대 금지)
+2. **쿠팡 파트너스 공식 문의 제출** — 도움말 → 문의하기 → 지급&정산 → 실적/실적리포트 → 실적 누락 문의 (스크린샷 첨부 + 경고 횟수 초기화 요청)
+3. **1.0.5 bn38/vc38 로컬 빌드** — iOS + Android (`eas build --local --profile production`)
+4. **실기기 테스트** — 상품 추가 → Functions 호출 로그 확인 → 최종 저장 URL 검증
+5. **가족 계정 구매 테스트** — Functions 경유 생성된 링크로 실제 구매 → 파트너스 대시보드 실적 집계 확인
+6. **cron 재활성화** — 지금이야(`price-check.yml` schedule 주석 해제) + 아이고(동일) 동시
+
 ## 관련 문서
 - `docs/010_쿠팡파트너스API.md` §파트너스 실적 미집계 원인 확정 — 근본 원인 분석
+- `docs/010_쿠팡파트너스API.md` §Rate Limit 초과 사건 — 2026-04-21 사고 기록
 - `docs/015_Phase2.5_버그수정_및_개선.md` §2026.04.20 추가 수정 — 임시 수정 이력
 - `docs/017_앱구조개편_Phase3.md` §Phase 3-C — 서버 이관 전체 맥락
