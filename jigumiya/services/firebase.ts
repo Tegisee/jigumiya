@@ -6,6 +6,7 @@ import {
   onAuthStateChanged,
   type User,
 } from 'firebase/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 // @ts-ignore — RN-specific export in @firebase/auth/dist/rn
 import { getReactNativePersistence } from '@firebase/auth/dist/rn/index.js';
 import {
@@ -52,6 +53,39 @@ const auth = initializeAuth(app, {
   persistence: getReactNativePersistence(AsyncStorage),
 });
 const db = getFirestore(app);
+const functions = getFunctions(app, 'asia-northeast3');
+
+// ─── Cloud Functions Callable ───
+
+export type ResolveAffiliateResult =
+  | { ok: true; shortenUrl: string; originalUrl: string }
+  | { ok: false; error: string; detail?: string };
+
+const resolveAffiliateCallable = httpsCallable<
+  { sharedUrl: string },
+  ResolveAffiliateResult
+>(functions, 'resolveAndGenerateAffiliateUrl');
+
+/**
+ * Cloud Functions `resolveAndGenerateAffiliateUrl` 호출.
+ * 서버가 link.coupang.com → vp URL resolve + /deeplink API 호출까지 일괄 처리.
+ * 네트워크/배포 오류 시 { ok: false, error: 'callable_error' } 반환 — 예외는 내부 흡수.
+ */
+export async function callResolveAffiliate(
+  sharedUrl: string,
+): Promise<ResolveAffiliateResult> {
+  try {
+    const { data } = await resolveAffiliateCallable({ sharedUrl });
+    return data;
+  } catch (e) {
+    console.warn('[Functions] resolveAffiliate 실패:', e);
+    return {
+      ok: false,
+      error: 'callable_error',
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
 
 /** Anonymous Auth 로그인 (자동) — AsyncStorage 복원 완료 대기 후 판단 */
 export async function signInAnonymously(): Promise<string | null> {
