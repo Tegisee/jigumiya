@@ -44,3 +44,7 @@ builds/
 *.ipa
 *.apk
 *.aab
+
+# Firebase Cloud Functions (별도 배포 — 앱 빌드 컨텍스트 제외)
+jigumiya/functions/
+functions/
