@@ -1,11 +1,13 @@
 name: Price Check Bot
 
 on:
-  schedule:
-    - cron: '0 23 * * *'   # 08:00 KST
-    - cron: '0 5 * * *'    # 14:00 KST
-    - cron: '0 12 * * *'   # 21:00 KST
-  workflow_dispatch: {}     # 수동 실행
+  # 긴급 중단 (2026-04-21): 파트너스 API 시간당 한도 2회 초과 → 3회 초과 시 이용 제한
+  # 재개 조건: docs/010 Rate Limit 재확인 + 018 Functions Resolver 배포 후 검토
+  # schedule:
+  #   - cron: '0 23 * * *'   # 08:00 KST
+  #   - cron: '0 5 * * *'    # 14:00 KST
+  #   - cron: '0 12 * * *'   # 21:00 KST
+  workflow_dispatch: {}     # 수동 실행만 허용
 
 jobs:
   price-check:
