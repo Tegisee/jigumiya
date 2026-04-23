@@ -1,5 +1,6 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
+import * as logger from 'firebase-functions/logger';
 import { createHmac } from 'crypto';
 
 const COUPANG_ACCESS_KEY = defineSecret('COUPANG_ACCESS_KEY');
@@ -52,6 +53,22 @@ function isProductUrl(url: string): boolean {
   return url.includes('/vp/products/') || url.includes('/vm/products/');
 }
 
+/**
+ * Coupang 단축 링크(link.coupang.com/a/...)는 3xx가 아니라
+ * `redirectWebUrl = '...\\x3D...';` 형태의 JS 코드를 담은 200 HTML을 반환한다.
+ * hex escape(\\xNN)를 디코드해 실제 vp URL을 추출한다.
+ */
+function extractRedirectUrlFromHtml(html: string): string | null {
+  const match = html.match(
+    /redirectWebUrl\s*=\s*['"]((?:\\x[0-9a-fA-F]{2}|[^'"\\])+)['"]/,
+  );
+  if (!match) return null;
+  const decoded = match[1].replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  );
+  return decoded.includes('coupang.com') ? decoded : null;
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -94,14 +111,17 @@ async function fetchWithRetry(
 async function resolveRedirectChain(startUrl: string): Promise<string | null> {
   let currentUrl = startUrl;
   const visited = new Set<string>();
+  const chain: Array<{ step: number; status?: number; url: string }> = [];
 
   for (let i = 0; i < MAX_REDIRECTS; i++) {
     if (visited.has(currentUrl)) {
+      logger.warn('[resolve] redirect loop detected', { chain });
       throw new Error('redirect_loop');
     }
     visited.add(currentUrl);
 
     if (isProductUrl(currentUrl)) {
+      logger.info('[resolve] product URL reached', { step: i, chain, final: currentUrl });
       return currentUrl;
     }
 
@@ -110,17 +130,45 @@ async function resolveRedirectChain(startUrl: string): Promise<string | null> {
       redirect: 'manual',
       headers: { 'User-Agent': SAFARI_IPHONE_UA },
     });
+    chain.push({ step: i, status: res.status, url: currentUrl });
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
-      if (!location) break;
+      if (!location) {
+        logger.warn('[resolve] 3xx without Location header', { status: res.status, url: currentUrl });
+        break;
+      }
       currentUrl = new URL(location, currentUrl).toString();
       continue;
     }
+
+    if (res.status === 200) {
+      const html = await res.text();
+      const extracted = extractRedirectUrlFromHtml(html);
+      if (extracted) {
+        logger.info('[resolve] extracted from HTML redirectWebUrl', {
+          step: i,
+          from: currentUrl,
+          to: extracted,
+        });
+        currentUrl = extracted;
+        continue;
+      }
+      logger.warn('[resolve] 200 HTML without redirectWebUrl', {
+        status: res.status,
+        url: currentUrl,
+        htmlSnippet: html.slice(0, 400),
+      });
+      break;
+    }
+
+    logger.warn('[resolve] non-3xx response, stop chain', { status: res.status, url: currentUrl, chain });
     break;
   }
 
-  return isProductUrl(currentUrl) ? currentUrl : null;
+  const ok = isProductUrl(currentUrl);
+  if (!ok) logger.warn('[resolve] exhausted without product URL', { chain, last: currentUrl });
+  return ok ? currentUrl : null;
 }
 
 async function callDeeplinkApi(
@@ -128,6 +176,10 @@ async function callDeeplinkApi(
   accessKey: string,
   secretKey: string,
 ): Promise<{ shortenUrl: string; originalUrl: string } | null> {
+  logger.info('[deeplink] request start', {
+    urlLength: originalUrl.length,
+    urlHead: originalUrl.slice(0, 120),
+  });
   const auth = buildAuthorization(
     'POST',
     DEEPLINK_PATH,
@@ -143,26 +195,41 @@ async function callDeeplinkApi(
     },
     body: JSON.stringify({ coupangUrls: [originalUrl] }),
   });
+  logger.info('[deeplink] response status', { status: res.status });
 
-  const json = (await res.json()) as {
+  const rawText = await res.text();
+  let json: {
     rCode?: string;
     rMessage?: string;
     data?: Array<{ shortenUrl?: string; originalUrl?: string }>;
   };
+  try {
+    json = JSON.parse(rawText);
+  } catch (e) {
+    logger.error('[deeplink] non-JSON response', {
+      status: res.status,
+      bodyHead: rawText.slice(0, 400),
+    });
+    throw new Error('deeplink_non_json_response');
+  }
 
   if (json.rCode === '0' && json.data?.[0]?.shortenUrl) {
+    logger.info('[deeplink] success', {
+      input: originalUrl,
+      shortenUrl: json.data[0].shortenUrl,
+      returnedOriginal: json.data[0].originalUrl,
+    });
     return {
       shortenUrl: json.data[0].shortenUrl,
       originalUrl: json.data[0].originalUrl ?? originalUrl,
     };
   }
 
-  console.warn(
-    '[resolveAffiliate] deeplink rCode:',
-    json.rCode,
-    'rMessage:',
-    json.rMessage,
-  );
+  logger.warn('[deeplink] failed', {
+    rCode: json.rCode,
+    rMessage: json.rMessage,
+    input: originalUrl,
+  });
   return null;
 }
 
@@ -173,7 +240,15 @@ export const resolveAndGenerateAffiliateUrl = onCall(
     cors: true,
   },
   async (request): Promise<ResolveResult> => {
+    if (!request.auth) {
+      throw new HttpsError(
+        'unauthenticated',
+        'Firebase Auth required',
+      );
+    }
+
     const { sharedUrl } = (request.data ?? {}) as { sharedUrl?: string };
+    logger.info('[entry]', { sharedUrl, uid: request.auth.uid });
 
     if (!sharedUrl || typeof sharedUrl !== 'string') {
       throw new HttpsError('invalid-argument', 'sharedUrl is required');
@@ -182,8 +257,8 @@ export const resolveAndGenerateAffiliateUrl = onCall(
       return { ok: false, error: 'invalid_url', detail: 'not a coupang URL' };
     }
 
-    const accessKey = COUPANG_ACCESS_KEY.value();
-    const secretKey = COUPANG_SECRET_KEY.value();
+    const accessKey = COUPANG_ACCESS_KEY.value().trim();
+    const secretKey = COUPANG_SECRET_KEY.value().trim();
     if (!accessKey || !secretKey) {
       return {
         ok: false,
@@ -205,6 +280,10 @@ export const resolveAndGenerateAffiliateUrl = onCall(
         }
         resolvedUrl = resolved;
       } catch (e) {
+        logger.error('[resolve] exception', {
+          detail: e instanceof Error ? e.message : String(e),
+          stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
+        });
         return {
           ok: false,
           error: 'resolve_failed',
@@ -222,12 +301,21 @@ export const resolveAndGenerateAffiliateUrl = onCall(
           detail: 'rCode not 0 or empty data',
         };
       }
+      logger.info('[exit] ok', {
+        input: sharedUrl,
+        resolvedUrl,
+        shortenUrl: deepLink.shortenUrl,
+      });
       return {
         ok: true,
         shortenUrl: deepLink.shortenUrl,
         originalUrl: deepLink.originalUrl,
       };
     } catch (e) {
+      logger.error('[deeplink] exception', {
+        detail: e instanceof Error ? e.message : String(e),
+        stack: e instanceof Error ? e.stack?.slice(0, 500) : undefined,
+      });
       return {
         ok: false,
         error: 'deeplink_failed',
