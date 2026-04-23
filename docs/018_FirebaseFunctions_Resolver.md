@@ -1,24 +1,27 @@
 # 018. Firebase Functions 파트너스 링크 Resolver
 
-## 상태: ✅ 배포 완료 (2026-04-21) — 내일 실기기 테스트 + 실적 검증
+## 상태: ✅ 실기기 검증 완료 (2026-04-24) — 가족 구매 실적 검증 대기
 
-## 진행 요약 (2026-04-21)
-- **§1 스캐폴드**: ✅ 수동 구성 (firebase init 대체) — `firebase.json`, `.firebaserc`, `functions/{package.json, tsconfig.json, src/index.ts}`
-- **§2 함수 작성**: ✅ `resolveAndGenerateAffiliateUrl` (onCall, asia-northeast3, Node 22)
-- **§3 클라이언트 통합**: ✅ `services/firebase.ts`에 `callResolveAffiliate` wrapper + `add-item.tsx` dual-path (Functions 우선 → 실패 시 client fallback)
-- **§4 로컬 에뮬레이터 테스트**: ⏭ 스킵 (Rate Limit 제약 + production 배포 검증으로 대체) — 내일 실기기 테스트에서 end-to-end 검증
-- **§5 배포**: ✅ Secrets 등록 + Node 22 배포 + Cleanup policy (1일 이미지 자동 삭제)
-  - IAM: `roles/cloudbuild.builds.builder`를 `250441543259-compute@developer.gserviceaccount.com`에 부여 (2024-07 정책 변경 대응)
-  - Node 20 → 22 선제 업그레이드 (2026-04-30 deprecation 대비)
-- **§6 실적 검증**: 🔄 2026-04-22 예정
-
-**형제 앱 (아이고)**: 동일한 Functions 기반 resolver를 아이고 프로젝트에도 적용 완료.
+## 진행 요약
+- **§1 스캐폴드**: ✅ (2026-04-21) 수동 구성 — `firebase.json`, `.firebaserc`, `functions/{package.json, tsconfig.json, src/index.ts}`
+- **§2 함수 작성**: ✅ (2026-04-21) `resolveAndGenerateAffiliateUrl` (onCall, asia-northeast3, Node 22)
+- **§3 클라이언트 통합**: ✅ (2026-04-21) `services/firebase.ts`에 `callResolveAffiliate` wrapper + `add-item.tsx` dual-path
+- **§4 로컬 에뮬레이터 테스트**: ⏭ 스킵 (production 배포 검증으로 대체)
+- **§5 배포**: ✅ (2026-04-21) Secrets 등록 + Node 22 배포 + Cleanup policy (1일 이미지 자동 삭제)
+  - IAM: `roles/cloudbuild.builds.builder`를 `250441543259-compute@developer.gserviceaccount.com`에 부여
+- **§6 실기기 검증 + 3대 버그 수정**: ✅ (2026-04-24) — 아래 §실기기 검증 참고
+- **§7 cron 재활성화**: ✅ (2026-04-24) 지금이야 `3c667ef` (08/12/20 KST) + 아이고 `24b1e0c` (07/09/11/13/16/19 KST), 시간대 분리 재조정
+- **§8 앱 배포**: ✅ (2026-04-24) iOS 1.0.5 bn38 App Store 심사 제출 + Android 1.0.5 vc38 프로덕션 출시
+- **§9 실적 검증**: 🔄 가족 계정 구매 테스트 대기 (1.0.5 승급 후)
+- **§10 아이고 이식**: 🔄 지금이야 `e69d05e` 내용을 아이고 Functions에도 반영 필요
 
 **관련 커밋**:
 - `72e5792` feat: Firebase Functions resolver 클라이언트 통합 (§1~§3 WIP)
 - `b545633` chore: .easignore에 functions/ 제외
 - `5970bcd` chore: 1.0.5 bn38/vc38 버전 bump
 - `d64d750` chore: Functions runtime Node.js 20 → 22
+- `e69d05e` fix: resolveAndGenerateAffiliateUrl — Secret `\n` 제거 + link.coupang.com HTML 파싱 (3대 버그)
+- `3c667ef` chore: price-check cron 재활성화 + 아이고와 시간대 분리
 
 ## 배경
 
@@ -186,7 +189,61 @@ eas build --local --profile production --platform android
 - 로그 확인: Functions 응답 성공/실패, 최종 저장된 `url` 필드가 `link.coupang.com/re/...` 형태인지
 - 저장 후 상세화면 "쿠팡에서 보기" 버튼 탭 → 쿠팡 앱으로 이동 + 제휴 쿠키 세팅 여부 확인 (브라우저 devtools 대용으로 Charles/Proxyman으로 트래픽 검증 선택)
 
-### 6. 파트너스 실적 확인 🔄 (2026-04-22)
+### 6. 실기기 검증 + 3대 버그 수정 ✅ (2026-04-24)
+
+1.0.5 bn38/vc38 실기기 테스트 중 3가지 숨은 버그 발견 → 순차 수정 후 end-to-end 성공.
+
+#### 6-1. 401 Unauthorized — Cloud Run invoker IAM 누락
+- **증상**: 클라이언트 `callResolveAffiliate` 호출 시 2회 연속 401
+- **근본 원인**: Firebase Functions 2세대는 Cloud Run 위에서 동작. 2024-04 GCP 조직 정책 변경 이후 `firebase deploy`가 자동으로 `allUsers:run.invoker` 권한을 설정하지 않음 → URL 도달 시점에서 Cloud Run이 거부
+- **해결**:
+  - 함수 코드에 `if (!request.auth) throw new HttpsError('unauthenticated', ...)` 추가 (앱은 `signInAnonymously`로 Firebase Auth 세션 보유)
+  - `gcloud run services add-iam-policy-binding resolveandgenerateaffiliateurl --region=asia-northeast3 --member=allUsers --role=roles/run.invoker --project=jigumiya`
+- **보안 설계**: 이중 레이어 — ①IAM(`allUsers`): URL 엔드포인트 도달 허용. ②함수 코드(`request.auth`): Firebase Auth ID 토큰 검증. Firebase 공식 권장 패턴
+
+#### 6-2. `link.coupang.com/a/...` resolve 실패
+- **증상**: Functions 로그에 `[resolve] non-3xx response, stop chain` + `status: 200`. 리다이렉트 체인이 끊김
+- **근본 원인**: 쿠팡 단축 URL은 **3xx 리다이렉트가 아닌 200 HTML(JS 리다이렉트 페이지)**을 반환. 우리의 `redirect: 'manual'` fetch는 Location 헤더만 따라가므로 체인 불성립
+  - HTML 내부 구조: `<script>...redirectWebUrl='https\x3A\x2F\x2Fwww\x2Ecoupang\x2Ecom\x2Fvp\x2Fproducts\x2F...'...</script>` — JS 변수에 hex-escape(`\xNN`)된 vp URL이 박혀있음
+- **해결**: `extractRedirectUrlFromHtml()` 추가. 200 응답 본문에서 `redirectWebUrl` JS 변수를 regex로 추출 + `\xNN` hex escape 디코드 → vp URL 획득 후 체인 계속 진행
+- **참고**: Coupang 단축 URL 서빙 구조 변경을 대비해 regex 실패 시 폴백 고려 (현재는 단일 패턴만 구현)
+
+#### 6-3. 딥링크 API 헤더 인젝션 예외 (무증상 실패)
+- **증상**: HTTP 200 + `ok: true`처럼 보이지만 저장된 URL이 원본 `link.coupang.com/a/...`와 동일한 포맷 → "원본 그대로 저장"으로 오인
+- **실제 동작**: Functions 응답이 `{ ok: false, error: 'deeplink_failed' }`로 내려오고 클라이언트 fallback도 실패 → `add-item.tsx`가 원본 URL을 저장
+- **근본 원인**: `COUPANG_ACCESS_KEY` Secret 값 말미에 개행문자(`\n`)가 포함되어 있었음. Authorization 헤더 문자열 구성 시 `\n`이 값 중간에 주입 → undici(Node 22 fetch)가 RFC 7230에 따라 TypeError 거부 → outer try/catch가 조용히 삼킴
+  ```
+  TypeError: Headers.append: "CEA algorithm=HmacSHA256, access-key=3c52ca22-3b7d-4429-bb3f-2732d30a7f06
+  , signed-date=260423T142813Z, ..." is an invalid header value.
+  ```
+- **해결**: `COUPANG_ACCESS_KEY.value().trim()` + `COUPANG_SECRET_KEY.value().trim()` — Secret에 whitespace가 섞여도 방어
+- **부가 수정**: `callDeeplinkApi` 예외 경로 및 `res.json()` 파싱 실패 경로에도 `logger.error` 추가 — 향후 무증상 실패 방지
+
+#### 6-4. shortenUrl 포맷 주의
+- **검증 성공 로그 (14:33:15 KST)**:
+  ```
+  [entry]     입력: link.coupang.com/a/eu6mel
+  [resolve]   HTML redirectWebUrl 추출 → www.coupang.com/vp/products/5562324210?...
+  [deeplink]  response status: 200
+  [exit] ok   shortenUrl: link.coupang.com/a/eu6mre
+  ```
+- **주의**: 파트너스 deeplink API의 `shortenUrl`은 `https://link.coupang.com/a/XXXXX` 형태로, **입력 공유 URL과 prefix가 동일**. slug(예: `eu6mel` vs `eu6mre`)만 다르므로 육안으로는 구분이 어려움. 수수료 집계는 slug 기반 → 저장된 shortenUrl이 입력 URL과 다른 slug인지 반드시 확인
+
+#### 로그 정비
+추적용으로 `[entry]`, `[resolve] extracted from HTML redirectWebUrl`, `[resolve] product URL reached`, `[deeplink] request start`, `[deeplink] response status`, `[deeplink] success`, `[exit] ok` + outer catch의 `[resolve] exception` / `[deeplink] exception` 로거 추가. 프로덕션 장기 운영 시 과다 출력 정리 고려.
+
+### 7. cron 재활성화 + 시간대 분리 ✅ (2026-04-24)
+- **커밋**: 지금이야 `3c667ef`, 아이고 `24b1e0c`
+- **지금이야**: 08:00 / 12:00 / 20:00 KST (3회)
+- **아이고**: 07:00 / 09:00 / 11:00 / 13:00 / 16:00 / 19:00 KST (6회)
+- **동시 시간대 겹침 없음** — 분당 50회 합산 우려 원천 차단
+
+### 8. 앱 배포 ✅ (2026-04-24)
+- iOS 1.0.5 bn38: App Store 심사 제출 완료
+- Android 1.0.5 vc38: Play Store 프로덕션 출시 완료
+- 내부 IPA/AAB: `~/jigumiya/builds/ios/jigumiya-1.0.5-38.ipa`, `~/jigumiya/builds/android/jigumiya-1.0.5-38.aab`
+
+### 9. 파트너스 실적 확인 🔄 (대기)
 
 - **일정**: 2026-04-21 15:00 KST 이후
 - **테스트 구매**: 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 완료
@@ -219,14 +276,16 @@ eas build --local --profile production --platform android
 - `functions/src/` 내 공통 모듈(HMAC 서명, 에러 로깅, rate limit)을 Phase 3-C 함수들이 재사용
 - 상세: `docs/017_앱구조개편_Phase3.md` §Phase 3-C
 
-## 2026-04-22 진행 예정 (Rate Limit 07:21 KST 해제 후)
+## 이후 작업 (2026-04-24 이후)
 
-1. **Rate Limit 해제 확인** — 기간별 리포트로만 (실적 상세 리포트 접근 절대 금지)
-2. **쿠팡 파트너스 공식 문의 제출** — 도움말 → 문의하기 → 지급&정산 → 실적/실적리포트 → 실적 누락 문의 (스크린샷 첨부 + 경고 횟수 초기화 요청)
-3. **1.0.5 bn38/vc38 로컬 빌드** — iOS + Android (`eas build --local --profile production`)
-4. **실기기 테스트** — 상품 추가 → Functions 호출 로그 확인 → 최종 저장 URL 검증
-5. **가족 계정 구매 테스트** — Functions 경유 생성된 링크로 실제 구매 → 파트너스 대시보드 실적 집계 확인
-6. **cron 재활성화** — 지금이야(`price-check.yml` schedule 주석 해제) + 아이고(동일) 동시
+1. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 내용을 아이고 `functions/src/index.ts`에 동일 적용
+   - HTML `redirectWebUrl` 파싱 로직
+   - `COUPANG_ACCESS_KEY`/`COUPANG_SECRET_KEY` `.trim()`
+   - `request.auth` 검증
+   - Cloud Run `allUsers:run.invoker` 부여 (gcloud 명령)
+2. **아이고 알림 버그 수정** — 별도 작업 (상세 파악 필요)
+3. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 shortenUrl 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+4. **디버그 로그 정리** — 6-3 수정 시 추가한 추적 로그를 프로덕션 레벨로 축소 (성공 경로 최소화, 실패 경로 유지)
 
 ## 관련 문서
 - `docs/010_쿠팡파트너스API.md` §파트너스 실적 미집계 원인 확정 — 근본 원인 분석

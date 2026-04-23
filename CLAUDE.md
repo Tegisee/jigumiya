@@ -37,15 +37,18 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 번호 | 작업 | 상태 | sub MD |
 |------|------|------|--------|
 | 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
-| 018 | Firebase Functions 파트너스 링크 Resolver | 🔄 배포 완료 (2026-04-21), 내일 실기기 테스트 | 018_FirebaseFunctions_Resolver.md |
+| 018 | Firebase Functions 파트너스 링크 Resolver | ✅ 실기기 검증 완료 (2026-04-24), 실적 검증 대기 | 018_FirebaseFunctions_Resolver.md |
 
 **진행 경과**:
 - Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
 - Phase 3-D MVP 완료 (2026-04-19): 3탭 구조, 자주사는 토글(홈 카드 + 상세), 스와이프 삭제, 피드 정적 배너, 10개 제한, 뱃지 초기화
 - 파트너스 실적 미집계 원인 공식 확정 (2026-04-20): 쿠팡 공식 가이드 p.13 "공유 기능 링크 수익 집계 안 됨" → Firebase Functions resolve 필수 (018)
 - 파트너스 API Rate Limit 2회 초과 (2026-04-21): 지금이야/아이고 cron 양쪽 긴급 비활성화. **원인 확정** — 파트너스 공식 사이트 **실적 상세 리포트 페이지** 접속 시 내부 대량 API 호출 (스크린샷 증거 확보). 기간별 리포트는 정상. 3회 시 계정 정지 위험. 2026-04-22 07:21 KST 자연 해제 후 공식 문의 + Resolver 완료 후 cron 재활성화. 상세: docs/010 §Rate Limit 초과 사건.
-- 018 Firebase Functions Resolver 배포 완료 (2026-04-21): `resolveAndGenerateAffiliateUrl` v2 callable, asia-northeast3, Node 22, Secrets 등록, Cleanup policy 설정. 클라이언트 dual-path(Functions → client fallback). 아이고 앱도 동일 적용. 내일 1.0.5 빌드 + 실기기 테스트 + 가족 구매 실적 검증 + cron 재활성화 예정. 상세: docs/018.
-- 다음: 2026-04-22 실기기 테스트 → 파트너스 실적 검증 → cron 재활성화 → Phase 3-B/3-C
+- 018 Firebase Functions Resolver 배포 완료 (2026-04-21): `resolveAndGenerateAffiliateUrl` v2 callable, asia-northeast3, Node 22, Secrets 등록, Cleanup policy 설정. 클라이언트 dual-path(Functions → client fallback). 아이고 앱도 동일 적용.
+- 018 실기기 검증 + 3대 버그 수정 완료 (2026-04-24): ①401 Unauthorized — 2세대 Callable Cloud Run invoker IAM에 `allUsers:run.invoker` 미부여. 함수 코드에 `request.auth` 검증 추가한 뒤 allUsers 부여(이중 보안). ②`link.coupang.com/a/...` resolve 실패 — 3xx가 아닌 200 HTML(JS 리다이렉트) 반환. HTML 내부 `redirectWebUrl='...\x3D...'` JS 변수 hex-escape 디코드로 vp URL 추출. ③딥링크 API 무증상 실패 — `COUPANG_ACCESS_KEY` secret 말미 `\n`이 Authorization 헤더에 주입돼 undici가 TypeError 거부, outer catch가 조용히 삼켜 원본 URL 저장 증상. `.trim()` 방어 처리. 상세: docs/018.
+- iOS 1.0.5 (bn38) App Store 심사 제출 + Android 1.0.5 (vc38) 프로덕션 출시 완료 (2026-04-24)
+- price-check cron 재활성화 + 시간대 분리 (2026-04-24): 지금이야 `3c667ef` (08/12/20 KST) + 아이고 `24b1e0c` (07/09/11/13/16/19 KST). 동시 시간대 겹침 없음.
+- 다음: 아이고 Functions 수정 이식 → 아이고 알림 버그 수정 → 가족 구매 실적 검증 → Phase 3-B/3-C
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -55,40 +58,41 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] 메인 화면에 쿠팡 이동 버튼 추가 (위치/형태 미정)
 - [x] 쿠팡 공유하기 진입 시 쿠팡 앱 이탈 버그 수정 (resolved URL + HTML fetch + onShouldStartLoadWithRequest 차단)
 - [x] **원인 확정**: 파트너스 실적 미집계 — 쿠팡 공식 가이드 p.13 "공유 기능 링크 수익 집계 안 됨" (2026-04-20). 아이고 AQ-4 동일 문제.
-- [ ] **검증**: 뱃지 카운트 0 초기화 — 다음 푸시 알림 수신 후 foreground 전환 시 뱃지 제거 확인 (1.0.4 37/37)
-- [ ] **실행**: 018 Firebase Functions Resolver 구현 (2026-04-21 착수, 상세: docs/018)
-- [ ] **검증**: 파트너스 실적 — 2026-04-21 15:00 KST 이후 Functions 경유 가족 구매 테스트 집계 확인
-- [x] **해소**: 아이고 cron 시간 충돌 — 지금이야(08/14/21) ↔ 아이고(07/10/13/16/19/22) 겹침 없음 확인 (2026-04-20)
+- [ ] **검증**: 뱃지 카운트 0 초기화 — 다음 푸시 알림 수신 후 foreground 전환 시 뱃지 제거 확인 (1.0.5 38/38)
+- [x] **실행**: 018 Firebase Functions Resolver 구현 — 실기기 검증 완료 (2026-04-24)
+- [ ] **검증**: 파트너스 실적 — Functions 경유 가족 구매 테스트 집계 확인 (1.0.5 배포 후)
+- [x] **해소**: 아이고 cron 시간 충돌 — 시간대 재분리 완료 (2026-04-24): 지금이야(08/12/20 KST) ↔ 아이고(07/09/11/13/16/19 KST)
 - [ ] **합의**: Firebase 공유 구조(jigumiya 프로젝트 기반 통합) — 아이고 베타 출시 이후 진행
 - [ ] **검토**: 가격 체크 3회 중 마지막 회차에만 알림 발송 구조로 개선 (파트너스 실적 검증 후)
 - [x] **긴급 조치**: price-check cron 양쪽 앱 비활성화 — 지금이야 `a1765f6`, 아이고 `23033de` (2026-04-21, Rate Limit 2회 초과)
-- [ ] **검증**: 2026-04-22 07:21 KST 이후 cron 재활성화 테스트 → 403 재현 여부로 원인 가설(파트너스 사이트 리포트 페이지 내부 호출) 확정
+- [x] **재활성화**: price-check cron — 지금이야 `3c667ef` (08/12/20), 아이고 `24b1e0c` (07/09/11/13/16/19) (2026-04-24, 시간대 분리)
+- [ ] **이식**: 아이고 Functions에 동일 수정(HTML redirectWebUrl 파싱 + Secret `.trim()`) 적용
+- [ ] **수정**: 아이고 알림 버그 (상세 미정 — 별도 작업)
+- [ ] **검증**: Play Store / App Store 1.0.5 승급 후 실제 사용자 환경 Functions 동작 확인
 
-## 내일 작업 순서 (2026-04-22)
-1. **07:21 KST Rate Limit 해제 확인** — 기간별 리포트로만 확인, **실적 상세 리포트 페이지 절대 접근 금지** (재발 시 3회 초과 → 계정 정지)
-2. **쿠팡 파트너스 공식 문의 제출**
-   - 경로: 도움말 → 문의하기
-   - 유형: 지급&정산 → 실적/실적리포트 → 실적 누락 문의
-   - 스크린샷 첨부 (맥 저장 경로 확인: `defaults read com.apple.screencapture location`)
-   - 요청: 경고 횟수 초기화 + 원인 확인
-3. **Firebase Functions Resolver 작업** (상세: `docs/018_FirebaseFunctions_Resolver.md`)
-4. **Resolver 완료 후 cron 재활성화** — 지금이야 + 아이고 schedule 블록 주석 해제 (동시)
-5. **빌드 → 실기기 테스트 → 파트너스 실적 재확인** (가족 계정 구매 테스트)
+## 다음 작업 순서 (2026-04-24 이후)
+1. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
+2. **아이고 알림 버그 수정** — 별도 작업 (상세 파악 필요)
+3. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+4. **Phase 3-B/3-C 착수 검토** — 실적 집계 확인 후
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
 - ✅ 파트너스 최종 승인 완료 — API Access Key / Secret Key 발급됨
 - EAS Secrets에 EXPO_PUBLIC_COUPANG_ACCESS_KEY / SECRET_KEY 등록 완료
-- API 딥링크 정상 작동 확인 (link.coupang.com/re/... 형태)
-- 코드: services/coupangApi.ts (HMAC 서명 + 딥링크 + 상품 검색), services/config.ts (키 초기화)
+- Functions Secrets(Secret Manager)에 COUPANG_ACCESS_KEY / SECRET_KEY 등록 완료 — 실기기 검증 시 말미 `\n` 발견 → 함수 코드에서 `.trim()` 방어 처리 (2026-04-24)
+- API 딥링크 정상 작동 확인: 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
+- 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.4 로컬 빌드 대상 (2026.04.20 기준)
-- 현재 빌드 타겟: **iOS 1.0.4 buildNumber 37 / Android 1.0.4 versionCode 37** (`cdfa7b5`로 통일)
-- `673c601`: `generateDeepLink` 조건 `/vp/|/vm/` → `coupang.com`로 확장 (임시 수정, 018 배포 후 원복 검토)
+## 현재 상태: 1.0.5 배포 완료 (2026-04-24 기준)
+- iOS: **1.0.5 buildNumber 38 App Store 심사 제출 완료** (2026-04-24)
+- Android: **1.0.5 versionCode 38 프로덕션 출시 완료** (2026-04-24)
+- 1.0.5 주요 변경: Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
 - `eas.json` `appVersionSource: local` + `autoIncrement` 제거 → `app.config.js`가 버전 source of truth
-- iOS 이전 출시: 1.0.1 App Store 정식 출시 ✅, 1.0.2 buildNumber 28 심사 제출 이력 있음
-- Android 이전 출시: 1.0.1 versionCode 17 프로덕션 승급 제출 이력 있음
-- 1.0.4 주요 변경: Phase 3-D MVP(3탭/자주사는/피드 배너), 뱃지 초기화, 홈/상세 하트 토글, 스와이프 삭제, 10개 제한, 하트 시인성 개선
+- `673c601`: `generateDeepLink` 조건 `/vp/|/vm/` → `coupang.com`로 확장 (Functions fallback 경로 유지 위해 원복 안 함 — Functions 실패 시 client fallback이 link.coupang.com/a/... 직접 시도)
+- iOS 이전 출시: 1.0.1 App Store 정식 출시 ✅, 1.0.2 buildNumber 28 심사 제출, 1.0.4 bn37 App Store 미제출
+- Android 이전 출시: 1.0.1 versionCode 17 프로덕션, 1.0.4 vc37 Play Store 미출시
+- 1.0.4 미배포: Phase 3-D MVP 변경(3탭/자주사는/피드 배너, 뱃지 초기화, 홈/상세 하트 토글, 스와이프 삭제, 10개 제한)은 1.0.5에 통합되어 사용자에게 전달됨
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
 - GitHub 레포: https://github.com/Tegisee/jigumiya (private)
@@ -100,7 +104,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
   - ✅ 알림 로직 개선: 가격 무변동 시 매 체크마다 no_change 알림 발송 + price_drop 오탐 방지
   - ✅ 만료 토큰 cleanup: 유저 삭제 → expoPushToken 필드만 제거 (상품 데이터 보존)
-  - GitHub Actions cron: 08:00/14:00/21:00 KST (3회/일), Node.js 24
+  - GitHub Actions cron: **08:00/12:00/20:00 KST** (3회/일, 2026-04-24 시간대 재조정), Node.js 24
   - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY
   - 호출 방식: **완전 순차 for-of + 상품당 1초 딜레이** (scripts/price-checker/index.ts L204) → 실측 **분당 ~35회**, /products/search 분당 50회 한도 대비 30% 여유 (상세: docs/010 §Rate Limit)
   - 개선 검토: 1~2회차는 가격 DB 갱신만, 21:00 회차에만 알림 발송 → 알림 피로 감소 (파트너스 실적 검증 후 착수)
@@ -117,7 +121,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 뱃지 초기화: `services/notifications.ts` `clearBadgeCount` + `_layout.tsx`에서 앱 실행 + AppState active 전환 시 호출 (iOS 앱 아이콘/Android 알림 센터)
 - Firebase Auth: onAuthStateChanged로 AsyncStorage 복원 대기 후 UID 판단 (UID 불일치 해결)
 - Firebase Config: Platform.OS별 appId 분기 (iOS/Android), app.config.js로 변환
-- 앱 내 딥링크 변환: coupangApi.ts generateDeepLink() (클라이언트 HMAC)
+- 앱 내 딥링크 변환: **Firebase Functions `resolveAndGenerateAffiliateUrl` 우선** → 실패 시 `coupangApi.ts generateDeepLink` fallback
+  - Functions (서버): 2세대 callable, asia-northeast3, Node 22, Secrets(COUPANG_ACCESS_KEY/SECRET_KEY), `allUsers:run.invoker` + `request.auth` 이중 보안
+  - 핵심 로직: `link.coupang.com/a/...`의 200 HTML 응답에서 `redirectWebUrl='...\x3D...'` JS 변수 hex-escape 디코드 → vp URL 추출 → `/deeplink` API 호출 → shortenUrl 반환
+  - 상세: docs/018_FirebaseFunctions_Resolver.md
 
 ## 빌드 아티팩트
 - 네이밍: `jigumiya-{version}-{versionCode}[-dev].{aab|apk|ipa}`
@@ -155,8 +162,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
-- **cron 스케줄 충돌 없음 확인 (2026-04-20)**: 지금이야(08/14/21 KST 3회) ↔ 아이고(07/10/13/16/19/22 KST 6회) — 동시 시간대 겹침 없음 → 분당 50회 한도 합산 우려 해소
+- **cron 스케줄 시간대 분리 (2026-04-24 재조정)**: 지금이야(08/12/20 KST 3회) ↔ 아이고(07/09/11/13/16/19 KST 6회) — 동시 시간대 겹침 없음 → 분당 50회 한도 합산 우려 해소
 - **공통 이슈**: 파트너스 실적 미집계(쿠팡 공유 링크 구조) — 아이고도 AQ-4로 동일 확인 → Firebase Functions Resolver(018) 해결책을 아이고도 동일 방식으로 적용 예정
+- **오늘 작업 이식 대기 (2026-04-24)**: 지금이야 Functions 3대 버그 수정(`e69d05e`)을 아이고에도 반영 — HTML `redirectWebUrl` 파싱, Secret `.trim()`, `request.auth` 검증, `allUsers:run.invoker`
 - **Firebase 프로젝트 통합 검토**: jigumiya 프로젝트 기반으로 아이고 통합 — **아이고 베타 출시 이후 진행 합의** (2026-04-20)
 - **아이고 전용 설계**: `baby_category` 월령별 구조는 아이고 측에서 별도 설계 (지금이야 범위 외)
 - 장기: 파트너스 계정 2개로 키 분리 검토 (현 시점엔 불필요)
