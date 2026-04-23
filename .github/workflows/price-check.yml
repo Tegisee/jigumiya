@@ -1,13 +1,14 @@
 name: Price Check Bot
 
 on:
-  # 긴급 중단 (2026-04-21): 파트너스 API 시간당 한도 2회 초과 → 3회 초과 시 이용 제한
-  # 재개 조건: docs/010 Rate Limit 재확인 + 018 Functions Resolver 배포 후 검토
-  # schedule:
-  #   - cron: '0 23 * * *'   # 08:00 KST
-  #   - cron: '0 5 * * *'    # 14:00 KST
-  #   - cron: '0 12 * * *'   # 21:00 KST
-  workflow_dispatch: {}     # 수동 실행만 허용
+  # 재활성화 (2026-04-23): 018 Functions Resolver 배포 + Secret trim/HTML 파싱 버그 수정 완료.
+  # 비활성 이력: 2026-04-21 Rate Limit 2회 초과 → 2026-04-22 07:21 KST 자연 해제.
+  # 아이고와 시간대 분리 (지금이야: 08/12/20 ↔ 아이고: 07/09/11/13/16/19)
+  schedule:
+    - cron: '0 23 * * *'   # 08:00 KST
+    - cron: '0 3 * * *'    # 12:00 KST
+    - cron: '0 11 * * *'   # 20:00 KST
+  workflow_dispatch: {}
 
 jobs:
   price-check:
