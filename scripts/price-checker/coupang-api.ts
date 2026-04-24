@@ -93,50 +93,48 @@ export async function fetchCurrentPrice(
     return null;
   }
 
+  // 재시도 루프 제거 (2026-04-24): burst rate 분당 한도 초과 방지.
+  // 상품당 정확히 1회 검색. 실패하면 즉시 스킵.
   const words = productName.split(/\s+/).map(w => w.replace(/[,()]/g, '')).filter(Boolean);
-  const keywords = [
-    words.slice(0, 4).join(' '),
-    words.slice(0, 2).join(' '),
-  ].filter((k) => k.length >= 2);
-
-  for (const keyword of keywords) {
-    console.log(`  [API] 검색: "${keyword}" (productId=${productId})`);
-    const products = await searchProducts(keyword, 5);
-
-    if (products.length === 0) {
-      console.log(`  [API] 결과 없음`);
-      continue;
-    }
-
-    // productId 매칭 — 같은 productId가 여러 옵션(가격)으로 나올 수 있음
-    const matches = products.filter((p) => String(p.productId) === productId);
-    if (matches.length === 0) {
-      console.log(`  [API] productId=${productId} 매칭 실패 (${products.length}개 중 일치 없음)`);
-      continue;
-    }
-
-    // 현재 가격과 가장 가까운 옵션 선택
-    let best = matches[0];
-    if (matches.length > 1 && currentPrice > 0) {
-      best = matches.reduce((a, b) =>
-        Math.abs(a.productPrice - currentPrice) <= Math.abs(b.productPrice - currentPrice) ? a : b
-      );
-      console.log(`  [API] productId 매칭 ${matches.length}개 → 현재가(${currentPrice})에 가장 가까운 ${best.productPrice}원 선택`);
-    }
-
-    // 가격 변동 안전장치: 30% 초과 변동 시 스킵
-    if (currentPrice > 0) {
-      const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
-      if (changeRate > 0.3) {
-        console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${best.productPrice})`);
-        return null;
-      }
-    }
-
-    console.log(`  [API] productId 정확 매칭: "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
-    return { price: best.productPrice, image: best.productImage, name: best.productName };
+  const keyword = words.slice(0, 4).join(' ');
+  if (keyword.length < 2) {
+    console.log(`  [API] 키워드 생성 실패 → 스킵`);
+    return null;
   }
 
-  console.log(`  [API] 모든 검색 전략 실패`);
-  return null;
+  console.log(`  [API] 검색: "${keyword}" (productId=${productId})`);
+  const products = await searchProducts(keyword, 5);
+
+  if (products.length === 0) {
+    console.log(`  [API] 결과 없음 → 스킵`);
+    return null;
+  }
+
+  // productId 매칭 — 같은 productId가 여러 옵션(가격)으로 나올 수 있음
+  const matches = products.filter((p) => String(p.productId) === productId);
+  if (matches.length === 0) {
+    console.log(`  [API] productId=${productId} 매칭 실패 (${products.length}개 중 일치 없음) → 스킵`);
+    return null;
+  }
+
+  // 현재 가격과 가장 가까운 옵션 선택
+  let best = matches[0];
+  if (matches.length > 1 && currentPrice > 0) {
+    best = matches.reduce((a, b) =>
+      Math.abs(a.productPrice - currentPrice) <= Math.abs(b.productPrice - currentPrice) ? a : b
+    );
+    console.log(`  [API] productId 매칭 ${matches.length}개 → 현재가(${currentPrice})에 가장 가까운 ${best.productPrice}원 선택`);
+  }
+
+  // 가격 변동 안전장치: 30% 초과 변동 시 스킵
+  if (currentPrice > 0) {
+    const changeRate = Math.abs(best.productPrice - currentPrice) / currentPrice;
+    if (changeRate > 0.3) {
+      console.log(`  [API] productId 매칭 but 가격 변동 ${(changeRate * 100).toFixed(0)}% 초과 → 스킵 (${currentPrice}→${best.productPrice})`);
+      return null;
+    }
+  }
+
+  console.log(`  [API] productId 정확 매칭: "${best.productName.slice(0, 40)}" → ${best.productPrice}원`);
+  return { price: best.productPrice, image: best.productImage, name: best.productName };
 }
