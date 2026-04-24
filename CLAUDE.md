@@ -47,8 +47,15 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 018 Firebase Functions Resolver 배포 완료 (2026-04-21): `resolveAndGenerateAffiliateUrl` v2 callable, asia-northeast3, Node 22, Secrets 등록, Cleanup policy 설정. 클라이언트 dual-path(Functions → client fallback). 아이고 앱도 동일 적용.
 - 018 실기기 검증 + 3대 버그 수정 완료 (2026-04-24): ①401 Unauthorized — 2세대 Callable Cloud Run invoker IAM에 `allUsers:run.invoker` 미부여. 함수 코드에 `request.auth` 검증 추가한 뒤 allUsers 부여(이중 보안). ②`link.coupang.com/a/...` resolve 실패 — 3xx가 아닌 200 HTML(JS 리다이렉트) 반환. HTML 내부 `redirectWebUrl='...\x3D...'` JS 변수 hex-escape 디코드로 vp URL 추출. ③딥링크 API 무증상 실패 — `COUPANG_ACCESS_KEY` secret 말미 `\n`이 Authorization 헤더에 주입돼 undici가 TypeError 거부, outer catch가 조용히 삼켜 원본 URL 저장 증상. `.trim()` 방어 처리. 상세: docs/018.
 - iOS 1.0.5 (bn38) App Store 심사 제출 + Android 1.0.5 (vc38) 프로덕션 출시 완료 (2026-04-24)
-- price-check cron 재활성화 + 시간대 분리 (2026-04-24): 지금이야 `3c667ef` (08/12/20 KST) + 아이고 `24b1e0c` (07/09/11/13/16/19 KST). 동시 시간대 겹침 없음.
-- 다음: 아이고 Functions 수정 이식 → 아이고 알림 버그 수정 → 가족 구매 실적 검증 → Phase 3-B/3-C
+- price-check cron 1차 재활성화 + 시간대 분리 (2026-04-24 오후): 지금이야 `3c667ef` (08/12/20 KST) + 아이고 `24b1e0c` (07/09/11/13/16/19 KST). 동시 시간대 겹침 없음.
+- 🚨 **cron 2차 긴급 비활성화 + 재시도 루프 제거 (2026-04-24 야간)**:
+  - 증상: 재활성화 당일 지금이야 실행당 /products/search 56~74회 (37개 상품 × 평균 1.68회). 실행 소요 ~30초로 분당 환산 **~110회** → 공식 한도 분당 50회 2배 초과
+  - 원인: `fetchCurrentPrice` 내부 `keywords[4단어, 2단어]` for-loop 재시도 — 매칭 실패 시 쿼리 축소 재호출, 재시도 사이 딜레이 없음
+  - 조치: ① 양쪽 cron 즉시 차단 — 지금이야 `3cd068e`, 아이고 `fb66468`. ② 재시도 루프 완전 제거 — 지금이야 `46c20e5`, 아이고 `840f1ea` (상품당 1회 검색, 실패 시 즉시 return null)
+  - 효과: 지금이야 37회/실행 고정, 아이고 2회/실행 고정 — **-41%**
+  - 파트너스 계정 정지 → 소명 후 해제 완료 (2026-04-24)
+  - **쿠팡 파트너스 공식 Rate Limit 전체**: 검색 API 1분/50회, 리포트 API 1시간/500회, 모든 API 합산 1분/100회, 링크 생성 1분/50회
+- 다음: 아이고 Functions 수정 이식 → 아이고 알림 버그 수정 → 가족 구매 실적 검증 → Phase 3 `shared_products` 완료 → cron 재활성화 (확정 스케줄: 공유상품 02/03/04 KST 새벽 + 낮 2회, 지금이야 알림 11:30/20:30, 아이고 알림 10:00/19:00)
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -64,17 +71,26 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **해소**: 아이고 cron 시간 충돌 — 시간대 재분리 완료 (2026-04-24): 지금이야(08/12/20 KST) ↔ 아이고(07/09/11/13/16/19 KST)
 - [ ] **합의**: Firebase 공유 구조(jigumiya 프로젝트 기반 통합) — 아이고 베타 출시 이후 진행
 - [ ] **검토**: 가격 체크 3회 중 마지막 회차에만 알림 발송 구조로 개선 (파트너스 실적 검증 후)
-- [x] **긴급 조치**: price-check cron 양쪽 앱 비활성화 — 지금이야 `a1765f6`, 아이고 `23033de` (2026-04-21, Rate Limit 2회 초과)
-- [x] **재활성화**: price-check cron — 지금이야 `3c667ef` (08/12/20), 아이고 `24b1e0c` (07/09/11/13/16/19) (2026-04-24, 시간대 분리)
+- [x] **1차 긴급 조치**: price-check cron 비활성화 — 지금이야 `a1765f6`, 아이고 `23033de` (2026-04-21, Rate Limit 2회 초과)
+- [x] **1차 재활성화**: price-check cron — 지금이야 `3c667ef`, 아이고 `24b1e0c` (2026-04-24 오후, 시간대 분리)
+- [x] **2차 긴급 조치**: price-check cron 재비활성화 — 지금이야 `3cd068e`, 아이고 `fb66468` (2026-04-24 야간, burst rate 분당 ~110회 확인 + 파트너스 계정 정지)
+- [x] **근본 수정**: price-checker 재시도 루프 완전 제거 — 지금이야 `46c20e5`, 아이고 `840f1ea` (2026-04-24, 상품당 1회 검색)
+- [x] **해제**: 파트너스 계정 정지 소명 해제 완료 (2026-04-24)
+- [ ] **조건부 재활성화**: price-check cron — Phase 3 `shared_products` 완료 후 확정 스케줄 적용 (공유상품 02/03/04 KST 새벽 + 낮 2회, 지금이야 알림 11:30/20:30 KST, 아이고 알림 10:00/19:00 KST)
 - [ ] **이식**: 아이고 Functions에 동일 수정(HTML redirectWebUrl 파싱 + Secret `.trim()`) 적용
 - [ ] **수정**: 아이고 알림 버그 (상세 미정 — 별도 작업)
 - [ ] **검증**: Play Store / App Store 1.0.5 승급 후 실제 사용자 환경 Functions 동작 확인
 
-## 다음 작업 순서 (2026-04-24 이후)
+## 다음 작업 순서 (2026-04-24 야간 이후)
 1. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
 2. **아이고 알림 버그 수정** — 별도 작업 (상세 파악 필요)
 3. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-4. **Phase 3-B/3-C 착수 검토** — 실적 집계 확인 후
+4. **Phase 3 `shared_products` 설계/구현** — cron 재활성화 선결 조건
+5. **cron 재활성화** — Phase 3 완료 후 확정 스케줄 적용:
+   - 공유상품 업데이트(공용): 02:00 / 03:00 / 04:00 KST (새벽) + 낮시간 최소 2회
+   - 지금이야 알림: 11:30 / 20:30 KST
+   - 아이고 알림: 10:00 / 19:00 KST
+6. **Phase 3-B/3-C 착수** — 실적 집계 확인 후
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -104,10 +120,17 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
   - ✅ 알림 로직 개선: 가격 무변동 시 매 체크마다 no_change 알림 발송 + price_drop 오탐 방지
   - ✅ 만료 토큰 cleanup: 유저 삭제 → expoPushToken 필드만 제거 (상품 데이터 보존)
-  - GitHub Actions cron: **08:00/12:00/20:00 KST** (3회/일, 2026-04-24 시간대 재조정), Node.js 24
-  - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY
-  - 호출 방식: **완전 순차 for-of + 상품당 1초 딜레이** (scripts/price-checker/index.ts L204) → 실측 **분당 ~35회**, /products/search 분당 50회 한도 대비 30% 여유 (상세: docs/010 §Rate Limit)
-  - 개선 검토: 1~2회차는 가격 DB 갱신만, 21:00 회차에만 알림 발송 → 알림 피로 감소 (파트너스 실적 검증 후 착수)
+  - ✅ 재시도 루프 제거 (2026-04-24): `fetchCurrentPrice` keywords 배열 for-loop → 상품당 정확히 1회 검색. 매칭 실패 시 즉시 스킵 (지금이야 `46c20e5`, 아이고 `840f1ea`)
+  - 🚨 **현재 cron 비활성 (2026-04-24 야간)**: 재활성화 당일 burst rate 분당 ~110회 확인 → 긴급 차단 (지금이야 `3cd068e`, 아이고 `fb66468`). Phase 3 `shared_products` 완료 후 재활성화 예정
+  - 확정 스케줄 (Phase 3 완료 후 적용):
+    - 공유상품 업데이트(공용): 02:00 / 03:00 / 04:00 KST (새벽) + 낮시간 최소 2회
+    - 지금이야 알림: 11:30 / 20:30 KST
+    - 아이고 알림: 10:00 / 19:00 KST
+  - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY. Node.js 24
+  - 호출 방식: 완전 순차 for-of + 상품당 1초 딜레이 (scripts/price-checker/index.ts L204)
+  - 실측 (재시도 제거 후): 지금이야 37개 상품 × 1회 = **37회/실행**, 아이고 2개 × 1회 = **2회/실행** (실측 로그 기반)
+  - **쿠팡 파트너스 공식 Rate Limit**: 검색 API **1분/50회**, 리포트 API **1시간/500회**, 모든 API 합산 **1분/100회**, 링크 생성 **1분/50회** (2026-04-24 계정 정지 소명 과정에서 확인)
+  - 개선 검토: 1~2회차는 가격 DB 갱신만, 마지막 회차에만 알림 발송 → 알림 피로 감소
 - 클라이언트: CoupangScraper (WebView DOM 스크래핑) — 상품 추가 시 + 수동 새로고침
   - ✅ iOS Universal Link 이탈 버그 수정: fetch로 HTML 획득 → WebView에 html 문자열 로드 (네트워크 탐색 없음)
   - ✅ 쿠팡 앱 다운로드/열기 배너 CSS 차단 추가 (아이고에서 이식)
@@ -162,7 +185,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
-- **cron 스케줄 시간대 분리 (2026-04-24 재조정)**: 지금이야(08/12/20 KST 3회) ↔ 아이고(07/09/11/13/16/19 KST 6회) — 동시 시간대 겹침 없음 → 분당 50회 한도 합산 우려 해소
+- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(02/03/04 KST 새벽 + 낮 2회), 알림은 앱별 스케줄(지금이야 11:30/20:30, 아이고 10:00/19:00)
 - **공통 이슈**: 파트너스 실적 미집계(쿠팡 공유 링크 구조) — 아이고도 AQ-4로 동일 확인 → Firebase Functions Resolver(018) 해결책을 아이고도 동일 방식으로 적용 예정
 - **오늘 작업 이식 대기 (2026-04-24)**: 지금이야 Functions 3대 버그 수정(`e69d05e`)을 아이고에도 반영 — HTML `redirectWebUrl` 파싱, Secret `.trim()`, `request.auth` 검증, `allUsers:run.invoker`
 - **Firebase 프로젝트 통합 검토**: jigumiya 프로젝트 기반으로 아이고 통합 — **아이고 베타 출시 이후 진행 합의** (2026-04-20)
