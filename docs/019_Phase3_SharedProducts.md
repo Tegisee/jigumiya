@@ -1,6 +1,7 @@
 ---
 created: 2026-04-26
-status: 설계 (구현 전)
+updated: 2026-04-26
+status: §8-A 구현 완료 + §8-B 통합 완료 + 1.0.6 배포 / §8-C(아이고 Firebase 통합) 대기
 선행: 017_앱구조개편_Phase3.md (Phase 3-A/3-D 완료), 018_FirebaseFunctions_Resolver.md
 ---
 
@@ -8,6 +9,18 @@ status: 설계 (구현 전)
 
 > 본 문서는 017 §2 `shared_products` 스키마를 **확장**한다.
 > 핵심 추가: ① 카테고리 베스트 컬렉션 `category_best`, ② 지금이야/아이고 Firebase 프로젝트 통합, ③ 단일 cron(지금이야 레포)으로 양 앱 공통 데이터 갱신.
+
+## 구현 진행 (2026-04-26)
+
+| 단계 | 상태 | 비고 |
+|------|------|------|
+| §8-A 카테고리 베스트 단독 구현 | ✅ 완료 | 19개 × 50개 = 950개 상품, cron 02:00 KST sleep 80초, feed 탭 UI 교체 (커밋 `833805d`, `9a13363`, `18abcb0`) |
+| §8-B shared_products 중복 제거 | ✅ 완료 | `category-best-cache.ts` 신설, 6시간 신선도 + 30% 변동 가드 (커밋 `833805d`) |
+| 가격변동 탭 + price_drops 컬렉션 | ✅ 완료 | 4탭 구조 전환, 필터 칩, 하락률 뱃지, `recordPriceDrop` 로직 (커밋 `f8b88e9`) |
+| 1.0.6 (bn40/vc40) 배포 | ✅ 완료 | iOS App Store 심사 제출 + Android 프로덕션 승급 (커밋 `986acaf`) |
+| §8-C 아이고 Firebase 통합 | ⏸ 대기 | 아이고 베타 출시 이후 진행 합의 |
+| §8-D cron 재활성화 | ⏸ 대기 | 아이고 통합 + 파트너스 문의 답변 후 |
+| `category-best-update.yml` 낮 2회 보조 업데이트 | ⏸ 대기 | 현재 02:00 KST 1회만 |
 
 ---
 
@@ -168,10 +181,10 @@ shared_products cron 실행 시:
 
 ## 7. 카테고리 선정
 
-### 7-1. 지금이야
-- **쿠팡 일반 카테고리 10~20개**로 시작
-- 후보 (확정 전): 식품, 생활용품, 뷰티, 주방, 디지털/가전, 패션의류, 스포츠/레저, 출산/유아, 반려동물, 도서 등
-- 카테고리 ID 매핑은 쿠팡 파트너스 답변 또는 실측으로 확정
+### 7-1. 지금이야 (확정 — 2026-04-26)
+- **공식 카테고리 19개** (probe 없이 쿠팡 공식 문서로 확정, ID 1001~1030 범위)
+- 카테고리 19개 × 베스트 50개 = **950개 상품** Firebase 저장 운영 중
+- 카테고리 ID 매핑: `scripts/category-best-updater/categories.ts` 참조
 
 ### 7-2. 아이고
 - **기존 아이고 앱의 월령별 카테고리 구조** 그대로 따름
@@ -187,26 +200,42 @@ shared_products cron 실행 시:
 
 ## 8. 작업 순서 (제안)
 
-### 8-A. 카테고리 베스트 단독 구현 (지금이야 우선)
-1. `services/coupangApi.ts`에 `fetchBestCategories(categoryId, limit)` 추가
-2. 카테고리 ID 후보 실측 (쿠팡 응답으로 확정)
-3. `types/index.ts`에 `CategoryBest`, `BestProductItem` 타입 추가
-4. `services/firebase.ts`에 `getCategoryBest(categoryId)`, `subscribeCategoryBest(categoryId)` 추가
-5. `firestore.rules`에 `category_best` 규칙 추가 + Console 게시
-6. cron 스크립트 신설: `scripts/category-best-updater/`
-7. `app/(tabs)/feed.tsx` "곧 출시" 배너 → 카테고리 베스트 리스트로 교체
+### 8-A. 카테고리 베스트 단독 구현 (지금이야 우선) — ✅ 완료 (2026-04-26)
+1. ✅ `services/coupangApi.ts`에 `fetchBestCategories(categoryId, limit)` 추가
+2. ✅ **공식 카테고리 19개 확정** — probe 없이 쿠팡 공식 문서로 확정 (1001~1030)
+3. ✅ `types/index.ts`에 `CategoryBest`, `BestProductItem` 타입 추가
+4. ✅ `services/firebase.ts`에 `getCategoryBest(categoryId)`, `subscribeCategoryBest(categoryId)` 추가
+5. ✅ `firestore.rules`에 `category_best` 규칙 추가 + Console 게시 완료
+6. ✅ cron 스크립트 신설: `scripts/category-best-updater/`
+   - 19개 카테고리 순회, 카테고리 사이 **sleep 80초** (분당 50회 한도 보수 운영)
+   - `.github/workflows/category-best-update.yml` — **매일 02:00 KST 1회**
+   - Firebase 저장: 19개 × 50개 = **950개 상품**
+7. ✅ `app/(tabs)/feed.tsx` "곧 출시" 배너 → 카테고리 베스트 리스트로 교체
+   - 카테고리 칩 가로 스크롤 + 선택 카테고리 상품 리스트
+   - 1~3위 민트 랭크 뱃지, 로켓배송 이모지
+   - 쿠팡 파트너스 의무 고지 푸터
+8. ⏸ **추가 대기**: 낮 2회 보조 업데이트(변동분 갱신용) — 현재 02:00 KST 1회만 운영
 
-### 8-B. shared_products 통합 (중복 제거)
-1. cron 스크립트에 `category_best` 캐시 조회 로직 추가
-2. 중복 productId 시 가격 데이터 재사용 분기
-3. 1주일 이중 관찰 (호출량 로그 비교)
+### 8-A-bis. 가격변동 탭 신설 (4탭 구조) — ✅ 완료 (2026-04-26)
+- 탭 구성: **홈 / 자주사는 / 카테고리 베스트 / 가격변동** (기존 3탭 → 4탭)
+- `price_drops` 컬렉션 설계 + `subscribePriceDrops` 구독 추가
+- 필터 칩(전체/-10%/-20%) + 하락률 뱃지
+- `scripts/price-checker/`에 `recordPriceDrop` 로직 추가
+- 실데이터: cron 비활성 상태라 cron 재활성화 후 채워짐 (커밋 `f8b88e9`)
 
-### 8-C. 아이고 Firebase 통합 (베타 출시 이후)
+### 8-B. shared_products 통합 (중복 제거) — ✅ 완료 (2026-04-26, 커밋 `833805d`)
+1. ✅ `scripts/price-checker/category-best-cache.ts` 신설
+2. ✅ shared_products 가격 체크 시 `category_best` 캐시 조회 → 중복 productId 시 API 재호출 없이 캐시 가격 재사용
+3. ✅ 가드: **6시간 신선도** + **30% 변동 가드** (캐시값과 너무 차이나면 캐시 무시)
+4. ⏸ 1주일 이중 관찰 — cron 재활성화 후 진행
+
+### 8-C. 아이고 Firebase 통합 (베타 출시 이후) — ⏸ 대기
 1. 아이고 Firebase 설정을 jigumiya 프로젝트로 교체
 2. 아이고 카테고리(`baby_category`) 정의 + cron에 합집합 추가
 3. 기존 아이고 유저 데이터 마이그레이션 계획 별도 수립
 
-### 8-D. cron 재활성화 (Phase 3 완료 후)
+### 8-D. cron 재활성화 (Phase 3 완료 후) — ⏸ 대기
+- 선결: §8-C 아이고 통합 + 쿠팡 파트너스 문의 답변(`bestcategories` 호출 카운팅 방식)
 - 확정 스케줄(§4-1) 적용
 - 기존 지금이야/아이고 개별 cron 폐기 확인
 
@@ -214,13 +243,15 @@ shared_products cron 실행 시:
 
 ## 9. 미확정 / 후속 검토 항목
 
-- [ ] 쿠팡 파트너스 공식 문의: `/products/bestcategories` 호출량 카운트 방식 + 카테고리 ID 전체 목록
+- [ ] **대기**: 쿠팡 파트너스 공식 문의 답변 — `/products/bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) + 카테고리 ID 전체 공식 목록
 - [ ] 골드박스 재검토 (파트너스 답변 후)
 - [ ] 카테고리 베스트 갱신 실패 시 fallback 정책 (이전 스냅샷 유지 vs 빈 화면)
-- [ ] 피드 탭 UX: 카테고리 칩 가로 스크롤 vs 탭 vs 드롭다운
+- [x] 피드 탭 UX: **카테고리 칩 가로 스크롤** 채택 (2026-04-26)
 - [ ] 카테고리 베스트 → 추적 추가 시 10개 한도 도달 시 UX
-- [ ] 아이고 `baby_category` 구조 확인 + 통합 시점
+- [ ] 아이고 `baby_category` 구조 확인 + 통합 시점 (베타 출시 이후)
 - [ ] cron 알림 분리: 같은 productId가 양 앱 유저 모두 추적 시 알림 중복 방지
+- [ ] `category-best-update.yml` 낮 2회 보조 업데이트 추가 (현재 02:00 KST 1회만)
+- [ ] 가격변동 탭 실데이터 검증 — cron 재활성화 후 `recordPriceDrop` 동작 확인
 
 ---
 

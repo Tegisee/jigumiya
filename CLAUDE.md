@@ -38,7 +38,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 |------|------|------|--------|
 | 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
 | 018 | Firebase Functions 파트너스 링크 Resolver | ✅ 실기기 검증 완료 (2026-04-24), 실적 검증 대기 | 018_FirebaseFunctions_Resolver.md |
-| 019 | SharedProducts + 카테고리 베스트 통합 설계 | 📐 설계 완료 (2026-04-26), 구현 전 | 019_Phase3_SharedProducts.md |
+| 019 | SharedProducts + 카테고리 베스트 통합 설계 | 🔄 §8-A 구현 완료 (2026-04-26), §8-B 통합 완료, §8-C 대기 | 019_Phase3_SharedProducts.md |
 
 **진행 경과**:
 - Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
@@ -56,7 +56,28 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - 효과: 지금이야 37회/실행 고정, 아이고 2회/실행 고정 — **-41%**
   - 파트너스 계정 정지 → 소명 후 해제 완료 (2026-04-24)
   - **쿠팡 파트너스 공식 Rate Limit 전체**: 검색 API 1분/50회, 리포트 API 1시간/500회, 모든 API 합산 1분/100회, 링크 생성 1분/50회
-- 다음: 아이고 Functions 수정 이식 → 아이고 알림 버그 수정 → 가족 구매 실적 검증 → Phase 3 `shared_products` 완료 → cron 재활성화 (확정 스케줄: 공유상품 02/03/04 KST 새벽 + 낮 2회, 지금이야 알림 11:30/20:30, 아이고 알림 10:00/19:00)
+- 019 §8-A 카테고리 베스트 구현 완료 (2026-04-26):
+  - 공식 카테고리 19개 확정 (1001~1030, probe 없이 쿠팡 공식 문서로 확정)
+  - Firebase 저장: 19개 × 50개 = **950개 상품** (`category_best/{categoryId}` 단일 문서, products 배열)
+  - `scripts/category-best-updater/` 신설 — 19개 카테고리 순회, 카테고리 사이 sleep 80초 (분당 50회 한도 보수 운영)
+  - `.github/workflows/category-best-update.yml` 활성화 — 매일 02:00 KST 1회
+  - `firestore.rules` `category_best` 규칙 추가 + Console 게시 완료
+  - feed 탭 UI 교체(833805d, 18abcb0): "곧 출시" 배너 → 카테고리 칩 가로 스크롤 + 선택 카테고리 상품 리스트, 1~3위 민트 랭크 뱃지, 로켓배송 이모지, 쿠팡 파트너스 의무 고지 푸터
+- 019 §8-B (price-checker §4-2 중복 제거) 완료 (2026-04-26):
+  - `scripts/price-checker/category-best-cache.ts` 신설
+  - `shared_products` 가격 체크 시 `category_best` 캐시 조회 → 중복 productId API 재호출 없이 캐시 가격 재사용
+  - 가드: **6시간 신선도** + **30% 변동 가드** (캐시값과 너무 차이나면 캐시 무시)
+  - cron 비활성 상태 유지 (Phase 3 마무리 + 아이고 통합 후 재활성화)
+- 019 가격변동 탭 신설 (4탭 구조) (2026-04-26, f8b88e9):
+  - 탭 구성: **홈 / 자주사는 / 카테고리 베스트 / 가격변동** (기존 3탭 → 4탭)
+  - `price_drops` 컬렉션 설계 + `subscribePriceDrops` 구독
+  - 필터 칩(전체/-10%/-20%) + 하락률 뱃지
+  - `scripts/price-checker/`에 `recordPriceDrop` 로직 추가 (cron 비활성 상태라 실데이터는 cron 재활성화 후 채워짐)
+- 1.0.6 (bn40/vc40) 빌드 완료 (2026-04-26, 986acaf):
+  - iOS TestFlight 업로드 → App Store 심사 제출
+  - Android Play Console 내부 테스트 → 프로덕션 승급
+  - bn39 재빌드용 → bn40으로 bump
+- 다음: 아이고 Firebase → jigumiya 통합(베타 출시 후) → 아이고 Functions 수정 이식 → 아이고 알림 버그 + 계정 삭제 수정 → 가족 구매 실적 검증 → cron 재활성화
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -79,19 +100,29 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **해제**: 파트너스 계정 정지 소명 해제 완료 (2026-04-24)
 - [ ] **조건부 재활성화**: price-check cron — Phase 3 `shared_products` 완료 후 확정 스케줄 적용 (공유상품 02/03/04 KST 새벽 + 낮 2회, 지금이야 알림 11:30/20:30 KST, 아이고 알림 10:00/19:00 KST)
 - [ ] **이식**: 아이고 Functions에 동일 수정(HTML redirectWebUrl 파싱 + Secret `.trim()`) 적용
-- [ ] **수정**: 아이고 알림 버그 (상세 미정 — 별도 작업)
-- [ ] **검증**: Play Store / App Store 1.0.5 승급 후 실제 사용자 환경 Functions 동작 확인
+- [ ] **수정**: 아이고 알림 버그 + 계정 삭제 버그 (상세 미정 — 별도 작업)
+- [ ] **검증**: Play Store / App Store 1.0.5/1.0.6 승급 후 실제 사용자 환경 Functions 동작 확인
+- [x] **구현**: 019 §8-A 카테고리 베스트 컬렉션 — 19개 × 50개 = 950 상품, cron 02:00 KST sleep 80초 (2026-04-26)
+- [x] **구현**: 019 §8-B price-checker `category_best` 캐시 (6시간 신선도 + 30% 변동 가드) (2026-04-26)
+- [x] **구현**: feed 탭 카테고리 베스트 리스트 UI + 가격변동 탭 신설 (4탭 구조, price_drops 컬렉션) (2026-04-26)
+- [x] **빌드**: 1.0.6 bn40/vc40 → iOS App Store 심사 제출 + Android 프로덕션 승급 (2026-04-26)
+- [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
+- [ ] **추가**: `category-best-update.yml` 낮 2회 보조 업데이트 (현재 02:00 KST 1회만)
+- [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
+- [ ] **선결**: 아이고 Firebase → jigumiya 통합 (베타 출시 이후, §8-C)
 
-## 다음 작업 순서 (2026-04-24 야간 이후)
-1. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
-2. **아이고 알림 버그 수정** — 별도 작업 (상세 파악 필요)
-3. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-4. **Phase 3 `shared_products` 설계/구현** — cron 재활성화 선결 조건
-5. **cron 재활성화** — Phase 3 완료 후 확정 스케줄 적용:
+## 다음 작업 순서 (2026-04-26 이후)
+1. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
+2. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
+3. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
+4. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+5. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
+6. **`category-best-update.yml` 낮 2회 보조 업데이트 추가** — 현재 02:00 KST 1회만 (변동분 갱신용)
+7. **cron 재활성화** — 위 선결 항목(특히 §1 아이고 통합) 완료 후 확정 스케줄 적용:
    - 공유상품 업데이트(공용): 02:00 / 03:00 / 04:00 KST (새벽) + 낮시간 최소 2회
    - 지금이야 알림: 11:30 / 20:30 KST
    - 아이고 알림: 10:00 / 19:00 KST
-6. **Phase 3-B/3-C 착수** — 실적 집계 확인 후
+8. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -101,10 +132,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인: 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.5 배포 완료 (2026-04-24 기준)
-- iOS: **1.0.5 buildNumber 38 App Store 심사 제출 완료** (2026-04-24)
-- Android: **1.0.5 versionCode 38 프로덕션 출시 완료** (2026-04-24)
-- 1.0.5 주요 변경: Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
+## 현재 상태: 1.0.6 배포 진행 중 (2026-04-26 기준)
+- iOS: **1.0.6 buildNumber 40 TestFlight 업로드 + App Store 심사 제출 완료** (2026-04-26)
+- Android: **1.0.6 versionCode 40 Play Console 내부 테스트 → 프로덕션 승급 완료** (2026-04-26)
+- 1.0.6 주요 변경: 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
+- 1.0.5 (bn38/vc38) 배포 완료 (2026-04-24): Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
 - `eas.json` `appVersionSource: local` + `autoIncrement` 제거 → `app.config.js`가 버전 source of truth
 - `673c601`: `generateDeepLink` 조건 `/vp/|/vm/` → `coupang.com`로 확장 (Functions fallback 경로 유지 위해 원복 안 함 — Functions 실패 시 client fallback이 link.coupang.com/a/... 직접 시도)
 - iOS 이전 출시: 1.0.1 App Store 정식 출시 ✅, 1.0.2 buildNumber 28 심사 제출, 1.0.4 bn37 App Store 미제출
@@ -138,7 +170,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ iOS 쿠팡 튕김 개선 (2~3회 → 1회): onShouldStartLoadWithRequest 딥링크 차단 + allowsBackForwardNavigationGestures={false} + resolved URL 직접 전달 + iOS HTML fetch 방식
   - ⚠️ iOS 쿠팡 앱 열기 팝업 1회 잔존: "쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요." 안내문구로 대응 (취소 유도 → 복귀 유도로 1.0.4에서 변경)
   - 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 "다시 시도" 버튼
-- Phase 3-D 탭 구조: 홈(추적 10개) / 자주사는(무제한) / 가격변동(정적 배너, 3-C 대기), 설정은 Stack 화면으로 이동
+- Phase 3-D 탭 구조 (1.0.6 기준 4탭): 홈(추적 10개) / 자주사는(무제한) / **카테고리 베스트** / **가격변동**, 설정은 Stack 화면으로 이동
+- 카테고리 베스트 탭(019 §8-A, 1.0.6): `category_best/{categoryId}` 구독 → 카테고리 칩 가로 스크롤 + 상품 리스트, 1~3위 민트 랭크 뱃지, 로켓배송 이모지, 쿠팡 파트너스 의무 고지 푸터
+- 가격변동 탭(019, 1.0.6): `price_drops` 컬렉션 구독, 필터 칩(전체/-10%/-20%) + 하락률 뱃지. cron 재활성화 후 실데이터 채워짐
 - 자주사는 토글: 홈 카드 우상단 하트(반투명 원형 배경) + 상세화면 CTA 옆 — `useFavoriteToggle` 훅 공용, `shared_products` 보장 + `favoriteCount` 증감
 - 상품 삭제: 스와이프 삭제 (왼쪽) + 롱프레스 삭제 오버레이 + 상세페이지 삭제 (홈 카드 + 자주사는 카드 동일 패턴)
 - 홈 10개 제한: `MAX_TRACKED_ITEMS = 10` (services/config.ts) — `addItem` 가드 + `modal/add-item.tsx` 선제 가드로 이중 적용
