@@ -499,6 +499,25 @@ export async function getCategoryBest(
 }
 
 /**
+ * category_best 전체 1회 조회 (피드 탭용).
+ * displayOrder 오름차순 정렬. 카테고리 19개 × ~50KB = ~950KB 페이로드.
+ */
+export async function fetchAllCategoryBest(): Promise<CategoryBest[]> {
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, 'category_best'),
+        orderBy('displayOrder', 'asc'),
+      ),
+    );
+    return snap.docs.map((d) => d.data() as CategoryBest);
+  } catch (e) {
+    console.warn('[category_best] 전체 조회 실패:', e);
+    return [];
+  }
+}
+
+/**
  * category_best/{categoryId} 실시간 구독.
  * 문서 미존재 시 null 콜백. Unsubscribe 함수 반환.
  */
