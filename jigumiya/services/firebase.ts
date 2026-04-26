@@ -34,6 +34,7 @@ import type {
   TrackedRef,
   FavoriteRef,
   PriceDrop,
+  CategoryBest,
 } from '../types';
 
 const firebaseConfig = {
@@ -475,6 +476,44 @@ export function subscribePriceDrops(
       // Phase 3-C 이전에는 인덱스 미생성 상태일 수 있음 — warn만 하고 빈 배열 fallback
       console.warn('[price_drops] subscribe 실패:', error);
       callback([]);
+    },
+  );
+}
+
+// ──────────────────────────────────────────────────────────
+// docs/019_Phase3_SharedProducts.md §3-1 — 카테고리 베스트
+// ──────────────────────────────────────────────────────────
+
+/** category_best/{categoryId} 단건 조회 */
+export async function getCategoryBest(
+  categoryId: number,
+): Promise<CategoryBest | null> {
+  try {
+    const snap = await getDoc(doc(db, 'category_best', String(categoryId)));
+    if (!snap.exists()) return null;
+    return snap.data() as CategoryBest;
+  } catch (e) {
+    console.warn('[category_best] 조회 실패:', categoryId, e);
+    return null;
+  }
+}
+
+/**
+ * category_best/{categoryId} 실시간 구독.
+ * 문서 미존재 시 null 콜백. Unsubscribe 함수 반환.
+ */
+export function subscribeCategoryBest(
+  categoryId: number,
+  callback: (data: CategoryBest | null) => void,
+): () => void {
+  return onSnapshot(
+    doc(db, 'category_best', String(categoryId)),
+    (snap) => {
+      callback(snap.exists() ? (snap.data() as CategoryBest) : null);
+    },
+    (error) => {
+      console.warn('[category_best] subscribe 실패:', categoryId, error);
+      callback(null);
     },
   );
 }

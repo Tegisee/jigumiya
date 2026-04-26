@@ -1,0 +1,19 @@
+{
+  "name": "jigumiya-category-best-updater",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "update": "node --loader ts-node/esm index.ts",
+    "update:js": "node dist/index.js",
+    "build": "tsc",
+    "probe": "node --loader ts-node/esm probe-categories.ts"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.4.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.2"
+  }
+}

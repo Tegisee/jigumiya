@@ -13,6 +13,7 @@ rules_version = '2';
 // 변경 이력:
 //   - Phase 1  : users/{uid}/{document=**} 재귀 허용
 //   - Phase 3-A: shared_products, price_drops 규칙 추가 (017.md §8-4)
+//   - 019     : category_best 규칙 추가 (019.md §2-3)
 // ─────────────────────────────────────────────────────────────
 
 service cloud.firestore {
@@ -39,6 +40,18 @@ service cloud.firestore {
     match /shared_products/{productId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null;
+    }
+
+    // ─── 카테고리 베스트 (019 신규) ───
+    // category_best/{categoryId}
+    // - read : 모든 인증 유저 (피드 탭 베스트 리스트 조회)
+    // - write: 서버 전용 (Admin SDK bypass) — 클라이언트 쓰기 차단
+    //
+    // 갱신 주체: scripts/category-best-updater (GitHub Actions cron)
+    // 문서 ID = String(categoryId)
+    match /category_best/{categoryId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
 
     // ─── 가격 하락 피드 (Phase 3-A 선반영, 실제 쓰기는 Phase 3-C부터) ───

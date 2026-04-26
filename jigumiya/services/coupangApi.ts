@@ -185,6 +185,77 @@ export async function fetchGoldbox(
   }
 }
 
+// ─── 카테고리 베스트 API ───
+
+const BEST_CATEGORIES_PATH =
+  '/v2/providers/affiliate_open_api/apis/openapi/v1/products/bestcategories';
+
+export interface BestCategoryProduct {
+  productId: number;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  productUrl: string;
+  categoryName: string;
+  rank: number;
+  isRocket: boolean;
+  isFreeShipping: boolean;
+}
+
+/** 카테고리별 베스트셀러 상품 조회 (docs/019 §3-1) */
+export async function fetchBestCategories(
+  categoryId: number,
+  limit: number = 50,
+  subId?: string,
+): Promise<BestCategoryProduct[]> {
+  if (!hasCoupangApiKeys()) return [];
+
+  try {
+    const path = `${BEST_CATEGORIES_PATH}/${categoryId}`;
+    const params: string[] = [`limit=${limit}`];
+    if (subId) params.push(`subId=${encodeURIComponent(subId)}`);
+    const query = params.join('&');
+
+    const authorization = generateAuthorization('GET', path, query);
+
+    const res = await fetch(`${BASE_URL}${path}?${query}`, {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json;charset=UTF-8',
+      },
+    });
+
+    const json = await res.json();
+    if (json.rCode === '0' && json.data) {
+      const items = Array.isArray(json.data)
+        ? json.data
+        : json.data.productData || [];
+      return items.map((p: any, idx: number) => ({
+        productId: p.productId,
+        productName: p.productName,
+        productPrice: p.productPrice,
+        productImage: p.productImage,
+        productUrl: p.productUrl,
+        categoryName: p.categoryName || '',
+        rank: typeof p.rank === 'number' ? p.rank : idx + 1,
+        isRocket: p.isRocket || false,
+        isFreeShipping: p.isFreeShipping || false,
+      }));
+    }
+    console.warn(
+      '[CoupangAPI] 베스트 카테고리 조회 실패:',
+      categoryId,
+      json.rCode,
+      json.rMessage,
+    );
+    return [];
+  } catch (e) {
+    console.warn('[CoupangAPI] 베스트 카테고리 요청 실패:', categoryId, e);
+    return [];
+  }
+}
+
 /** URL에서 productId 추출 */
 export function extractProductId(url: string): string | null {
   const match = url.match(/\/products\/(\d+)/);

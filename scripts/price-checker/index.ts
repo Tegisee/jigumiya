@@ -5,6 +5,10 @@ import {
   sendSmartNotifications,
   type SmartPushTarget,
 } from './notifier.js';
+import {
+  loadCategoryBestCache,
+  isCacheStablePrice,
+} from './category-best-cache.js';
 
 // Firebase Admin 초기화
 const serviceAccount = JSON.parse(
@@ -71,11 +75,16 @@ async function cleanupInactiveUsers() {
 async function main() {
   console.log('[PriceChecker] 시작:', new Date().toISOString());
 
+  // 019 §4-2: category_best 캐시 선로드 — productId 매칭 시 fetchCurrentPrice 스킵
+  const bestCache = await loadCategoryBestCache(db);
+
   const usersSnap = await db.collection('users').get();
   console.log(`[Debug] 전체 유저: ${usersSnap.size}명`);
   const pushTargets: SmartPushTarget[] = [];
   let totalItems = 0;
   let processedItems = 0;
+  let cacheHits = 0;
+  let apiCalls = 0;
 
   for (const userDoc of usersSnap.docs) {
     const userData = userDoc.data();
@@ -117,8 +126,35 @@ async function main() {
         extractProductId(item.url);
       console.log(`  productId=${productId || 'none'} vendorItemId=${item.vendorItemId || 'none'}`);
 
-      // 가격 조회 (현재가 전달 → 30% 초과 변동 시 스킵)
-      const result = await fetchCurrentPrice(item.productName, productId, item.currentPrice);
+      // 019 §4-2: category_best 캐시 우선 조회 — hit 시 API 호출 스킵
+      let result: { price: number; image: string; name: string } | null = null;
+      let usedCache = false;
+
+      const cached = productId ? bestCache.get(productId) : undefined;
+      if (cached) {
+        if (isCacheStablePrice(cached.price, item.currentPrice)) {
+          console.log(
+            `  [Cache] category_best hit cat=${cached.categoryId}(${cached.categoryName}) → ${cached.price}원 (API 스킵)`,
+          );
+          result = {
+            price: cached.price,
+            image: cached.image,
+            name: cached.name,
+          };
+          usedCache = true;
+          cacheHits += 1;
+        } else {
+          console.log(
+            `  [Cache] hit but 30% 초과 변동 (cache=${cached.price} vs current=${item.currentPrice}) → API 폴백`,
+          );
+        }
+      }
+
+      if (!result) {
+        // 가격 조회 (현재가 전달 → 30% 초과 변동 시 스킵)
+        result = await fetchCurrentPrice(item.productName, productId, item.currentPrice);
+        apiCalls += 1;
+      }
 
       if (!result || result.price === 0) {
         console.log(`  → 가격 조회 실패, 건너뜀`);
@@ -201,7 +237,10 @@ async function main() {
         console.log(`  📢 ${noChangeDays}일 무변동`);
       }
 
-      await new Promise((r) => setTimeout(r, 1000));
+      // 캐시 hit 시 API 호출 0회 → sleep 불필요 (rate-limit 부담 없음)
+      if (!usedCache) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
   }
 
@@ -222,6 +261,11 @@ async function main() {
   }
 
   console.log(`[Debug] 처리 완료: 전체 ${totalItems}개 중 ${processedItems}개 조회`);
+  console.log(
+    `[Debug] 호출 분기: cache hit ${cacheHits} / API call ${apiCalls} (절감률 ${
+      processedItems > 0 ? Math.round((cacheHits / processedItems) * 100) : 0
+    }%)`,
+  );
   console.log('[PriceChecker] 완료:', new Date().toISOString());
 }
 

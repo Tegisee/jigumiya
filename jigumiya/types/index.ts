@@ -49,6 +49,31 @@ export interface FavoriteRef {
   addedAt: number;
 }
 
+// ──────────────────────────────────────────────────────────
+// docs/019_Phase3_SharedProducts.md §3-1 — 카테고리 베스트
+// ──────────────────────────────────────────────────────────
+
+/** category_best 문서의 products 배열 항목 */
+export interface BestProductItem {
+  rank: number;
+  productId: string;        // shared_products 키와 일관되게 string
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  productUrl: string;
+  isRocket: boolean;
+  isFreeShipping: boolean;
+}
+
+/** category_best/{categoryId} — 카테고리별 베스트셀러 스냅샷 */
+export interface CategoryBest {
+  categoryId: number;       // 쿠팡 공식 카테고리 ID (문서 ID = String(categoryId))
+  categoryName: string;
+  displayOrder: number;
+  updatedAt: number;        // ms epoch (017 §8-1 컨벤션 준수)
+  products: BestProductItem[];
+}
+
 /** price_drops/{autoId} — 가격 하락 피드 이벤트 (무제한 보관) */
 export interface PriceDrop {
   productId: string;

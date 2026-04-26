@@ -1,0 +1,45 @@
+name: Category Best Updater
+
+# docs/019_Phase3_SharedProducts.md §4-1
+# 새벽 02:00 KST = 17:00 UTC (전일)
+#
+# 안전 장치:
+#   - scripts/category-best-updater/categories.ts 가 비어있으면 호출 0회로 즉시 종료
+#   - 카테고리당 1콜 + 120초 sleep (rate-limit 보수 가정)
+#   - rate-limited 응답 감지 시 즉시 중단 → 다음 회차로 이월
+#
+# 처음 활성화 시점에는 categories.ts 가 비어있는 상태로 둘 것.
+# 019 §8-A 단계 ② (카테고리 ID 실측) 완료 후 채워넣어야 실제 갱신이 일어난다.
+
+on:
+  schedule:
+    - cron: '0 17 * * *'   # 02:00 KST
+  workflow_dispatch: {}
+
+jobs:
+  update-category-best:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/category-best-updater
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/category-best-updater
+        run: npx tsc
+
+      - name: Run category best updater
+        working-directory: scripts/category-best-updater
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+        run: node dist/index.js
