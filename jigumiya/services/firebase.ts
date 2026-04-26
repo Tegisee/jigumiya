@@ -450,20 +450,21 @@ export function subscribeFavorites(
 }
 
 /**
- * price_drops 실시간 구독 (최근 24시간, 하락률 큰 순, 최대 30건).
- * Phase 3-A 시점에는 서버 쓰기 미구현 → 빈 결과 반환 (Phase 3-C에서 채워짐).
- * Unsubscribe 함수 반환.
+ * price_drops 실시간 구독 (최근 windowHours, 최대 maxItems건).
+ *
+ * 쿼리: where(createdAt > cutoff) + orderBy(createdAt desc) — 단일 필드 자동 인덱스로 충분.
+ * 정렬 보강(dropRate 오름차순)은 클라이언트에서 처리 → 복합 인덱스 불필요.
  */
 export function subscribePriceDrops(
   callback: (drops: PriceDrop[]) => void,
-  maxItems: number = 30,
+  maxItems: number = 50,
+  windowHours: number = 24,
 ): () => void {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000; // 24h
+  const cutoff = Date.now() - windowHours * 60 * 60 * 1000;
   const q = query(
     collection(db, 'price_drops'),
     where('createdAt', '>', cutoff),
     orderBy('createdAt', 'desc'),
-    orderBy('dropRate', 'asc'),
     limit(maxItems),
   );
   return onSnapshot(
@@ -473,7 +474,6 @@ export function subscribePriceDrops(
       callback(drops);
     },
     (error) => {
-      // Phase 3-C 이전에는 인덱스 미생성 상태일 수 있음 — warn만 하고 빈 배열 fallback
       console.warn('[price_drops] subscribe 실패:', error);
       callback([]);
     },

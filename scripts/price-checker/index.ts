@@ -72,6 +72,60 @@ async function cleanupInactiveUsers() {
   }
 }
 
+/**
+ * shared_products/{productId}.trackerCount 조회 (price_drops 기록용).
+ * Phase 3-A 이중 쓰기로 채워진 카운터를 그대로 사용. 미존재 시 1.
+ */
+async function getSharedTrackerCount(productId: string): Promise<number> {
+  try {
+    const snap = await db.collection('shared_products').doc(productId).get();
+    if (!snap.exists) return 1;
+    const v = Number(snap.data()?.trackerCount || 0);
+    return v > 0 ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * price_drops/{autoId} 기록 (docs/019 §3, 017 §2-3).
+ *
+ * 호출 정책:
+ *   - 가격 하락 발생 시(newPrice < prevPrice) + productId 있을 때만
+ *   - 노이즈 컷은 클라이언트 필터로 위임 (-10% / -20% 칩)
+ *   - deepLink 필드: 쿠팡 vp URL 저장. 클라이언트가 generateDeepLink로 affiliate 변환.
+ *     cron에서 affiliate 변환은 향후 보강 (Functions Resolver 서버 호출 또는 cron 자체 HMAC)
+ */
+async function recordPriceDrop(
+  productId: string,
+  productName: string,
+  thumbnail: string,
+  prevPrice: number,
+  newPrice: number,
+  trackerCount: number,
+): Promise<void> {
+  if (prevPrice <= 0) return;
+  const dropRate = ((newPrice - prevPrice) / prevPrice) * 100;
+  try {
+    await db.collection('price_drops').add({
+      productId,
+      productName,
+      thumbnail,
+      prevPrice,
+      currentPrice: newPrice,
+      dropRate: Number(dropRate.toFixed(2)),
+      trackerCount,
+      deepLink: `https://www.coupang.com/vp/products/${productId}`,
+      createdAt: Date.now(),
+    });
+    console.log(
+      `  [PriceDrop] 기록: ${productId} ${prevPrice}→${newPrice} (${dropRate.toFixed(1)}%) trackers=${trackerCount}`,
+    );
+  } catch (e) {
+    console.warn('  [PriceDrop] 기록 실패:', productId, e);
+  }
+}
+
 async function main() {
   console.log('[PriceChecker] 시작:', new Date().toISOString());
 
@@ -85,6 +139,7 @@ async function main() {
   let processedItems = 0;
   let cacheHits = 0;
   let apiCalls = 0;
+  let priceDropsRecorded = 0;
 
   for (const userDoc of usersSnap.docs) {
     const userData = userDoc.data();
@@ -193,6 +248,20 @@ async function main() {
         `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원`,
       );
 
+      // ── 019 §3: price_drops 기록 (가격 하락 + productId 있을 때) ──
+      if (newPrice < prevPrice && productId) {
+        const trackerCount = await getSharedTrackerCount(productId);
+        await recordPriceDrop(
+          productId,
+          item.productName,
+          itemData.thumbnail || result.image || '',
+          prevPrice,
+          newPrice,
+          trackerCount,
+        );
+        priceDropsRecorded += 1;
+      }
+
       // ── 스마트 알림 조건 판별 ──
       const allPrices = trimmed.map((h) => h.price);
       const lowestPrice = Math.min(...allPrices);
@@ -266,6 +335,7 @@ async function main() {
       processedItems > 0 ? Math.round((cacheHits / processedItems) * 100) : 0
     }%)`,
   );
+  console.log(`[Debug] price_drops 기록: ${priceDropsRecorded}건`);
   console.log('[PriceChecker] 완료:', new Date().toISOString());
 }
 

@@ -192,13 +192,16 @@ const styles = StyleSheet.create({
   },
   chipsContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 14,
     gap: 8,
+    alignItems: 'center',
   },
   chip: {
     paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 16,
+    paddingVertical: 9,
+    minHeight: 36,
+    justifyContent: 'center',
+    borderRadius: 18,
     backgroundColor: theme.card,
     borderWidth: 1,
     borderColor: theme.border,
@@ -210,6 +213,7 @@ const styles = StyleSheet.create({
   chipText: {
     color: theme.subtext,
     fontSize: 13,
+    lineHeight: 18,
     fontWeight: '500',
   },
   chipTextActive: {

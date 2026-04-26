@@ -45,6 +45,19 @@ export default function TabLayout() {
       <Tabs.Screen
         name="feed"
         options={{
+          title: '카테고리 베스트',
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'flame' : 'flame-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="price-drops"
+        options={{
           title: '가격변동',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
