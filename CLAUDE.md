@@ -38,6 +38,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 |------|------|------|--------|
 | 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
 | 018 | Firebase Functions 파트너스 링크 Resolver | ✅ 실기기 검증 완료 (2026-04-24), 실적 검증 대기 | 018_FirebaseFunctions_Resolver.md |
+| 019 | SharedProducts + 카테고리 베스트 통합 설계 | 📐 설계 완료 (2026-04-26), 구현 전 | 019_Phase3_SharedProducts.md |
 
 **진행 경과**:
 - Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
