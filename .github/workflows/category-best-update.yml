@@ -42,4 +42,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
           COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          # 19개 카테고리 × 80초 sleep ≈ 약 25분 (timeout-minutes 60 여유)
+          # 1콜 = 1회 카운트 실증 → 합산 한도 100회/분 대비 분당 0.75회로 매우 안전
+          SLEEP_BETWEEN_CATEGORIES_MS: '80000'
         run: node dist/index.js

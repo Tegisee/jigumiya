@@ -25,18 +25,61 @@ import { fetchBestCategoryProducts } from './coupang-api.js';
 const SLEEP_MS = Number(process.env.SLEEP_BETWEEN_PROBES_MS || 30_000);
 const PROBE_LIMIT = 3;
 
-/** 추측 후보 — 일반 패션·생활·식품 권역 우선. 검증 통과한 항목만 categories.ts에 옮길 것. */
+/**
+ * 후보 목록.
+ *
+ * 검증 완료 → categories.ts 반영 (재호출 불필요):
+ *   1010 뷰티 / 1011 출산·유아 / 1012 식품 / 1013 생활·주방
+ *   1015 홈인테리어 / 1016 가전디지털 / 1017 스포츠·레저
+ *   1018 자동차용품 / 1022 반려동물용품
+ *
+ * 보류 (재검증 우선순위 낮음):
+ *   1001 / 1002 — 패션 추정, 동일 상품 충돌 (1·2차 모두)
+ *   1019 / 1020 — 사용자 보류 결정 (사유 미기록)
+ *
+ * ─── 3차 대폭 탐색 (2026-04-26) ───
+ * 목적: 미공개 카테고리 ID 체계 전수 매핑.
+ *       1000번대 빈자리 + 2000/3000번대 + 100번대 상위 권역.
+ *       아이고 앱 월령별 권역(출산·유아동패션/신발/완구/이유식/유아가구/세면/임부복/유아도서)도
+ *       위 범위에 자연 포함될 가능성 → 응답 첫 상품명으로 식별 후 categories.ts 반영.
+ *
+ * Rate Limit 분석 (사용자 합의, 2026-04-26):
+ *   - 1·2차 probe 실측(17콜 30초 sleep, rate-limited 0건) → 1콜 = 1회 카운트 확정
+ *   - /products/search 도 limit≠카운트 (price-checker 분당 35콜 운영 중)
+ *   - 30초 sleep × 337콜 = 분당 2회 / 합산 한도 100회 대비 2% 사용 → 안전
+ *   - 잔존 리스크: probe 코드 rate-limited 즉시 중단 가드로 방어
+ *   - 예상 소요: 약 2시간 54분
+ */
+
+function range(
+  from: number,
+  to: number,
+  label: string,
+): Array<{ id: number; guessName: string }> {
+  const out: Array<{ id: number; guessName: string }> = [];
+  for (let i = from; i <= to; i++) {
+    out.push({ id: i, guessName: `${label} ${i}` });
+  }
+  return out;
+}
+
 const CANDIDATES: Array<{ id: number; guessName: string }> = [
-  { id: 1001, guessName: '여성패션 (추측)' },
-  { id: 1002, guessName: '남성패션 (추측)' },
-  { id: 1010, guessName: '뷰티 (추측)' },
-  { id: 1011, guessName: '출산/유아 (추측)' },
-  { id: 1012, guessName: '식품 (추측)' },
-  { id: 1013, guessName: '주방용품 (추측)' },
-  { id: 1014, guessName: '생활용품 (추측)' },
-  { id: 1015, guessName: '홈인테리어 (추측)' },
-  { id: 1016, guessName: '가전디지털 (추측)' },
-  { id: 1017, guessName: '스포츠/레저 (추측)' },
+  // 100~200: 상위 권역 추정 (101개)
+  ...range(100, 200, '상위?'),
+
+  // 1000번대 빈자리 (1003~1009 + 1014 + 1021)
+  ...range(1003, 1009, '1000빈자리'),
+  { id: 1014, guessName: '1000빈자리 1014' },
+  { id: 1021, guessName: '1000빈자리 1021' },
+
+  // 1024~1100: 1000번대 후순위 (77개)
+  ...range(1024, 1100, '1000후순위'),
+
+  // 2001~2100: 2000번대 (100개)
+  ...range(2001, 2100, '2000번대'),
+
+  // 3001~3050: 3000번대 (50개)
+  ...range(3001, 3050, '3000번대'),
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
