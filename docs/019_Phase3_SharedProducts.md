@@ -105,6 +105,15 @@ category_best/{categoryId}
   2. 미존재 시 → `upsertSharedProduct` (베스트 스냅샷 데이터 활용, API 재호출 없음)
   3. 존재 시 → `incrementTrackerCount` 또는 `incrementFavoriteCount`만 수행
 
+### 3-4. `meta/stats` (신규)
+- 단일 문서 `meta/stats` — 운영 카운터 모음
+- 필드:
+  - `sharedProductCount: number` — `shared_products` 전체 문서 수
+- 갱신:
+  - `shared_products` 추가 시 `increment(+1)`
+  - `shared_products` 삭제(GC) 시 `increment(-1)`
+- 용도: 가격 체크 cron 호출량 산정 베이스 + 운영 모니터링 (단일 read로 전체 규모 확인)
+
 ---
 
 ## 4. cron 통합 구조 (지금이야 레포 단일 관리)
@@ -113,14 +122,13 @@ category_best/{categoryId}
 | 시각 (KST) | 작업 | 대상 |
 |-----------|------|------|
 | 02:00 | 카테고리 베스트 업데이트 | `category_best` 전체 카테고리 |
-| 04:00 | shared_products 가격 체크 | `category_best` 중복 productId **제외** |
-| 낮 1회 | 카테고리 베스트 보조 업데이트 (변동분) | `category_best` 일부 |
-| 낮 1회 | 카테고리 베스트 보조 업데이트 (변동분) | `category_best` 일부 |
+| 04:30 ~ 01:00 (20.5h) | shared_products 가격 체크 | 분당 최대 40회 순차, `category_best` 중복 productId **제외** |
 
 - **알림은 각 앱 FCM 토큰으로 분리 발송**
 - 알림 스케줄:
   - 지금이야: **11:30, 20:30 KST**
   - 아이고: **10:00, 19:00 KST**
+- **낮 보조 업데이트 폐기** — rate-limited 시 당일 중단 원칙(§5-2). 다음날 02:00 회차에 갱신 흡수.
 
 ### 4-2. 중복 처리 로직 (핵심)
 ```
@@ -138,6 +146,14 @@ shared_products cron 실행 시:
 - 아이고 `price-check.yml` cron — 폐기 (지금이야 단일 cron으로 통합)
 - 기존 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19) — 폐기
 
+### 4-4. trackerCount 기반 정리 (신규)
+- `shared_products.trackerCount`는 **지금이야 + 아이고 양 앱 합산** 카운터
+- 두 앱이 동일 `shared_products/{productId}` 문서를 공유하므로 ref 추가/삭제 시 항상 합산 증감(`incrementTrackerCount`)
+- `trackerCount === 0` 도달 시 → **정리 대상**
+  - 가격 체크 cron 대상에서 제외
+  - 향후 GC cron(미구현)에서 문서 삭제 + `meta/stats.sharedProductCount` `-1`
+- `favoriteCount`도 동일 합산 기준 — 단 favorite은 추적과 독립이라 정리 트리거는 아님
+
 ---
 
 ## 5. API 호출 설계 (보수적 기준)
@@ -150,10 +166,14 @@ shared_products cron 실행 시:
 - 카테고리 1개 처리: **2분 소요**
 - 카테고리 20개 기준: **40분 완료**
 
-### 5-2. shared_products 가격 체크
-- 04:00 KST 실행
-- `category_best` 중복 productId 제외 후 `/products/search` 호출
-- 분당 50회 한도(공식) 내 운영, 상품당 1회 검색(2026-04-24 재시도 루프 제거 정책 유지)
+### 5-2. shared_products 가격 체크 (확정)
+- **실행 시간**: 매일 **04:30 ~ 01:00 KST** (총 20.5시간)
+- **호출 속도**: 분당 **최대 40회** (공식 한도 50회 대비 80% 마진)
+- **방식**: `shared_products` 컬렉션 **순번 기준 순차 호출** (FIFO)
+- **당일 신규 추가 상품**: **다음날 회차부터 체크 대상 편입** (당일 진행 중 회차에는 미포함)
+- `category_best` 중복 productId는 캐시(§8-B) 재사용 → API 재호출 제외
+- 상품당 1회 검색 (2026-04-24 재시도 루프 제거 정책 유지)
+- **rate-limited(429) 감지 시 즉시 중단, 당일 재실행 없음** — 낮 보조 회차 폐기 원칙(§4-1 비고)
 
 ### 5-3. 안전 장치
 - 분당 호출 카운터 + sleep 기반 throttle
@@ -214,7 +234,7 @@ shared_products cron 실행 시:
    - 카테고리 칩 가로 스크롤 + 선택 카테고리 상품 리스트
    - 1~3위 민트 랭크 뱃지, 로켓배송 이모지
    - 쿠팡 파트너스 의무 고지 푸터
-8. ⏸ **추가 대기**: 낮 2회 보조 업데이트(변동분 갱신용) — 현재 02:00 KST 1회만 운영
+8. ❌ **폐기**: 낮 2회 보조 업데이트 — rate-limited 시 당일 중단 원칙으로 폐기 (§4-1 비고, §5-2)
 
 ### 8-A-bis. 가격변동 탭 신설 (4탭 구조) — ✅ 완료 (2026-04-26)
 - 탭 구성: **홈 / 자주사는 / 카테고리 베스트 / 가격변동** (기존 3탭 → 4탭)
@@ -250,7 +270,7 @@ shared_products cron 실행 시:
 - [ ] 카테고리 베스트 → 추적 추가 시 10개 한도 도달 시 UX
 - [ ] 아이고 `baby_category` 구조 확인 + 통합 시점 (베타 출시 이후)
 - [ ] cron 알림 분리: 같은 productId가 양 앱 유저 모두 추적 시 알림 중복 방지
-- [ ] `category-best-update.yml` 낮 2회 보조 업데이트 추가 (현재 02:00 KST 1회만)
+- [x] ~~`category-best-update.yml` 낮 2회 보조 업데이트~~ — 폐기 (rate-limited 시 당일 중단 원칙, §4-1·§5-2)
 - [ ] 가격변동 탭 실데이터 검증 — cron 재활성화 후 `recordPriceDrop` 동작 확인
 
 ---
@@ -261,3 +281,30 @@ shared_products cron 실행 시:
 - 구현은 **카테고리 베스트 우선 → shared_products 통합 → 아이고 통합** 순
 - cron 재활성화 선결 조건: §8-A + §8-B 완료
 - Firebase 통합(§8-C)은 아이고 베타 출시 이후 진행 (CLAUDE.md 합의 사항)
+
+---
+
+## 11. 앱 내 검색 기능 (신규 설계)
+
+### 11-1. 검색 대상
+- **Firebase 내부 데이터만** 검색 — **쿠팡 API 호출 없음**
+- 검색 컬렉션:
+  - `category_best/{categoryId}.products[*]` — 지금이야 19개 × 50 = 950개
+  - `category_best_baby/{slug}.products[*]` — 아이고 월령별 베스트
+  - `event_best/{eventSlug}.products[*]` — 아이고 기념일 31개 (`minPrice=50000`)
+  - `shared_products/{productId}` — 양 앱 추적/자주사는 합집합
+
+### 11-2. 검색 방식
+- 클라이언트 측 `productName` 부분 일치 필터링
+- 카테고리/이벤트 베스트는 단일 문서 fetch 후 메모리 필터 (읽기 비용 최소)
+- `shared_products`는 별도 쿼리 (이름 인덱싱 추후 검토) 또는 클라이언트 필터
+
+### 11-3. 미검색 상품 (없는 상품)
+- 검색 결과 0건 시 **"이 상품 추적 요청"** 버튼 노출
+- 유저 입력(쿠팡 URL 또는 키워드) → 운영자 검토 후 `shared_products` 편입
+- **쿠팡 API 직접 호출은 운영자 cron 경유로만 처리** (호출량 통제)
+
+### 11-4. 운영 의도
+- 쿠팡 파트너스 API 호출량을 검색 트래픽에 의해 늘리지 않음 (Rate Limit 방어)
+- `shared_products` 풀이 커질수록 검색 적중률 자연 상승
+- 베스트 컬렉션은 cron 갱신 주기(매일)와 동기화된 결과 반환
