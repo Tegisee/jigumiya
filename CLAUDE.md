@@ -77,15 +77,68 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - iOS TestFlight 업로드 → App Store 심사 제출
   - Android Play Console 내부 테스트 → 프로덕션 승급
   - bn39 재빌드용 → bn40으로 bump
-- 019 §5-2 shared-price-checker cron 신설 (2026-04-27, 62448cc):
-  - `scripts/shared-price-checker/` 신설 — shared_products 풀 fetch → createdAt asc 순차 → trackerCount=0/당일 추가 스킵
-  - 분당 40회(sleep 1500ms), category_best 캐시 hit 시 API 스킵, rate-limited 즉시 종료
-  - `firestore.indexes.json` 신설 — collectionGroup `tracked.productId` 인덱스 배포 (추적자 역방향 검색)
-  - `SharedProduct.createdAt?` 필드 추가 + `upsertSharedProduct` 신규 생성 시 기록 (read+write 분기)
-  - `coupang-api.ts` `SearchResult`/`FetchPriceResult` 도입 — rateLimited 명시 분기 (HTTP 429 + rMessage 휴리스틱)
-  - `.github/workflows/shared-price-check.yml`: cron `'30 19 * * *'` 주석, workflow_dispatch만 활성, timeout 350분
-  - 활성화 선결: §8-C 아이고 통합 + 쿠팡 파트너스 문의 답변 (§8-D-2)
-- 다음: 아이고 Firebase → jigumiya 통합(베타 출시 후) → 아이고 Functions 수정 이식 → 아이고 알림 버그 + 계정 삭제 수정 → 가족 구매 실적 검증 → shared-price-check cron 활성화
+- 2026-04-27~28 종합 작업 (Phase 3 §8 마무리 + 019 §5-2 cron 신설 + 운영 정책 + 버그 수정):
+
+  ① **firestore.rules 아이고 통합본 + CLI 배포 전환** (커밋 `fd384c7`, `da2031e`)
+    - `category_best_baby/{slug}`, `event_best/{eventSlug}` 규칙 추가 (아이고 공유 컬렉션, read 인증 / write 차단)
+    - `meta/{docId}` 규칙 추가 (read: if true — 인증 전 첫 실행에서 minRequiredVersion 체크 가능, write: 차단)
+    - 슬러그 예시 정정: `'toys-0-3'`, `'birthday-1'`, `'parent-wedding'` (실제 운영 값)
+    - `firestore.rules` → `jigumiya/` 하위로 이동 (firebase.json과 동일 디렉토리)
+    - `firebase.json` + `.firebaserc` 신설 + firestore 섹션 추가 → **CLI 배포 활성화** (콘솔 수동 게시 방식 폐기)
+    - `firebase deploy --only firestore:rules --project jigumiya` 정상 배포 확인
+    - **jigumiya 레포가 firestore.rules 단일 소스(source of truth)** 확정 — 콘솔 직접 편집 금지
+
+  ② **019 §5-2 shared-price-checker cron 신설** (커밋 `62448cc`)
+    - `scripts/shared-price-checker/` 신설 (7개 파일):
+      - `index.ts`: shared_products 풀 fetch + createdAt asc 순차 + trackerCount=0/당일 추가 스킵 + category_best 캐시 hit 시 API 스킵 + sleep 1500ms + rate-limited 즉시 종료 + collectionGroup 추적자 수집 + Expo 푸시
+      - `coupang-api.ts`: `SearchResult`/`FetchPriceResult` 도입 — rateLimited 명시 분기 (HTTP 429 + rMessage 휴리스틱)
+      - `price-drop.ts`: `recordPriceDrop` 분리 (db 인자 받는 형태)
+      - `category-best-cache.ts`, `notifier.ts`: 기존 `price-checker`에서 복사
+      - `package.json` name → `jigumiya-shared-price-checker`
+    - `firestore.indexes.json` 신설 → `firebase deploy --only firestore:indexes` — **collectionGroup `tracked.productId` 인덱스 배포** (추적자 역방향 검색용)
+    - `SharedProduct.createdAt?: number` 필드 추가 (optional, 기존 문서 호환) + `upsertSharedProduct` 신규 생성 시 `createdAt: Date.now()` 기록 (read+write 분기)
+    - `.github/workflows/shared-price-check.yml`: cron `'30 19 * * *'` (= 04:30 KST) **주석 처리, workflow_dispatch만 활성**, timeout 350분 (GitHub 6h 한도 안전 마진)
+    - 기존 `price-check.yml`(users-based legacy)은 변경 없이 비활성 유지 — Phase 3-C에서 정식 폐기
+
+  ③ **앱 업데이트 알림 기능 추가** (커밋 `3a5bbc3`)
+    - `services/updateChecker.ts` 신설: `compareVersion`(semver 부분 비교, "1.0.10" 함정 회피) + `checkForUpdate`(meta/config_jigumiya 조회 + Alert.alert)
+    - "나중에" 누른 minRequiredVersion은 AsyncStorage(`update_prompt_dismissed_version`)에 기억 → 같은 버전 재표시 안 함
+    - `forceUpdate=true`면 "나중에" 버튼 숨김 + cancelable:false
+    - `services/firebase.ts:getMetaConfig()` 추가 — 인증 없이 호출 가능 (rules: read if true)
+    - `types/MetaConfig` 인터페이스 추가, `app/_layout.tsx` 첫 마운트 시 1회 호출
+    - **운영자 작업**: `meta/config_jigumiya` 문서 콘솔 생성 (`minRequiredVersion: "1.0.6"` 등)
+    - iOS App Store ID는 TODO 자리만 (App Store Connect 발급 후 `services/updateChecker.ts:9` 교체)
+
+  ④ **minPrice 50,000 → 30,000 sync** (CLAUDE.md + 019 docs)
+    - `event_best` cron 호출 시 `minPrice` 기준 하향 조정 — 더 많은 기념일 상품 노출
+    - 영향: 아이고 `event-best-updater` 호출 파라미터 (지금이야 cron 무관)
+
+  ⑤ **019 §10 운영 정책 신규 섹션 추가**
+    - cron 활성화 절차, 비활성화 트리거, 모니터링 지표, 사고 대응 체크리스트 명문화
+    - 코드 신설(§8-D-1)과 활성화(§8-D-2)의 분리된 책임 정착
+
+  ⑥ **버그 수정: 카테고리 베스트 탭 + 자주사는 탭 read 실패** (firestore.rules 미배포 원인)
+    - 증상: 1.0.6 배포 직후 카테고리 베스트 탭 "준비중이에요" 표시 + 홈 하트 토글 → 자주사는 탭 미반영
+    - 원인 확정: `category_best`, `users/{uid}/{document=**}` 규칙이 콘솔에 미게시(레포 파일에는 있으나 미배포). 두 버그 동시 + 코드 git diff 없음 → Firebase 서버 측 rules 미배포로 진단
+    - 해결: ①번 `firebase deploy --only firestore:rules` 정상 배포로 복구
+    - **재발 방지**: ① CLI 배포 워크플로우 정착, ② 콘솔 직접 편집 금지(레포 단일 소스)
+
+  ⑦ **cron 비활성 상태 유지** — 양 cron 모두 schedule 주석
+    - `shared-price-check.yml` (신규, §5-2) — workflow_dispatch만 활성
+    - `price-check.yml` (legacy) — workflow_dispatch만 활성
+    - 활성화 선결: 아이고 실기기 테스트 통과 + 아이고 Firebase → jigumiya 통합(§8-C) 완료
+    - 활성화 시점: **지금이야 + 아이고 동시 반영** (단일 cron으로 두 앱 공통 데이터 갱신)
+
+  ⑧ **CLAUDE.md + 019 docs sync** (커밋 `ce261a4`, `6c21001`, `51d640a`, `a5eb348`)
+    - 019 §3-4 `meta/stats`, §4-4 trackerCount 정리, §5-2 가격체크 확정안, §11 앱 내 검색 기능 신규
+    - 낮 2회 보조 업데이트 폐기 표시 + cron 스케줄 표현 일관 sync (CLAUDE.md 6군데)
+    - §1 진행 표 §8-D를 §8-D-1(✅)/§8-D-2(⏸)로 분리
+
+- 다음:
+  1. **아이고 실기기 테스트 통과** 후 cron 전체 활성화 (지금이야 + 아이고 동시 반영)
+  2. **지금이야 1.0.7 빌드** (App Store 1.0.6 출시 완료 후)
+  3. **shared-price-checker workflow_dispatch 수동 테스트** (cron 활성화 전 dry-run)
+  4. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2)
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -115,7 +168,14 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **구현**: feed 탭 카테고리 베스트 리스트 UI + 가격변동 탭 신설 (4탭 구조, price_drops 컬렉션) (2026-04-26)
 - [x] **빌드**: 1.0.6 bn40/vc40 → iOS App Store 심사 제출 + Android 프로덕션 승급 (2026-04-26)
 - [x] **구현**: 019 §5-2 shared-price-checker cron 신설 (2026-04-27, 62448cc) — workflow_dispatch만 활성, schedule 주석 처리
-- [ ] **활성화**: shared-price-check.yml cron 주석 해제 — 선결: §8-C 아이고 통합 + 파트너스 문의 답변 (§8-D-2)
+- [x] **배포**: firestore.rules CLI 배포 전환 + 아이고 통합본 (2026-04-27, fd384c7/da2031e) — `category_best_baby`, `event_best`, `meta/{docId}` 규칙 + jigumiya 단일 소스 확정
+- [x] **추가**: 앱 업데이트 알림 기능 + `meta/config_jigumiya` 운영자 문서 생성 (2026-04-27, 3a5bbc3) — `minRequiredVersion: "1.0.6"`
+- [x] **수정**: minPrice 50,000 → 30,000 sync (CLAUDE.md + 019 docs, event_best 호출 기준)
+- [x] **추가**: 019 §10 운영 정책 신규 섹션 (cron 활성화/비활성/사고 대응)
+- [x] **버그수정**: 카테고리 베스트 + 자주사는 탭 — firestore.rules 미배포 → CLI 배포로 복구 (재발 방지: 콘솔 직접 편집 금지)
+- [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → 풀 처리 dry-run 검증
+- [ ] **빌드**: 지금이야 1.0.7 (App Store 1.0.6 출시 완료 후 — `app.config.js` version/buildNumber/versionCode bump)
+- [ ] **활성화**: shared-price-check.yml + price-check.yml cron schedule 동시 주석 해제 — 선결: 아이고 실기기 테스트 통과 + §8-C 아이고 통합
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
 - [ ] **추가**: `category-best-update.yml` 낮 2회 보조 업데이트 (현재 02:00 KST 1회만)
 - [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
