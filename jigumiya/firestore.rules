@@ -58,7 +58,7 @@ service cloud.firestore {
     // - write: 서버 전용 (Admin SDK bypass)
     //
     // 갱신 주체: 아이고 cron (baby 1~4그룹, 01:15 / 01:30 / 03:00 / 03:20 KST)
-    // 문서 ID = slug (예: 'toy_0_3m', 'clothes_6_12m')
+    // 문서 ID = slug (예: 'toys-0-3', 'clothes_6_12m')
     match /category_best_baby/{slug} {
       allow read: if request.auth != null;
       allow write: if false;
@@ -70,7 +70,7 @@ service cloud.firestore {
     // - write: 서버 전용 (Admin SDK bypass)
     //
     // 갱신 주체: 아이고 event-best-updater cron (01:00 KST, minPrice=50000)
-    // 문서 ID = eventSlug (예: 'first_birthday', 'wedding_anniv')
+    // 문서 ID = eventSlug (예: 'birthday-1', 'parent-wedding')
     match /event_best/{eventSlug} {
       allow read: if request.auth != null;
       allow write: if false;
