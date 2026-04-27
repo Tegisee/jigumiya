@@ -223,7 +223,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 ### 확정 cron 스케줄 (KST)
 | 시각 | 레포 | 작업 |
 |------|------|------|
-| 01:00 | 아이고 | event-best-updater (기념일 31개, `minPrice=50000`) |
+| 01:00 | 아이고 | event-best-updater (기념일 31개, `minPrice=30000`) |
 | 01:15 | 아이고 | baby 1그룹 (장난감 + 의류 16구간) |
 | 01:30 | 아이고 | baby 2그룹 (신발 + 도서 + 학습교구 14구간) |
 | 02:00 | 지금이야 | category_best (19개, sleep 80초) |
@@ -234,14 +234,14 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 ### Firebase 공유 컬렉션 구조 (지금이야 + 아이고 양쪽 공유)
 - `category_best/{categoryId}` — **지금이야** cron 적재 (19개 카테고리 × 50 = 950 상품)
 - `category_best_baby/{slug}` — **아이고** cron 적재 (월령별 baby 카테고리)
-- `event_best/{eventSlug}` — **아이고** cron 적재 (기념일 31개, `minPrice=50000`)
+- `event_best/{eventSlug}` — **아이고** cron 적재 (기념일 31개, `minPrice=30000`)
 - `shared_products/{productId}` — **양쪽** cron (양 앱에서 추가 + 지금이야 04:30~01:00 가격체크가 갱신)
 - `price_drops/{dropId}` — **지금이야** cron (price-check 시 하락 감지 → 자동 기록)
 
 ### 호출 방식 (공통 정책)
 - `limit=10`, 호출당 sleep **2초**, 분당 최대 **30회** (공식 한도 50회 대비 보수 운영)
 - rate-limited 응답 수신 즉시 중단 (재시도 없음)
-- `event_best` 전용 옵션: `minPrice=50000`
+- `event_best` 전용 옵션: `minPrice=30000`
 
 ## 형제 앱
 - 지금이야와 아이고(~/aigo/aigo)는 형제 앱 관계
