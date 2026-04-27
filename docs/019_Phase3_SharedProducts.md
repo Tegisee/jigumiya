@@ -291,7 +291,7 @@ shared_products cron 실행 시:
 - 검색 컬렉션:
   - `category_best/{categoryId}.products[*]` — 지금이야 19개 × 50 = 950개
   - `category_best_baby/{slug}.products[*]` — 아이고 월령별 베스트
-  - `event_best/{eventSlug}.products[*]` — 아이고 기념일 31개 (`minPrice=50000`)
+  - `event_best/{eventSlug}.products[*]` — 아이고 기념일 31개 (`minPrice=30000`)
   - `shared_products/{productId}` — 양 앱 추적/자주사는 합집합
 
 ### 11-2. 검색 방식
