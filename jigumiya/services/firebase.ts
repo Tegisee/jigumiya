@@ -35,6 +35,7 @@ import type {
   FavoriteRef,
   PriceDrop,
   CategoryBest,
+  MetaConfig,
 } from '../types';
 
 const firebaseConfig = {
@@ -535,4 +536,23 @@ export function subscribeCategoryBest(
       callback(null);
     },
   );
+}
+
+// ──────────────────────────────────────────────────────────
+// 업데이트 알림 (meta/config_jigumiya)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * meta/config_jigumiya 단건 조회 — 인증 없이 호출 가능 (rules: read if true).
+ * 미존재/실패 시 null. updateChecker.ts에서 호출.
+ */
+export async function getMetaConfig(): Promise<MetaConfig | null> {
+  try {
+    const snap = await getDoc(doc(db, 'meta', 'config_jigumiya'));
+    if (!snap.exists()) return null;
+    return snap.data() as MetaConfig;
+  } catch (e) {
+    console.warn('[meta/config] 조회 실패:', e);
+    return null;
+  }
 }

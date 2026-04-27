@@ -86,3 +86,11 @@ export interface PriceDrop {
   deepLink: string; // 제휴 딥링크 (바로구매용)
   createdAt: number;
 }
+
+/** meta/config_jigumiya — 앱 업데이트 알림 설정 (운영자 콘솔에서 갱신) */
+export interface MetaConfig {
+  minRequiredVersion: string;  // semver, 예: "1.0.7"
+  latestVersion: string;       // 정보용, 예: "1.0.7"
+  updateMessage?: string;      // 선택: 커스텀 안내문구 (없으면 기본문구)
+  forceUpdate?: boolean;       // true면 "나중에" 버튼 숨김 + cancelable:false
+}

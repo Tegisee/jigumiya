@@ -86,5 +86,18 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if false;
     }
+
+    // ─── 공용 메타데이터 (019 §3-4 / 업데이트 알림) ───
+    // meta/{docId} — 단일 문서 운영 카운터/설정 모음
+    //   - meta/stats          : sharedProductCount 카운터 (019 §3-4)
+    //   - meta/config_jigumiya: 지금이야 앱 업데이트 알림 설정
+    //   - meta/config_aigo    : 아이고 앱 업데이트 알림 설정 (향후)
+    // - read : 누구나 (인증 전 첫 실행 시점에 minRequiredVersion 체크 필요)
+    //          버전 문자열만 노출되므로 보안상 영향 없음
+    // - write: 서버 / 운영자 콘솔 전용
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

@@ -12,6 +12,7 @@ import {
   getItemIdFromNotification,
   clearBadgeCount,
 } from '../services/notifications';
+import { checkForUpdate } from '../services/updateChecker';
 import { useAppStore } from '../store/useAppStore';
 import OnboardingScreen from '../components/OnboardingScreen';
 
@@ -70,6 +71,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     initCoupangApi();
+
+    // 업데이트 알림 — 인증 대기 없이 즉시 체크 (rules: read if true)
+    checkForUpdate();
 
     (async () => {
       await signInAnonymously();
