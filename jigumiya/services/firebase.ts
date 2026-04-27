@@ -253,12 +253,15 @@ export async function upsertSharedProduct(
 ): Promise<void> {
   try {
     const { productId, ...rest } = product;
+    const ref = doc(db, 'shared_products', productId);
+    const snap = await getDoc(ref);
+    const isNew = !snap.exists();
     await setDoc(
-      doc(db, 'shared_products', productId),
-      { productId, ...rest },
+      ref,
+      { productId, ...rest, ...(isNew ? { createdAt: Date.now() } : {}) },
       { merge: true },
     );
-    console.log('[shared] upsert', productId);
+    console.log('[shared] upsert', productId, isNew ? '(new)' : '(merge)');
   } catch (e) {
     console.warn('[Firebase] shared_products upsert 실패:', e);
   }

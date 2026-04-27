@@ -34,6 +34,7 @@ export interface SharedProduct {
   lastCheckedAt: number; // ms epoch
   lastPriceDropAt?: number;
   lastDropRate?: number; // 음수 %
+  createdAt?: number; // ms epoch — 신규 생성 시 기록 (019 §5-2 당일 추가 스킵용)
 }
 
 /** users/{uid}/tracked/{productId} — 홈 추적 참조 (10개 제한) */

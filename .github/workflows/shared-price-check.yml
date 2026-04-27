@@ -1,0 +1,52 @@
+name: Shared Products Price Check (019 §5-2)
+
+# shared_products 풀 기반 가격 체크 cron (Phase 3 신규)
+#
+# 정책 (docs/019 §5-2):
+#   - 분당 최대 40회 = sleep 1500ms (공식 한도 50회의 80%)
+#   - shared_products createdAt asc 순차 처리
+#   - 당일 createdAt 이후 추가된 문서는 스킵 (다음날 회차 편입)
+#   - trackerCount === 0 문서는 스킵 (019 §4-4 정리 대상)
+#   - category_best 캐시 hit 시 API 호출 X (019 §4-2)
+#   - rate-limited 감지 시 즉시 종료 + 당일 재실행 없음
+#
+# 활성화 조건:
+#   - 아이고 Firebase 통합(§8-C) + 쿠팡 파트너스 문의 답변 후
+#   - 활성화 시 cron 주석 해제: schedule.- cron: '30 19 * * *' (= 04:30 KST)
+#   - 기존 price-check.yml은 그대로 비활성 유지 (Phase 3-C에서 정식 폐기)
+#
+# 비활성 이력:
+#   - 2026-04-27: 신설 (workflow_dispatch만 활성, schedule 주석 처리)
+
+on:
+  # schedule:
+  #   - cron: '30 19 * * *'  # 04:30 KST (= 19:30 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  shared-price-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # 5h50m — GitHub Actions 6h 한도 안전 마진
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/shared-price-checker
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/shared-price-checker
+        run: npx tsc
+
+      - name: Run shared price checker
+        working-directory: scripts/shared-price-checker
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+        run: node dist/index.js
