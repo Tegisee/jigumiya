@@ -3,17 +3,15 @@ rules_version = '2';
 // ─────────────────────────────────────────────────────────────
 // 지금이야 Firestore 보안 규칙 (source of truth)
 //
-// 배포 방법 (현재):
-//   Firebase Console → Firestore Database → 규칙 탭에 본 파일 내용 복사/붙여넣기
-//   → "게시" 클릭
-//
-// 향후 (firebase-tools 설치 후):
-//   firebase deploy --only firestore:rules
+// 배포 방법:
+//   cd ~/jigumiya/jigumiya
+//   firebase deploy --only firestore:rules --project jigumiya
 //
 // 변경 이력:
 //   - Phase 1  : users/{uid}/{document=**} 재귀 허용
 //   - Phase 3-A: shared_products, price_drops 규칙 추가 (017.md §8-4)
 //   - 019     : category_best 규칙 추가 (019.md §2-3)
+//   - 019 통합: category_best_baby, event_best 규칙 추가 (아이고 공유 컬렉션)
 // ─────────────────────────────────────────────────────────────
 
 service cloud.firestore {
@@ -50,6 +48,30 @@ service cloud.firestore {
     // 갱신 주체: scripts/category-best-updater (GitHub Actions cron)
     // 문서 ID = String(categoryId)
     match /category_best/{categoryId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── 카테고리 베스트 — 아이고 baby (019 통합 신규) ───
+    // category_best_baby/{slug}
+    // - read : 모든 인증 유저 (아이고 월령별 베스트 조회)
+    // - write: 서버 전용 (Admin SDK bypass)
+    //
+    // 갱신 주체: 아이고 cron (baby 1~4그룹, 01:15 / 01:30 / 03:00 / 03:20 KST)
+    // 문서 ID = slug (예: 'toy_0_3m', 'clothes_6_12m')
+    match /category_best_baby/{slug} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── 기념일 베스트 (019 통합 신규) ───
+    // event_best/{eventSlug}
+    // - read : 모든 인증 유저 (아이고 기념일 31개 조회)
+    // - write: 서버 전용 (Admin SDK bypass)
+    //
+    // 갱신 주체: 아이고 event-best-updater cron (01:00 KST, minPrice=50000)
+    // 문서 ID = eventSlug (예: 'first_birthday', 'wedding_anniv')
+    match /event_best/{eventSlug} {
       allow read: if request.auth != null;
       allow write: if false;
     }
