@@ -77,7 +77,15 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - iOS TestFlight 업로드 → App Store 심사 제출
   - Android Play Console 내부 테스트 → 프로덕션 승급
   - bn39 재빌드용 → bn40으로 bump
-- 다음: 아이고 Firebase → jigumiya 통합(베타 출시 후) → 아이고 Functions 수정 이식 → 아이고 알림 버그 + 계정 삭제 수정 → 가족 구매 실적 검증 → cron 재활성화
+- 019 §5-2 shared-price-checker cron 신설 (2026-04-27, 62448cc):
+  - `scripts/shared-price-checker/` 신설 — shared_products 풀 fetch → createdAt asc 순차 → trackerCount=0/당일 추가 스킵
+  - 분당 40회(sleep 1500ms), category_best 캐시 hit 시 API 스킵, rate-limited 즉시 종료
+  - `firestore.indexes.json` 신설 — collectionGroup `tracked.productId` 인덱스 배포 (추적자 역방향 검색)
+  - `SharedProduct.createdAt?` 필드 추가 + `upsertSharedProduct` 신규 생성 시 기록 (read+write 분기)
+  - `coupang-api.ts` `SearchResult`/`FetchPriceResult` 도입 — rateLimited 명시 분기 (HTTP 429 + rMessage 휴리스틱)
+  - `.github/workflows/shared-price-check.yml`: cron `'30 19 * * *'` 주석, workflow_dispatch만 활성, timeout 350분
+  - 활성화 선결: §8-C 아이고 통합 + 쿠팡 파트너스 문의 답변 (§8-D-2)
+- 다음: 아이고 Firebase → jigumiya 통합(베타 출시 후) → 아이고 Functions 수정 이식 → 아이고 알림 버그 + 계정 삭제 수정 → 가족 구매 실적 검증 → shared-price-check cron 활성화
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -106,6 +114,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **구현**: 019 §8-B price-checker `category_best` 캐시 (6시간 신선도 + 30% 변동 가드) (2026-04-26)
 - [x] **구현**: feed 탭 카테고리 베스트 리스트 UI + 가격변동 탭 신설 (4탭 구조, price_drops 컬렉션) (2026-04-26)
 - [x] **빌드**: 1.0.6 bn40/vc40 → iOS App Store 심사 제출 + Android 프로덕션 승급 (2026-04-26)
+- [x] **구현**: 019 §5-2 shared-price-checker cron 신설 (2026-04-27, 62448cc) — workflow_dispatch만 활성, schedule 주석 처리
+- [ ] **활성화**: shared-price-check.yml cron 주석 해제 — 선결: §8-C 아이고 통합 + 파트너스 문의 답변 (§8-D-2)
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
 - [ ] **추가**: `category-best-update.yml` 낮 2회 보조 업데이트 (현재 02:00 KST 1회만)
 - [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
@@ -149,7 +159,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 빌드 전 개발 서버(npx expo start)로 테스트 먼저 진행할 것
 
 ## 주요 기술 현황
-- 서버사이드 가격 체크: scripts/price-checker/ (파트너스 API 검색 → Firestore 업데이트 → Expo Push)
+- 서버사이드 가격 체크 (Phase 3 신규, 019 §5-2): scripts/shared-price-checker/ — shared_products 풀 기반 cron
+  - 04:30~01:00 KST 분당 40회(sleep 1500ms) 순차, createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
+  - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색 → Expo 푸시
+  - `.github/workflows/shared-price-check.yml`: 현재 workflow_dispatch만 활성, schedule 주석 (§8-D-2 활성화 대기)
+  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변
+- 서버사이드 가격 체크 (legacy, Phase 3-C에서 폐기 예정): scripts/price-checker/ (파트너스 API 검색 → Firestore 업데이트 → Expo Push)
   - ✅ Puppeteer 삭제 → 파트너스 API searchProducts()로 교체 완료
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
   - ✅ 알림 로직 개선: 가격 무변동 시 매 체크마다 no_change 알림 발송 + price_drop 오탐 방지

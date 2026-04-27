@@ -19,8 +19,9 @@ status: §8-A 구현 완료 + §8-B 통합 완료 + 1.0.6 배포 / §8-C(아이�
 | 가격변동 탭 + price_drops 컬렉션 | ✅ 완료 | 4탭 구조 전환, 필터 칩, 하락률 뱃지, `recordPriceDrop` 로직 (커밋 `f8b88e9`) |
 | 1.0.6 (bn40/vc40) 배포 | ✅ 완료 | iOS App Store 심사 제출 + Android 프로덕션 승급 (커밋 `986acaf`) |
 | §8-C 아이고 Firebase 통합 | ⏸ 대기 | 아이고 베타 출시 이후 진행 합의 |
-| §8-D cron 재활성화 | ⏸ 대기 | 아이고 통합 + 파트너스 문의 답변 후 |
-| `category-best-update.yml` 낮 2회 보조 업데이트 | ⏸ 대기 | 현재 02:00 KST 1회만 |
+| §8-D-1 shared-price-checker cron 신설 | ✅ 완료 (2026-04-27) | `scripts/shared-price-checker/`, collectionGroup 인덱스 배포, workflow_dispatch만 활성 (커밋 `62448cc`) |
+| §8-D-2 cron 활성화 (schedule 주석 해제) | ⏸ 대기 | 선결: §8-C 아이고 통합 + 쿠팡 파트너스 문의 답변 |
+| ~~`category-best-update.yml` 낮 2회 보조 업데이트~~ | ❌ 폐기 | rate-limited 시 당일 중단 원칙(§4-1·§5-2) |
 
 ---
 
@@ -254,10 +255,23 @@ shared_products cron 실행 시:
 2. 아이고 카테고리(`baby_category`) 정의 + cron에 합집합 추가
 3. 기존 아이고 유저 데이터 마이그레이션 계획 별도 수립
 
-### 8-D. cron 재활성화 (Phase 3 완료 후) — ⏸ 대기
+### 8-D. shared-price-checker cron — 신설 + 활성화
+
+#### 8-D-1. cron 코드 신설 — ✅ 완료 (2026-04-27, 커밋 `62448cc`)
+1. ✅ `types/SharedProduct.createdAt?: number` 추가 (당일 추가 스킵용, optional로 기존 문서 호환)
+2. ✅ `services/firebase.ts:upsertSharedProduct` — 신규 생성 분기 시 `createdAt: Date.now()` 기록 (read+write 분기)
+3. ✅ `firestore.indexes.json` 신설 — collectionGroup `tracked.productId` 인덱스 배포 (`firebase deploy --only firestore:indexes`)
+4. ✅ `scripts/shared-price-checker/` 신설 (7개 파일):
+   - `index.ts`: shared_products 풀 fetch + createdAt asc + trackerCount=0/당일 추가 스킵 + 캐시 hit 시 API 스킵 + sleep 1500ms + rate-limited 즉시 종료 + collectionGroup 추적자 수집 + Expo 푸시
+   - `coupang-api.ts`: `SearchResult`/`FetchPriceResult` 도입 — rateLimited 명시 분기 (HTTP 429 + rMessage 휴리스틱)
+   - `price-drop.ts`: `recordPriceDrop` 분리 (db 인자 받는 형태)
+   - `category-best-cache.ts`, `notifier.ts`: 기존 `price-checker`에서 복사
+5. ✅ `.github/workflows/shared-price-check.yml`: cron `'30 19 * * *'` 주석, workflow_dispatch만 활성, timeout 350분(GitHub 6h 한도 안전 마진)
+
+#### 8-D-2. cron 활성화 — ⏸ 대기
 - 선결: §8-C 아이고 통합 + 쿠팡 파트너스 문의 답변(`bestcategories` 호출 카운팅 방식)
-- 확정 스케줄(§4-1) 적용
-- 기존 지금이야/아이고 개별 cron 폐기 확인
+- 활성화 작업: `shared-price-check.yml`의 `schedule.- cron` 주석 해제
+- 기존 `price-check.yml`(users-based legacy) — 변경 없이 비활성 유지, Phase 3-C에서 정식 폐기
 
 ---
 
