@@ -98,7 +98,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **2차 긴급 조치**: price-check cron 재비활성화 — 지금이야 `3cd068e`, 아이고 `fb66468` (2026-04-24 야간, burst rate 분당 ~110회 확인 + 파트너스 계정 정지)
 - [x] **근본 수정**: price-checker 재시도 루프 완전 제거 — 지금이야 `46c20e5`, 아이고 `840f1ea` (2026-04-24, 상품당 1회 검색)
 - [x] **해제**: 파트너스 계정 정지 소명 해제 완료 (2026-04-24)
-- [ ] **조건부 재활성화**: price-check cron — Phase 3 `shared_products` 완료 후 확정 스케줄 적용 (공유상품 02/03/04 KST 새벽 + 낮 2회, 지금이야 알림 11:30/20:30 KST, 아이고 알림 10:00/19:00 KST)
+- [ ] **조건부 재활성화**: price-check cron — Phase 3 `shared_products` 완료 후 확정 스케줄 적용 (shared_products 가격체크 04:30~01:00 KST 분당 40회 순차, 지금이야 알림 11:30/20:30 KST, 아이고 알림 10:00/19:00 KST)
 - [ ] **이식**: 아이고 Functions에 동일 수정(HTML redirectWebUrl 파싱 + Secret `.trim()`) 적용
 - [ ] **수정**: 아이고 알림 버그 + 계정 삭제 버그 (상세 미정 — 별도 작업)
 - [ ] **검증**: Play Store / App Store 1.0.5/1.0.6 승급 후 실제 사용자 환경 Functions 동작 확인
@@ -117,9 +117,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 3. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
 4. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
 5. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
-6. **`category-best-update.yml` 낮 2회 보조 업데이트 추가** — 현재 02:00 KST 1회만 (변동분 갱신용)
+6. ~~**`category-best-update.yml` 낮 2회 보조 업데이트 추가**~~ — 폐기 (rate-limited 시 당일 중단 원칙, 019 §4-1·§5-2)
 7. **cron 재활성화** — 위 선결 항목(특히 §1 아이고 통합) 완료 후 확정 스케줄 적용:
-   - 공유상품 업데이트(공용): 02:00 / 03:00 / 04:00 KST (새벽) + 낮시간 최소 2회
+   - shared_products 가격체크: 04:30 ~ 01:00 KST 분당 40회 순차 (rate-limited 시 당일 중단)
+   - category_best 갱신: 02:00 KST 1회 (sleep 80초)
    - 지금이야 알림: 11:30 / 20:30 KST
    - 아이고 알림: 10:00 / 19:00 KST
 8. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
@@ -156,7 +157,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - ✅ 재시도 루프 제거 (2026-04-24): `fetchCurrentPrice` keywords 배열 for-loop → 상품당 정확히 1회 검색. 매칭 실패 시 즉시 스킵 (지금이야 `46c20e5`, 아이고 `840f1ea`)
   - 🚨 **현재 cron 비활성 (2026-04-24 야간)**: 재활성화 당일 burst rate 분당 ~110회 확인 → 긴급 차단 (지금이야 `3cd068e`, 아이고 `fb66468`). Phase 3 `shared_products` 완료 후 재활성화 예정
   - 확정 스케줄 (Phase 3 완료 후 적용):
-    - 공유상품 업데이트(공용): 02:00 / 03:00 / 04:00 KST (새벽) + 낮시간 최소 2회
+    - shared_products 가격체크: 04:30 ~ 01:00 KST 분당 40회 순차 (rate-limited 시 당일 중단, 019 §5-2)
+    - category_best 갱신: 02:00 KST 1회 (sleep 80초)
     - 지금이야 알림: 11:30 / 20:30 KST
     - 아이고 알림: 10:00 / 19:00 KST
   - Secrets 등록 완료: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY. Node.js 24
@@ -227,13 +229,13 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 02:00 | 지금이야 | category_best (19개, sleep 80초) |
 | 03:00 | 아이고 | baby 3그룹 (소모품) |
 | 03:20 | 아이고 | baby 4그룹 (나머지) |
-| 04:00 | 지금이야 | price-check (shared_products) |
+| 04:30~01:00 | 지금이야 | shared_products 가격체크 (분당 40회 순차, 20.5h) |
 
 ### Firebase 공유 컬렉션 구조 (지금이야 + 아이고 양쪽 공유)
 - `category_best/{categoryId}` — **지금이야** cron 적재 (19개 카테고리 × 50 = 950 상품)
 - `category_best_baby/{slug}` — **아이고** cron 적재 (월령별 baby 카테고리)
 - `event_best/{eventSlug}` — **아이고** cron 적재 (기념일 31개, `minPrice=50000`)
-- `shared_products/{productId}` — **양쪽** cron (양 앱에서 추가 + 지금이야 04:00 price-check가 갱신)
+- `shared_products/{productId}` — **양쪽** cron (양 앱에서 추가 + 지금이야 04:30~01:00 가격체크가 갱신)
 - `price_drops/{dropId}` — **지금이야** cron (price-check 시 하락 감지 → 자동 기록)
 
 ### 호출 방식 (공통 정책)
@@ -246,7 +248,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
-- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(02/03/04 KST 새벽 + 낮 2회), 알림은 앱별 스케줄(지금이야 11:30/20:30, 아이고 10:00/19:00)
+- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(shared_products 가격체크 04:30~01:00 KST 분당 40회 순차 + category_best 02:00 KST), 알림은 앱별 스케줄(지금이야 11:30/20:30, 아이고 10:00/19:00)
 - **공통 이슈**: 파트너스 실적 미집계(쿠팡 공유 링크 구조) — 아이고도 AQ-4로 동일 확인 → Firebase Functions Resolver(018) 해결책을 아이고도 동일 방식으로 적용 예정
 - **오늘 작업 이식 대기 (2026-04-24)**: 지금이야 Functions 3대 버그 수정(`e69d05e`)을 아이고에도 반영 — HTML `redirectWebUrl` 파싱, Secret `.trim()`, `request.auth` 검증, `allUsers:run.invoker`
 - **Firebase 프로젝트 통합 검토**: jigumiya 프로젝트 기반으로 아이고 통합 — **아이고 베타 출시 이후 진행 합의** (2026-04-20)
