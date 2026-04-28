@@ -134,11 +134,35 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
     - 낮 2회 보조 업데이트 폐기 표시 + cron 스케줄 표현 일관 sync (CLAUDE.md 6군데)
     - §1 진행 표 §8-D를 §8-D-1(✅)/§8-D-2(⏸)로 분리
 
+- 2026-04-28 가격 체크 + 알림 설계 확정 (내일 재논의 예정):
+
+  **가격 체크 (shared-price-checker)** — 동적 사이클 방식 확정:
+  - `meta/stats.sharedProductCount` 읽어서 **사이클 시간 자동 계산** (정적 분당 40회 sleep 1500ms 고정 → 동적 sleep 간격 조정으로 전환)
+  - 카테고리 업데이트 시간대 **01:00~04:30 KST 제외** (category_best/baby/event 갱신 보호)
+  - 분당 최대 40회 (공식 한도 50회 대비 80% 마진 유지)
+  - 계산식: `전체상품수 ÷ 40 = 1사이클 소요분`, 가용시간(20.5h) 내 자동 반복
+  - 지금이야 + 아이고 `shared_products` 공유이므로 **단일 cron으로 양 앱 커버**
+  - 영향: §5-2 정적 sleep 1500ms 가정 폐기 → `meta/stats` 기반 sleep 동적 산출로 전환 (구현 시점에 19 §5 갱신 필요)
+
+  **알림 발송** — 하루 3회 고정 시간대로 변경:
+  - 기존 2회(지금이야 11:30/20:30, 아이고 10:00/19:00) → **3회 고정 시간대** (시간대 미확정, 내일 협의)
+  - 각 발송 시점까지 **누적된 가격 하락 상품을 한 번에 모아서 발송** (실시간 발송 X)
+  - 온보딩 문구 수정 필요 (실제 횟수 확정 후 — `app/onboarding/*` 또는 안내 텍스트 위치 점검)
+
+  **내일(2026-04-29) 재논의 항목**:
+  - [ ] 알림 발송 시간대 3회 확정 (지금이야/아이고 분리 vs 공통)
+  - [ ] 가격 변동 없을 때 알림 여부 (현재 legacy는 `no_change` 발송 — 폐기 또는 유지)
+  - [ ] 온보딩 문구 최종 확정
+  - [ ] 전체 cron 스케줄 최종 검토 후 활성화 (§8-D-2)
+
 - 다음:
-  1. **아이고 실기기 테스트 통과** 후 cron 전체 활성화 (지금이야 + 아이고 동시 반영)
-  2. **지금이야 1.0.7 빌드** (App Store 1.0.6 출시 완료 후)
-  3. **shared-price-checker workflow_dispatch 수동 테스트** (cron 활성화 전 dry-run)
-  4. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2)
+  1. **2026-04-29 가격 체크 + 알림 설계 4개 항목 확정** (시간대/무변동 알림/온보딩/cron 활성화 검토)
+  2. **shared-price-checker 동적 사이클 구현** — `meta/stats.sharedProductCount` 기반 sleep 동적 계산 + 01:00~04:30 KST 제외 로직 + 19 §5 docs 갱신
+  3. **지금이야 버그 수정**: ①쿠팡 공유 → 상품추가 화면 무한로딩 (iOS/Android 공통, 가끔 튕긴 후 재진입하면 됨), ②설정화면 와우회원 관련 문구 제거 (Android/iOS)
+  4. **아이고 실기기 테스트 통과** 후 cron 전체 활성화 (지금이야 + 아이고 동시 반영)
+  5. **지금이야 1.0.7 빌드** (App Store 1.0.6 출시 완료 + 위 버그 수정 반영 후)
+  6. **shared-price-checker workflow_dispatch 수동 테스트** (cron 활성화 전 dry-run)
+  7. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2)
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -176,6 +200,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → 풀 처리 dry-run 검증
 - [ ] **빌드**: 지금이야 1.0.7 (App Store 1.0.6 출시 완료 후 — `app.config.js` version/buildNumber/versionCode bump)
 - [ ] **활성화**: shared-price-check.yml + price-check.yml cron schedule 동시 주석 해제 — 선결: 아이고 실기기 테스트 통과 + §8-C 아이고 통합
+- [ ] **확정**: 2026-04-28 가격체크 + 알림 설계 — 동적 사이클(meta/stats 기반 sleep), 01:00~04:30 KST 제외, 알림 하루 3회 누적 발송 (시간대/무변동 알림/온보딩 문구 미확정)
+- [ ] **재논의 (2026-04-29)**: 알림 시간대 3회 확정 + 가격 무변동 알림 여부 + 온보딩 문구 + cron 최종 활성화 검토
+- [ ] **구현**: shared-price-checker 동적 사이클 — `meta/stats.sharedProductCount` 읽어서 sleep 자동 산출, 카테고리 갱신 시간대(01:00~04:30 KST) 제외
+- [ ] **버그**: 쿠팡 공유 → 지금이야 상품추가 화면 무한로딩 (iOS/Android 공통, 가끔 튕긴 후 재진입하면 됨)
+- [ ] **수정**: 설정화면 와우회원 관련 문구 제거 (Android/iOS 공통)
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
 - [ ] **추가**: `category-best-update.yml` 낮 2회 보조 업데이트 (현재 02:00 KST 1회만)
 - [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
@@ -188,11 +217,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 4. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
 5. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
 6. ~~**`category-best-update.yml` 낮 2회 보조 업데이트 추가**~~ — 폐기 (rate-limited 시 당일 중단 원칙, 019 §4-1·§5-2)
-7. **cron 재활성화** — 위 선결 항목(특히 §1 아이고 통합) 완료 후 확정 스케줄 적용:
-   - shared_products 가격체크: 04:30 ~ 01:00 KST 분당 40회 순차 (rate-limited 시 당일 중단)
+7. **cron 재활성화** — 위 선결 항목(특히 §1 아이고 통합 + 2026-04-29 알림 설계 확정) 완료 후 확정 스케줄 적용:
+   - shared_products 가격체크: 04:30 ~ 01:00 KST 분당 최대 40회, **동적 sleep**(`meta/stats.sharedProductCount` 기반), 카테고리 갱신 시간대(01:00~04:30) 제외 (rate-limited 시 당일 중단)
    - category_best 갱신: 02:00 KST 1회 (sleep 80초)
-   - 지금이야 알림: 11:30 / 20:30 KST
-   - 아이고 알림: 10:00 / 19:00 KST
+   - 알림: **하루 3회 고정 시간대 누적 발송** — 시간대 미확정 (2026-04-29 재논의)
 8. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
@@ -220,10 +248,14 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 
 ## 주요 기술 현황
 - 서버사이드 가격 체크 (Phase 3 신규, 019 §5-2): scripts/shared-price-checker/ — shared_products 풀 기반 cron
-  - 04:30~01:00 KST 분당 40회(sleep 1500ms) 순차, createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
+  - **(2026-04-28 설계 변경 예정)** 동적 사이클: `meta/stats.sharedProductCount` 기반 sleep 자동 산출, 분당 최대 40회 한도 유지, 가용시간 20.5h 내 자동 반복
+  - **카테고리 갱신 시간대 01:00~04:30 KST 제외** (category_best/baby/event cron 보호)
+  - 현재 코드는 정적 sleep 1500ms 고정 — 구현 후 §5-2 문서 갱신 필요
+  - createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
   - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색 → Expo 푸시
+  - 알림 발송: **하루 3회 고정 시간대 누적 발송** (시간대 미확정 — 2026-04-29 협의)
   - `.github/workflows/shared-price-check.yml`: 현재 workflow_dispatch만 활성, schedule 주석 (§8-D-2 활성화 대기)
-  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변
+  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변 + 2026-04-29 알림 설계 확정
 - 서버사이드 가격 체크 (legacy, Phase 3-C에서 폐기 예정): scripts/price-checker/ (파트너스 API 검색 → Firestore 업데이트 → Expo Push)
   - ✅ Puppeteer 삭제 → 파트너스 API searchProducts()로 교체 완료
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
@@ -304,7 +336,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 02:00 | 지금이야 | category_best (19개, sleep 80초) |
 | 03:00 | 아이고 | baby 3그룹 (소모품) |
 | 03:20 | 아이고 | baby 4그룹 (나머지) |
-| 04:30~01:00 | 지금이야 | shared_products 가격체크 (분당 40회 순차, 20.5h) |
+| 04:30~01:00 | 지금이야 | shared_products 가격체크 (분당 최대 40회, 동적 sleep, 20.5h, 01:00~04:30 제외) |
+| 미확정 (3회) | 지금이야+아이고 | 알림 발송 (누적된 가격 하락 모아서 발송, 2026-04-29 협의) |
 
 ### Firebase 공유 컬렉션 구조 (지금이야 + 아이고 양쪽 공유)
 - `category_best/{categoryId}` — **지금이야** cron 적재 (19개 카테고리 × 50 = 950 상품)
@@ -323,7 +356,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
-- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(shared_products 가격체크 04:30~01:00 KST 분당 40회 순차 + category_best 02:00 KST), 알림은 앱별 스케줄(지금이야 11:30/20:30, 아이고 10:00/19:00)
+- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(shared_products 가격체크 04:30~01:00 KST 분당 최대 40회 동적 sleep, 01:00~04:30 카테고리 시간대 제외 + category_best 02:00 KST), 알림은 **하루 3회 고정 시간대 누적 발송** (시간대 미확정, 2026-04-29 협의)
 - **공통 이슈**: 파트너스 실적 미집계(쿠팡 공유 링크 구조) — 아이고도 AQ-4로 동일 확인 → Firebase Functions Resolver(018) 해결책을 아이고도 동일 방식으로 적용 예정
 - **오늘 작업 이식 대기 (2026-04-24)**: 지금이야 Functions 3대 버그 수정(`e69d05e`)을 아이고에도 반영 — HTML `redirectWebUrl` 파싱, Secret `.trim()`, `request.auth` 검증, `allUsers:run.invoker`
 - **Firebase 프로젝트 통합 검토**: jigumiya 프로젝트 기반으로 아이고 통합 — **아이고 베타 출시 이후 진행 합의** (2026-04-20)
