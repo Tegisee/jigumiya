@@ -48,7 +48,8 @@ import {
 import { recordPriceDrop } from './price-drop.js';
 
 // ─── 설정 ───
-const SLEEP_MS = 1500;
+const DEFAULT_SLEEP_MS = 1500; // 분당 40회 (공식 한도 50회의 80%)
+const AVAILABLE_HOURS = 20.5; // 04:30 ~ 01:00 KST (카테고리 갱신 시간대 01:00~04:30 제외)
 const KST_OFFSET = 9 * 3600 * 1000;
 const PRICE_HISTORY_KEEP = 90;
 const ONE_DAY_MS = 24 * 3600 * 1000;
@@ -91,6 +92,38 @@ function isEveningTime(): boolean {
   if (hour === 19) return minute >= 30;
   if (hour === 20) return true;
   return false;
+}
+
+/**
+ * meta/stats.sharedProductCount 기반 동적 sleep 산출.
+ *  - 가용 20.5h를 N개 상품에 균등 분배 → ((20.5 * 60) / N) * 60 * 1000 ms
+ *  - 분당 40회 한도(1500ms 하한)로 클램프
+ *  - count=0/읽기 실패 시 기본값 유지
+ */
+async function computeDynamicSleep(): Promise<number> {
+  try {
+    const snap = await db.collection('meta').doc('stats').get();
+    const count =
+      (snap.data()?.sharedProductCount as number | undefined) ?? 0;
+    if (count <= 0) {
+      console.log(
+        `[Sleep] meta/stats.sharedProductCount=${count} → 기본값 ${DEFAULT_SLEEP_MS}ms`,
+      );
+      return DEFAULT_SLEEP_MS;
+    }
+    const calc = Math.floor(((AVAILABLE_HOURS * 60) / count) * 60 * 1000);
+    const sleepMs = Math.max(DEFAULT_SLEEP_MS, calc);
+    console.log(
+      `[Sleep] sharedProductCount=${count} 계산값=${calc}ms 최종=${sleepMs}ms (하한 ${DEFAULT_SLEEP_MS}ms)`,
+    );
+    return sleepMs;
+  } catch (e) {
+    console.warn(
+      `[Sleep] meta/stats 읽기 실패 → 기본값 ${DEFAULT_SLEEP_MS}ms`,
+      e,
+    );
+    return DEFAULT_SLEEP_MS;
+  }
 }
 
 /** map 안 timestamp 중 since 이상이 하나라도 있으면 true */
@@ -228,6 +261,8 @@ async function main() {
     'evening=' + eveningMode,
   );
 
+  const sleepMs = await computeDynamicSleep();
+
   const bestCache = await loadCategoryBestCache(db);
   console.log(`[SharedPriceChecker] category_best 캐시 ${bestCache.size}개`);
 
@@ -297,11 +332,11 @@ async function main() {
           rateLimited = true;
           break;
         }
-        await sleep(SLEEP_MS);
+        await sleep(sleepMs);
         continue;
       }
       newPrice = r.price;
-      await sleep(SLEEP_MS);
+      await sleep(sleepMs);
     }
 
     if (newPrice <= 0) continue;
