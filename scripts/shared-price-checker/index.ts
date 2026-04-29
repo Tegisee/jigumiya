@@ -48,8 +48,10 @@ import {
 import { recordPriceDrop } from './price-drop.js';
 
 // ─── 설정 ───
-const DEFAULT_SLEEP_MS = 1500; // 분당 40회 (공식 한도 50회의 80%)
-const AVAILABLE_HOURS = 20.5; // 04:30 ~ 01:00 KST (카테고리 갱신 시간대 01:00~04:30 제외)
+const DEFAULT_SLEEP_MS = 1500; // 분당 40회 (공식 한도 50회의 80%) — sleep 하한
+const DAILY_CAPACITY = 50_000; // 하루 처리 가능 상품 수 (분할 모드 진입 임계)
+const MAX_CYCLES = 144; // 일일 최대 사이클 (10분에 1회 == 24h × 6)
+const BUDGET_MS = 1230 * 60 * 1000; // 가용 20.5h ms (04:30~01:00 KST)
 const KST_OFFSET = 9 * 3600 * 1000;
 const PRICE_HISTORY_KEEP = 90;
 const ONE_DAY_MS = 24 * 3600 * 1000;
@@ -94,35 +96,108 @@ function isEveningTime(): boolean {
   return false;
 }
 
+interface CycleConfig {
+  totalCount: number; // shared_products 전체 수 (meta/stats 기준)
+  dailyCount: number; // 오늘 처리할 상품 수 (split 모드면 50,000)
+  cyclesPerDay: number; // 일일 사이클 수 (1~144)
+  sleepMs: number; // 호출 간 sleep (1500ms 하한)
+  startOffset: number; // 오늘 시작 offset (split 모드만 의미 있음)
+  needsSplit: boolean;
+}
+
 /**
- * meta/stats.sharedProductCount 기반 동적 sleep 산출.
- *  - 가용 20.5h를 N개 상품에 균등 분배 → ((20.5 * 60) / N) * 60 * 1000 ms
- *  - 분당 40회 한도(1500ms 하한)로 클램프
- *  - count=0/읽기 실패 시 기본값 유지
+ * meta/stats.sharedProductCount + lastCheckedOffset 기반 사이클 설정 산출.
+ *  - N=0 / 읽기 실패: dailyCount=0 (no-op)
+ *  - N > 50,000      : 분할 모드 — dailyCount=50,000, cycles=1
+ *  - 그 외           : cycles = max(1, min(144, ⌊49,200/N⌋)),
+ *                       sleep = max(1500, ⌊BUDGET_MS / (N×cycles)⌋)
  */
-async function computeDynamicSleep(): Promise<number> {
+async function computeCycleConfig(): Promise<CycleConfig> {
+  let count = 0;
+  let lastOffset = 0;
   try {
     const snap = await db.collection('meta').doc('stats').get();
-    const count =
-      (snap.data()?.sharedProductCount as number | undefined) ?? 0;
-    if (count <= 0) {
-      console.log(
-        `[Sleep] meta/stats.sharedProductCount=${count} → 기본값 ${DEFAULT_SLEEP_MS}ms`,
-      );
-      return DEFAULT_SLEEP_MS;
-    }
-    const calc = Math.floor(((AVAILABLE_HOURS * 60) / count) * 60 * 1000);
-    const sleepMs = Math.max(DEFAULT_SLEEP_MS, calc);
-    console.log(
-      `[Sleep] sharedProductCount=${count} 계산값=${calc}ms 최종=${sleepMs}ms (하한 ${DEFAULT_SLEEP_MS}ms)`,
-    );
-    return sleepMs;
+    const data = snap.data() ?? {};
+    count = (data.sharedProductCount as number | undefined) ?? 0;
+    lastOffset = (data.lastCheckedOffset as number | undefined) ?? 0;
   } catch (e) {
-    console.warn(
-      `[Sleep] meta/stats 읽기 실패 → 기본값 ${DEFAULT_SLEEP_MS}ms`,
-      e,
+    console.warn('[Cycle] meta/stats 읽기 실패 → no-op', e);
+    return {
+      totalCount: 0,
+      dailyCount: 0,
+      cyclesPerDay: 1,
+      sleepMs: DEFAULT_SLEEP_MS,
+      startOffset: 0,
+      needsSplit: false,
+    };
+  }
+
+  if (count <= 0) {
+    return {
+      totalCount: 0,
+      dailyCount: 0,
+      cyclesPerDay: 1,
+      sleepMs: DEFAULT_SLEEP_MS,
+      startOffset: 0,
+      needsSplit: false,
+    };
+  }
+
+  if (count > DAILY_CAPACITY) {
+    const startOffset = ((lastOffset % count) + count) % count;
+    return {
+      totalCount: count,
+      dailyCount: DAILY_CAPACITY,
+      cyclesPerDay: 1,
+      sleepMs: Math.max(
+        DEFAULT_SLEEP_MS,
+        Math.floor(BUDGET_MS / DAILY_CAPACITY),
+      ),
+      startOffset,
+      needsSplit: true,
+    };
+  }
+
+  const cycleDurationMin = count / 40;
+  const cyclesPerDay = Math.max(
+    1,
+    Math.min(MAX_CYCLES, Math.floor(1230 / cycleDurationMin)),
+  );
+  const sleepMs = Math.max(
+    DEFAULT_SLEEP_MS,
+    Math.floor(BUDGET_MS / (count * cyclesPerDay)),
+  );
+  return {
+    totalCount: count,
+    dailyCount: count,
+    cyclesPerDay,
+    sleepMs,
+    startOffset: 0,
+    needsSplit: false,
+  };
+}
+
+/** 01:00 ≤ KST < 04:30 진입 시 04:30 KST까지 sleep */
+async function waitIfInBlockedZone(): Promise<void> {
+  const { hour, minute } = getKstHourMinute();
+  const inBlocked = (hour >= 1 && hour < 4) || (hour === 4 && minute < 30);
+  if (!inBlocked) return;
+  const nowKst = new Date(Date.now() + KST_OFFSET);
+  const targetKstMs = Date.UTC(
+    nowKst.getUTCFullYear(),
+    nowKst.getUTCMonth(),
+    nowKst.getUTCDate(),
+    4,
+    30,
+    0,
+    0,
+  );
+  const waitMs = targetKstMs - nowKst.getTime();
+  if (waitMs > 0) {
+    console.log(
+      `[BlockedZone] 01:00~04:30 KST 진입, ${(waitMs / 60000).toFixed(1)}분 대기`,
     );
-    return DEFAULT_SLEEP_MS;
+    await sleep(waitMs);
   }
 }
 
@@ -261,13 +336,33 @@ async function main() {
     'evening=' + eveningMode,
   );
 
-  const sleepMs = await computeDynamicSleep();
+  const config = await computeCycleConfig();
+  const { sleepMs } = config;
 
   const bestCache = await loadCategoryBestCache(db);
   console.log(`[SharedPriceChecker] category_best 캐시 ${bestCache.size}개`);
 
   const all = await fetchAllSharedProducts();
   console.log(`[SharedPriceChecker] shared_products 풀 ${all.length}개`);
+
+  // slice 산출: split 모드는 startOffset부터 dailyCount개 (래핑), 그 외는 전체
+  let slice: SharedDoc[];
+  if (config.needsSplit && all.length > 0) {
+    const start = config.startOffset % all.length;
+    const end = start + config.dailyCount;
+    slice =
+      end <= all.length
+        ? all.slice(start, end)
+        : [...all.slice(start), ...all.slice(0, end - all.length)];
+  } else {
+    slice = all;
+  }
+  const sliceEndOffset = config.startOffset + slice.length;
+  console.log(
+    `[Cycle] N=${config.totalCount} daily=${config.dailyCount} cycles=${config.cyclesPerDay} ` +
+      `sleep=${sleepMs}ms offset=${config.startOffset}~${Math.max(config.startOffset, sliceEndOffset - 1)} ` +
+      `split=${config.needsSplit}`,
+  );
 
   const events: RawEvents = {
     drops: [],
@@ -283,8 +378,12 @@ async function main() {
   let apiCalls = 0;
   let priceDrops = 0;
   let rateLimited = false;
+  let processedCount = 0; // slice 내 평가 완료 갯수 (rate-limited 시 미증가)
 
-  for (const item of all) {
+  for (let i = 0; i < slice.length; i++) {
+    await waitIfInBlockedZone();
+    processedCount = i + 1; // 낙관적 — rate-limited break 시 i로 롤백
+    const item = slice[i];
     scanned++;
     const data = item.data;
     const productId = data.productId as string | undefined;
@@ -330,6 +429,7 @@ async function main() {
         if (r.rateLimited) {
           console.warn('[SharedPriceChecker] rate-limited 즉시 종료');
           rateLimited = true;
+          processedCount = i; // 현재 item은 미평가 — 롤백
           break;
         }
         await sleep(sleepMs);
@@ -606,9 +706,26 @@ async function main() {
 
   await cleanupInvalidTokens(invalidTokens);
 
+  // split 모드: 처리한 마지막 index 기준 lastCheckedOffset 갱신
+  if (config.needsSplit && config.totalCount > 0 && processedCount > 0) {
+    const nextOffset =
+      (config.startOffset + processedCount) % config.totalCount;
+    try {
+      await db
+        .collection('meta')
+        .doc('stats')
+        .update({ lastCheckedOffset: nextOffset });
+      console.log(
+        `[Cycle] lastCheckedOffset 갱신: ${config.startOffset} → ${nextOffset} (processed=${processedCount})`,
+      );
+    } catch (e) {
+      console.warn('[Cycle] lastCheckedOffset 갱신 실패:', e);
+    }
+  }
+
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `[SharedPriceChecker] 완료 scanned=${scanned} skipZero=${skipZero} skipToday=${skipToday} ` +
+    `[SharedPriceChecker] 완료 scanned=${scanned} processed=${processedCount} skipZero=${skipZero} skipToday=${skipToday} ` +
       `cacheHits=${cacheHits} apiCalls=${apiCalls} drops=${priceDrops} ups=${events.ups.length} ` +
       `targets=${events.targets.length} bc10=${events.broadcastTier10.length} bc20=${events.broadcastTier20.length} ` +
       `notif=${payloads.length} rateLimited=${rateLimited} elapsed=${elapsed}s`,
