@@ -12,6 +12,7 @@ rules_version = '2';
 //   - Phase 3-A: shared_products, price_drops 규칙 추가 (017.md §8-4)
 //   - 019     : category_best 규칙 추가 (019.md §2-3)
 //   - 019 통합: category_best_baby, event_best 규칙 추가 (아이고 공유 컬렉션)
+//   - 019 통합: price_drops_baby 규칙 추가 (아이고 공유 컬렉션)
 // ─────────────────────────────────────────────────────────────
 
 service cloud.firestore {
@@ -83,6 +84,15 @@ service cloud.firestore {
     //
     // TTL 없음 (무제한 보관) — 스토리지 비용 대비 피드 가치 우선
     match /price_drops/{dropId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // ─── 가격 하락 피드 — 아이고 baby (019 통합 신규) ───
+    // price_drops_baby/{date}
+    // - read : 모든 인증 유저 (아이고 가격변동 탭 조회)
+    // - write: 서버 전용 (Admin SDK bypass)
+    match /price_drops_baby/{date} {
       allow read: if request.auth != null;
       allow write: if false;
     }
