@@ -38,7 +38,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 |------|------|------|--------|
 | 017 | 앱 구조 개편 (3탭 + shared_products + 피드) | 🔄 3-D MVP 완료 (2026-04-19) | 017_앱구조개편_Phase3.md |
 | 018 | Firebase Functions 파트너스 링크 Resolver | ✅ 실기기 검증 완료 (2026-04-24), 실적 검증 대기 | 018_FirebaseFunctions_Resolver.md |
-| 019 | SharedProducts + 카테고리 베스트 통합 설계 | 🔄 §8-A 구현 완료 (2026-04-26), §8-B 통합 완료, §8-C 대기 | 019_Phase3_SharedProducts.md |
+| 019 | SharedProducts + 카테고리 베스트 통합 설계 | 🔄 §8-A/§8-B 완료, §12 알림 7종 + §5-2 동적 사이클 고도화 (2026-04-30), §8-C 대기 | 019_Phase3_SharedProducts.md |
 
 **진행 경과**:
 - Phase 3-A 완료 (2026-04-18): shared_products 이중 쓰기 + 중복 가드 검증 성공
@@ -150,19 +150,98 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - 온보딩 문구 수정 필요 (실제 횟수 확정 후 — `app/onboarding/*` 또는 안내 텍스트 위치 점검)
 
   **내일(2026-04-29) 재논의 항목**:
-  - [ ] 알림 발송 시간대 3회 확정 (지금이야/아이고 분리 vs 공통)
-  - [ ] 가격 변동 없을 때 알림 여부 (현재 legacy는 `no_change` 발송 — 폐기 또는 유지)
-  - [ ] 온보딩 문구 최종 확정
+  - [x] 알림 발송 시간대 3회 확정 → **폐기, 즉시 발송 + morning/evening 시간대 분기로 변경 (2026-04-30)**
+  - [x] 가격 변동 없을 때 알림 여부 → **evening_no_change 1회로 흡수 (2026-04-30)**
+  - [x] 온보딩 문구 최종 확정 → **"가격 변동 시 즉시 알림" 적용 (2026-04-30, ffa5154)**
   - [ ] 전체 cron 스케줄 최종 검토 후 활성화 (§8-D-2)
 
+- 2026-04-30 종합 작업 (BUG-42 + 알림 7종 + 동적 사이클 + 1.0.7 빌드):
+
+  ① **BUG-42: 쿠팡 공유 → 상품추가 무한로딩 방어** (커밋 `5c0b5da`)
+    - 원인: `handleNext`의 await 체인(callable → fetch → deeplink)에 timeout 부재 → Functions cold start 또는 fetch hang 시 30초 scrape 타이머가 시작조차 안 돼 무한 로딩으로 표출. iOS ShareIntent 직후 더 자주 발생.
+    - `_layout.tsx`: 인증 완료 후 `warmupResolveAffiliate()` fire-and-forget — sentinel `https://__warmup__.local/` URL은 functions/index.ts:256에서 `coupang.com` 미포함 시 즉시 early return → 쿠팡 API 미호출(Rate Limit 0), 컨테이너 init만 트리거
+    - `services/firebase.ts`: `warmupResolveAffiliate()` 신설
+    - `app/modal/add-item.tsx`: `withTimeout()` (Promise.race) + `fetchWithTimeout()` (AbortController) 헬퍼 추가
+      - `callResolveAffiliate` 8s timeout (handleNext + handleSave 양쪽)
+      - `link.coupang.com` fallback fetch ×2 각 5s AbortController
+      - `generateDeepLink` 5s timeout (handleNext + handleSave 양쪽)
+
+  ② **온보딩 문구 갱신** (커밋 `ffa5154`)
+    - `components/OnboardingScreen.tsx:46` Step 1 feature 문구
+    - "매일 3회 자동 가격 확인" → "가격 변동 시 즉시 알림"
+
+  ③ **shared-price-checker 알림 7종 시스템** (커밋 `ee60516`)
+    - notifier.ts `PushPayload` discriminated union (broadcast 2단 분리, 총 7타입):
+      - `morning_greeting` — 07:00~09:00 KST 진입 시 활성 사용자 전체
+      - `price_drop_summary` — 가격 하락, 사용자당 1개 합산 (24h 통과 productId 0개 시 skip)
+      - `target_reached` — 목표가 도달, 상품별 1개 (즉시성 우선, drop_summary 중복 제외)
+      - `price_up_summary` — 가격 상승, 사용자당 1개 합산
+      - `evening_no_change` — 19:30~21:00 KST 진입 시, 그날 가격 알림(drop/up/target) 미수신자만
+      - `broadcast_drop10` — 10%~19% 하락, 활성 사용자 전체
+      - `broadcast_drop20` — 20% 이상 폭락, 활성 사용자 전체
+    - 각 type 3개 후보 문구 랜덤 선택, `{N}` placeholder로 합산 갯수 표시
+    - `data.screen` 라우팅: detail(상품 1개) / home(다수) / price-drops(broadcast)
+    - 폐기: 기존 AlertType (`lowest_ever`, `lowest_no_target`, `no_change`) — summary/evening에 흡수
+    - 24h 중복 방지: `users/{uid}.lastNotifications` 단일 map (morning?: number / evening?: number / priceDrop+priceUp+targetReached?: { [productId]: number } / broadcast?: { tier10?: number, tier20?: number })
+    - flush 단계 분리: 스캔 사이클에서 `events.{drops, ups, targets, broadcastTier10, broadcastTier20}` 메모리 누적 → 끝에서 일괄 flush. 사용자당 합산 = `perUserDrops`/`perUserUps` Map. 24h 통과 productId 0개면 push 자체 skip. dotted-path FieldValue update로 일괄 반영.
+
+  ④ **shared-price-checker 동적 사이클 고도화** (커밋 `7d75473` 1차 → `b625f07` 확정)
+    - `computeCycleConfig()` — N에 따른 cycles/sleep/split 자동 산출:
+      - N=0/read 실패: dailyCount=0 (no-op)
+      - N≤50,000: cycles=max(1, min(144, ⌊49,200/N⌋)), sleep=max(1500, ⌊BUDGET_MS/(N×cycles)⌋)
+      - N>50,000: 분할 모드 — dailyCount=50,000, cycles=1, sleep=1500ms
+    - 분할 슬라이스 (split mode): meta/stats.lastCheckedOffset 기준 startOffset → 50,000개 (래핑 지원)
+    - Offset 진행도 보존 (option b): processedCount 매 iteration 시작 시 i+1 낙관 증가, rate-limited break 시 i로 롤백 (현재 item 미평가). 종료 시 `(startOffset + processedCount) % totalCount` → `lastCheckedOffset` 갱신. 부분 진행 보존 → 다음 run 이어서 처리.
+    - `waitIfInBlockedZone()` — 매 iteration 직전 KST 시각 체크. 01:00 ≤ now < 04:30 진입 시 04:30 KST까지 sleep (카테고리 갱신 시간대 충돌 방지).
+    - 시작 로그: `[Cycle] N=37 daily=37 cycles=144 sleep=13851ms offset=0~36 split=false` 또는 `N=120000 daily=50000 cycles=1 sleep=1500ms offset=50000~99999 split=true`
+    - 검증 매트릭스: N=37 → 144cycles/13.85s, N=1000 → 49cycles/1.5s, N=49,200 → 1cycle/1.5s, N=50,000+ → split
+
+  ⑤ **firestore.rules `price_drops_baby` 규칙 추가 + 배포** (커밋 `c7fbfb1`)
+    - `price_drops_baby/{date}`: read 인증 / write 차단 (서버 전용, 아이고 공유 컬렉션)
+    - `firebase deploy --only firestore:rules --project jigumiya` 정상 배포
+
+  ⑥ **앱 알림 라우팅 분기 추가** (커밋 `c66489f`)
+    - `services/notifications.ts`: `getItemIdFromNotification` → `resolveNotificationRoute` 로 교체 (경로 문자열 직접 반환)
+    - `app/_layout.tsx`: foreground / killed-state 두 리스너 동일 헬퍼 사용
+    - 라우팅: `screen='price-drops'` → `/price-drops` / `screen='home'` → `/` / `screen='detail'+itemId` → `/detail/{itemId}` / 레거시(itemId 단독) → `/detail/{itemId}`
+    - **검증 미완료**: `/price-drops` 경로가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 라우팅되는지 실기기 확인 필요
+
+  ⑦ **두 레포 Public 전환** (사용자 직접 작업, 2026-04-30)
+    - jigumiya, aigo 양쪽 GitHub 레포 Public 전환 → **GitHub Actions 무제한 무료** 혜택 확보
+    - 사전 보안 점검 (Public 전환 안전성):
+      - .gitignore: `.env`, `*-firebase-adminsdk-*.json`, `service-account*.json`, `google-services.json`, `GoogleService-Info.plist`, `*.jks/*.p8/*.p12/*.key` 모두 등록
+      - 하드코딩 secret 점검: services/firebase.ts apiKey는 Firebase 정책상 secret 아님(클라이언트 식별자), Coupang은 Functions Secret Manager + EAS Secrets 빌드 주입, scripts/* 는 GitHub Actions secrets 사용
+      - 워크플로우: 모든 env 변수 `${{ secrets.X }}` 사용 ✅
+      - Git history: `BEGIN PRIVATE KEY` / `private_key` 없음 ✅
+
+  ⑧ **Google Cloud API Key 제한** (사용자 직접, 2026-04-30)
+    - GoogleService-Info.plist / google-services.json 의 Firebase apiKey 노출 후속 보강
+    - iOS apiKey: Bundle ID `com.jigumiya.app` 제한
+    - Android apiKey: 패키지명 `com.jigumiya.app` + SHA-1 제한
+    - 권장 보강 1차 적용 (App Check는 별도 검토)
+
+  ⑨ **GoogleService-Info.plist untrack** (커밋 `d491305`)
+    - `git rm --cached jigumiya/GoogleService-Info.plist` — 로컬 파일은 빌드용 유지
+    - 이미 .gitignore에 등록되어 있으나 과거 추적된 상태로 남아있어 정리
+    - .easignore에서 제외 안 됨 → EAS 빌드 시 그대로 포함됨
+    - git history에는 이전 커밋(initial commit `bc71610`)에 남아 있음 — Firebase 정책상 secret 아니어서 무해
+
+  ⑩ **1.0.7 (bn41/vc41) 빌드 완료** (2026-04-30)
+    - `app.config.js`: version 1.0.7 / ios.buildNumber 41 / android.versionCode 41
+    - `android/app/build.gradle`: versionCode 41 / versionName "1.0.7" 동기화
+    - 산출물:
+      - Android: `~/jigumiya/builds/android/jigumiya-1.0.7-41.aab`
+      - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.7-41.ipa`
+    - 1.0.7 주요 변경: BUG-42 무한로딩 방어 + 온보딩 문구 갱신 + 알림 라우팅 분기 (서버측 7종 알림은 cron 활성화 시 효과)
+
 - 다음:
-  1. **2026-04-29 가격 체크 + 알림 설계 4개 항목 확정** (시간대/무변동 알림/온보딩/cron 활성화 검토)
-  2. **shared-price-checker 동적 사이클 구현** — `meta/stats.sharedProductCount` 기반 sleep 동적 계산 + 01:00~04:30 KST 제외 로직 + 19 §5 docs 갱신
-  3. **지금이야 버그 수정**: ①쿠팡 공유 → 상품추가 화면 무한로딩 (iOS/Android 공통, 가끔 튕긴 후 재진입하면 됨), ②설정화면 와우회원 관련 문구 제거 (Android/iOS)
-  4. **아이고 실기기 테스트 통과** 후 cron 전체 활성화 (지금이야 + 아이고 동시 반영)
-  5. **지금이야 1.0.7 빌드** (App Store 1.0.6 출시 완료 + 위 버그 수정 반영 후)
-  6. **shared-price-checker workflow_dispatch 수동 테스트** (cron 활성화 전 dry-run)
-  7. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2)
+  1. **1.0.7 Play Console 업로드** + **App Store 심사 제출** (Transporter 수동, `eas submit` 금지)
+  2. **`meta/config_jigumiya.minRequiredVersion = "1.0.7"` 콘솔 갱신** (사용자 직접) — 1.0.7 출시 후 적용
+  3. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 실기기 확인. 미동작 시 `/(tabs)/price-drops` 절대경로 또는 navigate API로 변경 검토
+  4. **shared-price-checker workflow_dispatch 수동 dry-run** (cron 활성화 전, 동적 사이클 + 7종 알림 실제 동작 검증)
+  5. **아이고 실기기 테스트 통과** + 아이고 Functions 수정 이식 (지금이야 `e69d05e` 내용)
+  6. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2) — 선결: §8-C 아이고 통합 + 4번 dry-run 통과
+  7. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -197,31 +276,46 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **수정**: minPrice 50,000 → 30,000 sync (CLAUDE.md + 019 docs, event_best 호출 기준)
 - [x] **추가**: 019 §10 운영 정책 신규 섹션 (cron 활성화/비활성/사고 대응)
 - [x] **버그수정**: 카테고리 베스트 + 자주사는 탭 — firestore.rules 미배포 → CLI 배포로 복구 (재발 방지: 콘솔 직접 편집 금지)
-- [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → 풀 처리 dry-run 검증
-- [ ] **빌드**: 지금이야 1.0.7 (App Store 1.0.6 출시 완료 후 — `app.config.js` version/buildNumber/versionCode bump)
-- [ ] **활성화**: shared-price-check.yml + price-check.yml cron schedule 동시 주석 해제 — 선결: 아이고 실기기 테스트 통과 + §8-C 아이고 통합
-- [ ] **확정**: 2026-04-28 가격체크 + 알림 설계 — 동적 사이클(meta/stats 기반 sleep), 01:00~04:30 KST 제외, 알림 하루 3회 누적 발송 (시간대/무변동 알림/온보딩 문구 미확정)
-- [ ] **재논의 (2026-04-29)**: 알림 시간대 3회 확정 + 가격 무변동 알림 여부 + 온보딩 문구 + cron 최종 활성화 검토
-- [ ] **구현**: shared-price-checker 동적 사이클 — `meta/stats.sharedProductCount` 읽어서 sleep 자동 산출, 카테고리 갱신 시간대(01:00~04:30 KST) 제외
-- [ ] **버그**: 쿠팡 공유 → 지금이야 상품추가 화면 무한로딩 (iOS/Android 공통, 가끔 튕긴 후 재진입하면 됨)
-- [ ] **수정**: 설정화면 와우회원 관련 문구 제거 (Android/iOS 공통)
+- [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → 풀 처리 dry-run 검증 (동적 사이클 + 7종 알림)
+- [x] **빌드**: 지금이야 1.0.7 (bn41/vc41) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-04-30)
+- [ ] **배포**: 1.0.7 Play Console 업로드 + App Store 심사 제출 (Transporter 수동) + `meta/config_jigumiya.minRequiredVersion = "1.0.7"` 콘솔 갱신
+- [ ] **활성화**: shared-price-check.yml + price-check.yml cron schedule 동시 주석 해제 — 선결: 아이고 실기기 테스트 통과 + §8-C 아이고 통합 + dry-run 통과
+- [x] **확정**: 2026-04-28 가격체크 + 알림 설계 → 동적 사이클 + 즉시 발송(가격 변동 시) + morning/evening 시간대 분기로 변경 (2026-04-30 재설계)
+- [x] **재논의 (2026-04-29~30)**: 알림 시간대 3회 → 즉시 발송 + morning(07-09)/evening(19:30-21) 시간대 분기, 가격 무변동 알림은 evening_no_change로 흡수, 온보딩 문구 "가격 변동 시 즉시 알림"
+- [x] **구현**: shared-price-checker 동적 사이클 — `computeCycleConfig()` 신설 (cycles=min(144, ⌊49,200/N⌋), sleep=max(1500, ⌊BUDGET_MS/(N×cycles)⌋)) + N>50,000 분할 모드 + offset 진행도 보존 + Block zone 대기 (01:00~04:30 KST) (2026-04-30, b625f07)
+- [x] **버그수정 (BUG-42)**: 쿠팡 공유 → 지금이야 상품추가 화면 무한로딩 — Functions 워밍업 + callable 8s/fetch 5s/deeplink 5s timeout (2026-04-30, 5c0b5da)
+- [x] **확인**: 설정화면 와우회원 관련 문구 → 이미 `648409e` (Phase 3-D, 2026-04-19)에서 제거 완료된 stale TODO 확인 (2026-04-30)
+- [x] **구현**: shared-price-checker 알림 7종 + 24h 중복 방지 (`users/{uid}.lastNotifications`) + 시간대 분기 (2026-04-30, ee60516)
+- [x] **수정**: 온보딩 문구 — "매일 3회 자동 가격 확인" → "가격 변동 시 즉시 알림" (2026-04-30, ffa5154)
+- [x] **추가**: firestore.rules `price_drops_baby/{date}` 규칙 + 배포 (2026-04-30, c7fbfb1)
+- [x] **추가**: 앱 알림 라우팅 분기 — `resolveNotificationRoute` 헬퍼 (price-drops/home/detail) (2026-04-30, c66489f)
+- [ ] **검증**: 앱 측 price-drops 탭 라우팅 — `router.push('/price-drops')`가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 실기기 확인
+- [x] **전환**: 두 레포 Public 전환 (jigumiya + aigo) — GitHub Actions 무제한 무료 혜택 (2026-04-30, 사용자 직접)
+- [x] **보안**: Public 전환 안전성 점검 — .gitignore/.easignore 검증, 하드코딩 secret 0건, 워크플로우 secrets 사용, git history clean (2026-04-30)
+- [x] **보강**: Google Cloud API Key 제한 — iOS Bundle ID + Android 패키지명/SHA-1 (2026-04-30, 사용자 직접)
+- [x] **정리**: GoogleService-Info.plist untrack (2026-04-30, d491305) — 로컬 파일 유지, 추적만 해제
+- [ ] **검토**: Firebase App Check 활성화 (Public repo 환경 추가 보강, apiKey 노출 환경에서 unauthorized client SDK 사용 차단)
+- [ ] **별도 PR**: category-best 브로드캐스트 큐 — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
-- [ ] **추가**: `category-best-update.yml` 낮 2회 보조 업데이트 (현재 02:00 KST 1회만)
 - [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
 - [ ] **선결**: 아이고 Firebase → jigumiya 통합 (베타 출시 이후, §8-C)
 
-## 다음 작업 순서 (2026-04-26 이후)
-1. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
-2. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
-3. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
-4. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-5. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
-6. ~~**`category-best-update.yml` 낮 2회 보조 업데이트 추가**~~ — 폐기 (rate-limited 시 당일 중단 원칙, 019 §4-1·§5-2)
-7. **cron 재활성화** — 위 선결 항목(특히 §1 아이고 통합 + 2026-04-29 알림 설계 확정) 완료 후 확정 스케줄 적용:
-   - shared_products 가격체크: 04:30 ~ 01:00 KST 분당 최대 40회, **동적 sleep**(`meta/stats.sharedProductCount` 기반), 카테고리 갱신 시간대(01:00~04:30) 제외 (rate-limited 시 당일 중단)
-   - category_best 갱신: 02:00 KST 1회 (sleep 80초)
-   - 알림: **하루 3회 고정 시간대 누적 발송** — 시간대 미확정 (2026-04-29 재논의)
-8. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
+## 다음 작업 순서 (2026-04-30 이후)
+1. **1.0.7 Play Console 업로드 + App Store 심사 제출** — Transporter 수동 (`eas submit` 금지). 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.7"` 갱신
+2. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.7 실기기 확인. 미동작 시 절대경로/navigate API로 변경
+3. **shared-price-checker workflow_dispatch 수동 dry-run** — 동적 사이클(N에 따른 cycles/sleep) + 7종 알림 + 24h 중복 방지 + Block zone 대기 + offset 진행도 실제 동작 검증
+4. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
+5. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
+6. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
+7. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.7 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+8. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
+9. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
+10. **cron 재활성화** (§8-D-2) — 선결: 3번 dry-run 통과 + 4번 아이고 통합 + 9번 broadcasts 큐. 확정 스케줄:
+    - shared_products 가격체크: 04:30 ~ 01:00 KST, **동적 sleep**(`meta/stats.sharedProductCount` 기반), 분할 모드(N>50,000) + offset 진행도 보존 + Block zone 대기 (01:00~04:30 자동 sleep)
+    - category_best 갱신: 02:00 KST 1회 (sleep 80초)
+    - 알림: **즉시 발송 (가격 변동 감지 즉시)** + morning(07:00~09:00 KST 진입 시) / evening(19:30~21:00 KST 그날 가격 알림 미수신자) — 24h 중복 방지 가드
+11. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
+12. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -231,10 +325,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인: 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.6 배포 진행 중 (2026-04-26 기준)
-- iOS: **1.0.6 buildNumber 40 TestFlight 업로드 + App Store 심사 제출 완료** (2026-04-26)
-- Android: **1.0.6 versionCode 40 Play Console 내부 테스트 → 프로덕션 승급 완료** (2026-04-26)
-- 1.0.6 주요 변경: 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
+## 현재 상태: 1.0.7 빌드 완료 (2026-04-30 기준)
+- iOS: **1.0.7 buildNumber 41 IPA 산출** (`~/jigumiya/builds/ios/jigumiya-1.0.7-41.ipa`) — Transporter 업로드 + App Store 심사 제출 대기
+- Android: **1.0.7 versionCode 41 AAB 산출** (`~/jigumiya/builds/android/jigumiya-1.0.7-41.aab`) — Play Console 업로드 대기
+- 1.0.7 주요 변경: BUG-42 무한로딩 방어 (Functions 워밍업 + callable 8s/fetch 5s/deeplink 5s timeout) + 온보딩 문구 갱신 + 알림 라우팅 분기 (price-drops/home/detail) — 서버측 7종 알림은 cron 활성화 시 효과
+- 1.0.6 (bn40/vc40) 배포 완료 (2026-04-26): iOS App Store 심사 제출 + Android 프로덕션 승급. 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
 - 1.0.5 (bn38/vc38) 배포 완료 (2026-04-24): Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
 - `eas.json` `appVersionSource: local` + `autoIncrement` 제거 → `app.config.js`가 버전 source of truth
 - `673c601`: `generateDeepLink` 조건 `/vp/|/vm/` → `coupang.com`로 확장 (Functions fallback 경로 유지 위해 원복 안 함 — Functions 실패 시 client fallback이 link.coupang.com/a/... 직접 시도)
@@ -243,19 +338,27 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 1.0.4 미배포: Phase 3-D MVP 변경(3탭/자주사는/피드 배너, 뱃지 초기화, 홈/상세 하트 토글, 스와이프 삭제, 10개 제한)은 1.0.5에 통합되어 사용자에게 전달됨
 - 카테고리: 쇼핑/유틸리티, 연령등급: 4+
 - 개인정보처리방침: https://dafamstore.tistory.com/9
-- GitHub 레포: https://github.com/Tegisee/jigumiya (private)
+- GitHub 레포: https://github.com/Tegisee/jigumiya (**Public** 전환 완료, 2026-04-30 — GitHub Actions 무제한 무료 혜택)
 - 빌드 전 개발 서버(npx expo start)로 테스트 먼저 진행할 것
 
 ## 주요 기술 현황
-- 서버사이드 가격 체크 (Phase 3 신규, 019 §5-2): scripts/shared-price-checker/ — shared_products 풀 기반 cron
-  - **(2026-04-28 설계 변경 예정)** 동적 사이클: `meta/stats.sharedProductCount` 기반 sleep 자동 산출, 분당 최대 40회 한도 유지, 가용시간 20.5h 내 자동 반복
-  - **카테고리 갱신 시간대 01:00~04:30 KST 제외** (category_best/baby/event cron 보호)
-  - 현재 코드는 정적 sleep 1500ms 고정 — 구현 후 §5-2 문서 갱신 필요
+- 서버사이드 가격 체크 (Phase 3 신규, 019 §5-2 + §12): scripts/shared-price-checker/ — shared_products 풀 기반 cron
+  - **동적 사이클 고도화 완료 (2026-04-30, b625f07)**: `computeCycleConfig()` — N에 따라 cycles=max(1, min(144, ⌊49,200/N⌋)), sleep=max(1500, ⌊BUDGET_MS/(N×cycles)⌋) 자동 산출
+  - **분할 모드** (N>50,000): dailyCount=50,000, cycles=1, `meta/stats.lastCheckedOffset` 기반 슬라이스 + 래핑 지원
+  - **Offset 진행도 보존**: processedCount 매 iteration 시작 시 i+1 낙관 증가, rate-limited break 시 i 롤백. 종료 시 `(startOffset + processedCount) % totalCount`로 갱신 → 부분 진행 보존, 다음 run 이어서 처리
+  - **Block zone 대기**: `waitIfInBlockedZone()` 매 iteration 직전 KST 체크. 01:00 ≤ now < 04:30 진입 시 04:30 KST까지 sleep (카테고리 갱신 시간대 충돌 방지)
   - createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
-  - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색 → Expo 푸시
-  - 알림 발송: **하루 3회 고정 시간대 누적 발송** (시간대 미확정 — 2026-04-29 협의)
+  - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색
+  - **알림 7종 시스템 (2026-04-30, ee60516)**: morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20
+    - 각 type 3개 후보 문구 랜덤 선택, `{N}` placeholder
+    - 사용자당 합산 (drop/up summary), target 통과 시 drop summary에서 중복 제외
+    - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기, evening은 그날 가격 알림 미수신자만
+    - 24h 중복 방지: `users/{uid}.lastNotifications` (morning/evening/priceDrop[pid]/priceUp[pid]/targetReached[pid]/broadcast.tier10|tier20), dotted-path FieldValue update 일괄 반영
+    - flush 단계 분리: 스캔 사이클에서 `events.{drops, ups, targets, broadcastTier10, broadcastTier20}` 메모리 누적 → 끝에서 일괄 발송
+    - 24h 통과 productId 0개면 push 자체 skip
+  - 시작 로그 형식: `[Cycle] N=37 daily=37 cycles=144 sleep=13851ms offset=0~36 split=false`
   - `.github/workflows/shared-price-check.yml`: 현재 workflow_dispatch만 활성, schedule 주석 (§8-D-2 활성화 대기)
-  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변 + 2026-04-29 알림 설계 확정
+  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변 + workflow_dispatch dry-run 통과 + category-best broadcasts 큐 (별도 PR)
 - 서버사이드 가격 체크 (legacy, Phase 3-C에서 폐기 예정): scripts/price-checker/ (파트너스 API 검색 → Firestore 업데이트 → Expo Push)
   - ✅ Puppeteer 삭제 → 파트너스 API searchProducts()로 교체 완료
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
@@ -336,8 +439,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 | 02:00 | 지금이야 | category_best (19개, sleep 80초) |
 | 03:00 | 아이고 | baby 3그룹 (소모품) |
 | 03:20 | 아이고 | baby 4그룹 (나머지) |
-| 04:30~01:00 | 지금이야 | shared_products 가격체크 (분당 최대 40회, 동적 sleep, 20.5h, 01:00~04:30 제외) |
-| 미확정 (3회) | 지금이야+아이고 | 알림 발송 (누적된 가격 하락 모아서 발송, 2026-04-29 협의) |
+| 04:30~01:00 | 지금이야 | shared_products 가격체크 (동적 사이클: cycles/sleep 자동 산출, N>50,000 분할 + offset, Block zone 자동 대기) |
+| 즉시 (가격 변동 시) | 지금이야 | 알림 7종 발송 (24h 중복 방지) — morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기 자동 판정 |
 
 ### Firebase 공유 컬렉션 구조 (지금이야 + 아이고 양쪽 공유)
 - `category_best/{categoryId}` — **지금이야** cron 적재 (19개 카테고리 × 50 = 950 상품)
@@ -356,7 +459,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 동일 개발자, 동일 기술 스택 (React Native, Expo, Firebase)
 - 한 앱에서 해결한 문제/노하우는 다른 앱에 이식 가능
 - 로컬 빌드 세팅, Firebase 구조, 파트너스 API 등 공유
-- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(shared_products 가격체크 04:30~01:00 KST 분당 최대 40회 동적 sleep, 01:00~04:30 카테고리 시간대 제외 + category_best 02:00 KST), 알림은 **하루 3회 고정 시간대 누적 발송** (시간대 미확정, 2026-04-29 협의)
+- **cron 현재 비활성 (2026-04-24 야간)**: 재시도 루프 제거(지금이야 `46c20e5`, 아이고 `840f1ea`) 후 Phase 3 `shared_products` 설계 반영해 재활성화 예정. 이전 시간대 분리 스케줄(지금이야 08/12/20 ↔ 아이고 07/09/11/13/16/19)은 폐기 — 향후 공유상품 갱신은 **jigumiya 레포 단일 cron**(shared_products 가격체크 04:30~01:00 KST 동적 사이클(cycles/sleep 자동), 01:00~04:30 Block zone 자동 대기 + category_best 02:00 KST), 알림은 **즉시 발송 7종** (가격 변동 감지 즉시 + morning/evening 시간대 분기, 24h 중복 방지 — 2026-04-30 확정)
 - **공통 이슈**: 파트너스 실적 미집계(쿠팡 공유 링크 구조) — 아이고도 AQ-4로 동일 확인 → Firebase Functions Resolver(018) 해결책을 아이고도 동일 방식으로 적용 예정
 - **오늘 작업 이식 대기 (2026-04-24)**: 지금이야 Functions 3대 버그 수정(`e69d05e`)을 아이고에도 반영 — HTML `redirectWebUrl` 파싱, Secret `.trim()`, `request.auth` 검증, `allUsers:run.invoker`
 - **Firebase 프로젝트 통합 검토**: jigumiya 프로젝트 기반으로 아이고 통합 — **아이고 베타 출시 이후 진행 합의** (2026-04-20)
