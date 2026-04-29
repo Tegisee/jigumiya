@@ -89,6 +89,16 @@ export async function callResolveAffiliate(
   }
 }
 
+// sentinel은 functions/src/index.ts:256에서 coupang.com 미포함 시 즉시 early return →
+// 쿠팡 API 미호출(Rate Limit 0), 컨테이너 init만 트리거.
+export async function warmupResolveAffiliate(): Promise<void> {
+  try {
+    await resolveAffiliateCallable({ sharedUrl: 'https://__warmup__.local/' });
+  } catch {
+    // silent — cold start만 트리거하면 됨
+  }
+}
+
 /** Anonymous Auth 로그인 (자동) — AsyncStorage 복원 완료 대기 후 판단 */
 export async function signInAnonymously(): Promise<string | null> {
   try {

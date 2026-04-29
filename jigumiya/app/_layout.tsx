@@ -6,7 +6,7 @@ import * as Notifications from 'expo-notifications';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { theme } from '../constants/theme';
 import { initCoupangApi } from '../services/config';
-import { signInAnonymously } from '../services/firebase';
+import { signInAnonymously, warmupResolveAffiliate } from '../services/firebase';
 import {
   registerForPushNotifications,
   getItemIdFromNotification,
@@ -77,6 +77,8 @@ export default function RootLayout() {
 
     (async () => {
       await signInAnonymously();
+      // Functions 컨테이너 워밍업 — fire-and-forget, 쿠팡 공유 첫 호출 cold start 제거
+      warmupResolveAffiliate();
       await registerForPushNotifications();
     })();
 

@@ -29,6 +29,29 @@ function extractUrl(text: string): string {
   return match ? match[0] : text.trim();
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout:${label}`)), ms),
+    ),
+  ]);
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** URL에서 productId, vendorItemId 추출 */
 function extractIds(url: string): { productId?: string; vendorItemId?: string } {
   const pidMatch = url.match(/\/products\/(\d+)/);
@@ -125,7 +148,14 @@ export default function AddItemModal() {
     let resolved = parsedUrl;
     let affiliate = parsedUrl;
 
-    const functionsResult = await callResolveAffiliate(parsedUrl);
+    const functionsResult = await withTimeout(
+      callResolveAffiliate(parsedUrl),
+      8000,
+      'resolveAffiliate',
+    ).catch((e) => {
+      console.warn('[AddItem] callResolveAffiliate timeout/error:', e);
+      return { ok: false as const, error: 'timeout', detail: String(e) };
+    });
     if (functionsResult.ok) {
       resolved = functionsResult.originalUrl;
       affiliate = functionsResult.shortenUrl;
@@ -134,19 +164,23 @@ export default function AddItemModal() {
       console.warn('[AddItem] Functions 실패 → client fallback:', functionsResult.error, functionsResult.detail);
       if (parsedUrl.includes('link.coupang.com')) {
         try {
-          const res = await fetch(parsedUrl, { redirect: 'manual' });
+          const res = await fetchWithTimeout(parsedUrl, { redirect: 'manual' }, 5000);
           const location = res.headers.get('location');
           if (location && location.includes('coupang.com')) {
             resolved = location;
           } else {
-            const res2 = await fetch(parsedUrl, { redirect: 'follow' });
+            const res2 = await fetchWithTimeout(parsedUrl, { redirect: 'follow' }, 5000);
             if (res2.url && res2.url.includes('coupang.com')) resolved = res2.url;
           }
         } catch {}
       }
       if (hasCoupangApiKeys() && resolved.includes('coupang.com')) {
         try {
-          const deepLink = await generateDeepLink(resolved);
+          const deepLink = await withTimeout(
+            generateDeepLink(resolved),
+            5000,
+            'deeplink',
+          );
           if (deepLink?.shortenUrl) {
             affiliate = deepLink.shortenUrl;
             console.log('[AddItem] client 제휴 링크:', deepLink.shortenUrl.slice(0, 60));
@@ -256,14 +290,25 @@ export default function AddItemModal() {
     // handleNext에서 제휴 링크 생성 실패했으면 scraped.resolvedUrl로 재시도 (Functions → client fallback)
     if (affiliateUrl === parsedUrlRef.current && resolvedUrl.includes('coupang.com')) {
       console.log('[AddItem] Functions 재시도:', resolvedUrl.slice(0, 60));
-      const retryResult = await callResolveAffiliate(resolvedUrl);
+      const retryResult = await withTimeout(
+        callResolveAffiliate(resolvedUrl),
+        8000,
+        'resolveAffiliate-retry',
+      ).catch((e) => {
+        console.warn('[AddItem] callResolveAffiliate 재시도 timeout/error:', e);
+        return { ok: false as const, error: 'timeout', detail: String(e) };
+      });
       if (retryResult.ok) {
         affiliateUrl = retryResult.shortenUrl;
         console.log('[AddItem] Functions 재시도 성공:', affiliateUrl.slice(0, 60));
       } else if (hasCoupangApiKeys()) {
         try {
           console.log('[AddItem] client 딥링크 재시도:', resolvedUrl.slice(0, 60));
-          const deepLink = await generateDeepLink(resolvedUrl);
+          const deepLink = await withTimeout(
+            generateDeepLink(resolvedUrl),
+            5000,
+            'deeplink-retry',
+          );
           if (deepLink?.shortenUrl) {
             affiliateUrl = deepLink.shortenUrl;
             console.log('[AddItem] client 제휴 링크 성공:', affiliateUrl.slice(0, 60));
