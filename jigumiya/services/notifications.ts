@@ -55,12 +55,25 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
 }
 
-/** 알림 클릭 시 itemId 추출 */
-export function getItemIdFromNotification(
+/**
+ * 알림 클릭 시 라우팅할 경로를 결정.
+ *  - data.screen === 'price-drops' → /price-drops 탭
+ *  - data.screen === 'home'        → 홈 (/)
+ *  - data.screen === 'detail' + itemId → /detail/{itemId}
+ *  - 하위 호환: screen 없이 itemId만 → /detail/{itemId}
+ */
+export function resolveNotificationRoute(
   response: Notifications.NotificationResponse,
 ): string | null {
-  const data = response.notification.request.content.data;
-  return (data?.itemId as string) ?? null;
+  const data = response.notification.request.content.data ?? {};
+  const screen = data.screen as string | undefined;
+  const itemId = data.itemId as string | undefined;
+
+  if (screen === 'price-drops') return '/price-drops';
+  if (screen === 'home') return '/';
+  if (screen === 'detail' && itemId) return `/detail/${itemId}`;
+  if (itemId) return `/detail/${itemId}`;
+  return null;
 }
 
 /** 앱 아이콘/알림 센터 뱃지 카운트 0으로 초기화 */

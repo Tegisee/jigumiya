@@ -9,7 +9,7 @@ import { initCoupangApi } from '../services/config';
 import { signInAnonymously, warmupResolveAffiliate } from '../services/firebase';
 import {
   registerForPushNotifications,
-  getItemIdFromNotification,
+  resolveNotificationRoute,
   clearBadgeCount,
 } from '../services/notifications';
 import { checkForUpdate } from '../services/updateChecker';
@@ -95,17 +95,15 @@ export default function RootLayout() {
     // 알림 클릭 리스너
     notifListenerRef.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
-        const itemId = getItemIdFromNotification(response);
-        if (itemId) {
-          router.push(`/detail/${itemId}`);
-        }
+        const route = resolveNotificationRoute(response);
+        if (route) router.push(route as never);
       });
 
     // 앱 종료 상태에서 알림 클릭으로 열린 경우
     Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) {
-        const itemId = getItemIdFromNotification(response);
-        if (itemId) router.push(`/detail/${itemId}`);
+        const route = resolveNotificationRoute(response);
+        if (route) router.push(route as never);
       }
     });
 
