@@ -106,22 +106,27 @@ interface CycleConfig {
 }
 
 /**
- * meta/stats.sharedProductCount + lastCheckedOffset 기반 사이클 설정 산출.
- *  - N=0 / 읽기 실패: dailyCount=0 (no-op)
+ * 사이클 설정 산출 — N은 shared_products 실제 fetch 길이를 진실 원천으로 사용.
+ * meta/stats는 lastCheckedOffset(split 진행도)만 read.
+ *
+ *  - N=0             : dailyCount=0 (no-op)
  *  - N > 50,000      : 분할 모드 — dailyCount=50,000, cycles=1
  *  - 그 외           : cycles = max(1, min(144, ⌊49,200/N⌋)),
  *                       sleep = max(1500, ⌊BUDGET_MS / (N×cycles)⌋)
+ *
+ * 카운터 분리 운영(`meta/stats.sharedProductCount`)은 별도 갱신 메커니즘 필요 — 본 함수는
+ * 카운터 미존재/0 케이스에서도 자가 보정되도록 actualCount를 직접 받음.
  */
-async function computeCycleConfig(): Promise<CycleConfig> {
-  let count = 0;
+async function computeCycleConfig(actualCount: number): Promise<CycleConfig> {
   let lastOffset = 0;
   try {
     const snap = await db.collection('meta').doc('stats').get();
-    const data = snap.data() ?? {};
-    count = (data.sharedProductCount as number | undefined) ?? 0;
-    lastOffset = (data.lastCheckedOffset as number | undefined) ?? 0;
+    lastOffset = (snap.data()?.lastCheckedOffset as number | undefined) ?? 0;
   } catch (e) {
-    console.warn('[Cycle] meta/stats 읽기 실패 → no-op', e);
+    console.warn('[Cycle] meta/stats lastCheckedOffset 읽기 실패 → 0', e);
+  }
+
+  if (actualCount <= 0) {
     return {
       totalCount: 0,
       dailyCount: 0,
@@ -132,21 +137,10 @@ async function computeCycleConfig(): Promise<CycleConfig> {
     };
   }
 
-  if (count <= 0) {
+  if (actualCount > DAILY_CAPACITY) {
+    const startOffset = ((lastOffset % actualCount) + actualCount) % actualCount;
     return {
-      totalCount: 0,
-      dailyCount: 0,
-      cyclesPerDay: 1,
-      sleepMs: DEFAULT_SLEEP_MS,
-      startOffset: 0,
-      needsSplit: false,
-    };
-  }
-
-  if (count > DAILY_CAPACITY) {
-    const startOffset = ((lastOffset % count) + count) % count;
-    return {
-      totalCount: count,
+      totalCount: actualCount,
       dailyCount: DAILY_CAPACITY,
       cyclesPerDay: 1,
       sleepMs: Math.max(
@@ -158,18 +152,18 @@ async function computeCycleConfig(): Promise<CycleConfig> {
     };
   }
 
-  const cycleDurationMin = count / 40;
+  const cycleDurationMin = actualCount / 40;
   const cyclesPerDay = Math.max(
     1,
     Math.min(MAX_CYCLES, Math.floor(1230 / cycleDurationMin)),
   );
   const sleepMs = Math.max(
     DEFAULT_SLEEP_MS,
-    Math.floor(BUDGET_MS / (count * cyclesPerDay)),
+    Math.floor(BUDGET_MS / (actualCount * cyclesPerDay)),
   );
   return {
-    totalCount: count,
-    dailyCount: count,
+    totalCount: actualCount,
+    dailyCount: actualCount,
     cyclesPerDay,
     sleepMs,
     startOffset: 0,
@@ -336,14 +330,33 @@ async function main() {
     'evening=' + eveningMode,
   );
 
-  const config = await computeCycleConfig();
+  // 시작 시점이 Block zone(01:00~04:30 KST) 내부면 즉시 graceful 종료.
+  // sleep 대기는 빌링 낭비 — 다음 cron(04:30 정시)이 알아서 트리거.
+  // 사이클 진행 중 Block zone 진입은 별도(`waitIfInBlockedZone`)로 처리.
+  {
+    const { hour, minute } = getKstHourMinute();
+    const inBlocked =
+      (hour >= 1 && hour < 4) || (hour === 4 && minute < 30);
+    if (inBlocked) {
+      const hh = String(hour).padStart(2, '0');
+      const mm = String(minute).padStart(2, '0');
+      console.log(
+        `[BlockedZone] 시작 시점이 01:00~04:30 KST 내부 (${hh}:${mm}) — 즉시 종료, 04:30 cron 대기`,
+      );
+      return;
+    }
+  }
+
+  // shared_products 풀을 cycle config 산출 전에 fetch — 실제 size를 진실 원천으로 사용.
+  // meta/stats.sharedProductCount(자동 갱신 미구현)에 종속되지 않게 자가 보정.
+  const all = await fetchAllSharedProducts();
+  console.log(`[SharedPriceChecker] shared_products 풀 ${all.length}개`);
+
+  const config = await computeCycleConfig(all.length);
   const { sleepMs } = config;
 
   const bestCache = await loadCategoryBestCache(db);
   console.log(`[SharedPriceChecker] category_best 캐시 ${bestCache.size}개`);
-
-  const all = await fetchAllSharedProducts();
-  console.log(`[SharedPriceChecker] shared_products 풀 ${all.length}개`);
 
   // slice 산출: split 모드는 startOffset부터 dailyCount개 (래핑), 그 외는 전체
   let slice: SharedDoc[];
