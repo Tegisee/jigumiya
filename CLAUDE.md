@@ -261,15 +261,31 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
     - 1.0.8 주요 변경: 골드박스 → 오늘의 특가 데이터 교체 + 하트 버튼 누락 fix + backfillProductIds 자가 치유
     - 1.0.7은 미배포 — 1.0.8에 1.0.7 변경(BUG-42 무한로딩 방어 + 온보딩 문구 + 알림 라우팅 분기)이 모두 통합되어 사용자에게 1.0.8로 전달
 
+  ④ **shared-price-check.yml cron 활성화** (커밋 `46ccb4c`)
+    - `'30 19 * * *'` (= 04:30 KST) schedule 주석 해제 → **매일 1회 자동 실행**
+    - 첫 자동 트리거 예상: 2026-05-02 04:30 KST
+    - legacy `price-check.yml` 비활성 유지 (1.0.6+ 사용자는 shared_products 경로, Phase 3-C에서 정식 폐기)
+    - 호출량 검증 (커밋 시점 N=37 기준): 분당 ~4.33회 = 검색 한도 50/분의 **8.7%** 사용. sleep 하한 1500ms로 분당 절대 40회 상한. 검색 한도 80% 사용 의도(20% burst 마진)
+
+  ⑤ **shared-price-checker N=0 자가 치유 + Block zone 시작 시점 graceful exit** (커밋 `c0d8859`)
+    - 문제 1: cron 첫 가동 로그 `[Cycle] N=0 daily=0 cycles=1`. 원인 — `computeCycleConfig`가 `meta/stats.sharedProductCount`만 read, 카운터 자동 갱신 미구현(019 §3-4 명세만 있고 코드 없음) + 운영자 콘솔 미생성 케이스에서 count=0 fallback. 실제 shared_products 35개 무시
+    - 해결 1: `computeCycleConfig(actualCount)` 시그니처 변경 — `shared_products` 풀 fetch 길이를 진실 원천으로 사용. `meta/stats`는 `lastCheckedOffset`(split 진행도)만 read. `fetchAllSharedProducts()`를 cycle config 산출 전으로 이동
+    - 문제 2: Block zone 81.8분 sleep 빌링 낭비. 원인 — workflow_dispatch 수동 실행이 [01:00, 04:30) KST 내부에 트리거되면 첫 iteration `waitIfInBlockedZone()`이 04:30까지 sleep → 러너 ~80분 idle
+    - 해결 2: `main` 진입 직후 Block zone 체크 → 진입 시 즉시 graceful return (다음 cron이 04:30 정시에 트리거). 사이클 진행 중 진입은 기존 동작(04:30까지 sleep + offset 보존) 유지
+
+  ⑥ **1.0.8 배포 완료**
+    - iOS App Store: 1.0.8 (bn42) Transporter 업로드 + 심사 제출 완료
+    - Android Play Console: 1.0.8 (vc42) **프로덕션 업로드 완료**
+    - 다음 단계: 심사 통과 + Play Store 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신
+
 - 다음:
-  1. **1.0.8 Play Console 업로드** + **App Store 심사 제출** (Transporter 수동, `eas submit` 금지)
-  2. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** (사용자 직접) — 1.0.8 출시 후 적용
-  3. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 실기기 확인. 미동작 시 `/(tabs)/price-drops` 절대경로 또는 navigate API로 변경 검토
-  4. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지 + 신규 추가 상품에서 하트 안정적으로 표시되는지 확인
-  5. **shared-price-checker workflow_dispatch 수동 dry-run** (cron 활성화 전, 동적 사이클 + 7종 알림 실제 동작 검증)
-  6. **아이고 실기기 테스트 통과** + 아이고 Functions 수정 이식 (지금이야 `e69d05e` 내용)
-  7. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2) — 선결: §8-C 아이고 통합 + 5번 dry-run 통과
-  8. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
+  1. **cron 첫 자동 실행 점검** (2026-05-02 04:30 KST) — GitHub Actions 로그 확인: `[Cycle] N=35 daily=35 cycles=144 sleep=14628ms` 형식. rate-limited 흔적 없음, Block zone 자연 sleep, 알림 발송 카운터 확인
+  2. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 분기에서 `FieldValue.increment(+1)`, 삭제 흐름에서 `-1`. 운영 모니터링 카운터 정확성 확보 + N≥50,000 split 모드 진입 판정 신뢰 확보 (현재는 cron 측이 자가 보정)
+  3. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포의 `price-check.yml`/`shared-price-check.yml` 검토 + 활성화. 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식
+  4. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인
+  5. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지 + 신규 추가 상품에서 하트 안정적으로 표시되는지 확인
+  6. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
+  7. **legacy `price-check.yml` 정식 폐기** (Phase 3-C) — workflow_dispatch만 활성 상태로 두고 향후 파일 삭제 검토
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -307,7 +323,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → 풀 처리 dry-run 검증 (동적 사이클 + 7종 알림)
 - [x] **빌드**: 지금이야 1.0.7 (bn41/vc41) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-04-30)
 - [ ] **배포**: 1.0.7 Play Console 업로드 + App Store 심사 제출 (Transporter 수동) + `meta/config_jigumiya.minRequiredVersion = "1.0.7"` 콘솔 갱신
-- [ ] **활성화**: shared-price-check.yml + price-check.yml cron schedule 동시 주석 해제 — 선결: 아이고 실기기 테스트 통과 + §8-C 아이고 통합 + dry-run 통과
+<!-- 2026-05-01: shared-price-check.yml만 활성화, legacy price-check.yml은 폐기 예정. 새 [x] 항목 참조 -->
 - [x] **확정**: 2026-04-28 가격체크 + 알림 설계 → 동적 사이클 + 즉시 발송(가격 변동 시) + morning/evening 시간대 분기로 변경 (2026-04-30 재설계)
 - [x] **재논의 (2026-04-29~30)**: 알림 시간대 3회 → 즉시 발송 + morning(07-09)/evening(19:30-21) 시간대 분기, 가격 무변동 알림은 evening_no_change로 흡수, 온보딩 문구 "가격 변동 시 즉시 알림"
 - [x] **구현**: shared-price-checker 동적 사이클 — `computeCycleConfig()` 신설 (cycles=min(144, ⌊49,200/N⌋), sleep=max(1500, ⌊BUDGET_MS/(N×cycles)⌋)) + N>50,000 분할 모드 + offset 진행도 보존 + Block zone 대기 (01:00~04:30 KST) (2026-04-30, b625f07)
@@ -330,26 +346,31 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **구현**: 골드박스 → 오늘의 특가 데이터 교체 — price_drops 24h 상위 N + category_best fallback (1h AsyncStorage 캐시), 골드박스 API 호출 0건 (2026-05-01, dd15624)
 - [x] **버그수정**: 하트 버튼 누락 — productId 추출 다중 패턴(/products/, productId=, pId%3D, pId=) + URL 후보 다중 시도(scraped/resolved/affiliate/parsed) + backfillProductIds 자가 치유 액션 (2026-05-01, dd15624)
 - [x] **빌드**: 지금이야 1.0.8 (bn42/vc42) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-05-01)
-- [ ] **배포**: 1.0.8 Play Console 업로드 + App Store 심사 제출 (Transporter 수동) + `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신
+- [x] **배포**: 1.0.8 App Store 심사 제출 + Play Console 프로덕션 업로드 (2026-05-01)
+- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 — 심사 통과 + Play Store 승급 후
 - [ ] **검증**: 1.0.8 실기기 — 하트 백필 동작(기존 누락 상품 복구) + 신규 추가 시 하트 안정성 + 오늘의 특가 빈 상태 안내 + drop/best 카드 클릭 affiliate 변환
+- [x] **활성화**: `shared-price-check.yml` cron `'30 19 * * *'` (= 04:30 KST) schedule 주석 해제 (2026-05-01, 46ccb4c)
+- [x] **버그수정**: cron 첫 가동 N=0 자가 치유 + Block zone 시작 시점 graceful exit — `computeCycleConfig(actualCount)` 시그니처 변경 + main 진입 직후 Block zone 즉시 종료 (2026-05-01, c0d8859)
+- [ ] **점검**: cron 첫 자동 실행 (2026-05-02 04:30 KST) — N=35 정상 인식 + rate-limited 흔적 없음 + Block zone 자연 sleep + 알림 발송 카운터
+- [ ] **별도 PR**: `meta/stats.sharedProductCount` 자동 갱신 — `services/firebase.ts:upsertSharedProduct` 신규 분기 +1, 삭제 -1. 운영 모니터링 카운터 정확성
+- [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
 
 ## 다음 작업 순서 (2026-05-01 이후)
-1. **1.0.8 Play Console 업로드 + App Store 심사 제출** — Transporter 수동 (`eas submit` 금지). 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신
-2. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인. 미동작 시 절대경로/navigate API로 변경
-3. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 ① 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지(`backfillProductIds`) ② 신규 추가 상품 4~5개 연속 추가 시 모두 하트 표시되는지(`extractProductId` 다중 패턴 + URL 후보 다중 시도)
-4. **shared-price-checker workflow_dispatch 수동 dry-run** — 동적 사이클(N에 따른 cycles/sleep) + 7종 알림 + 24h 중복 방지 + Block zone 대기 + offset 진행도 실제 동작 검증
-5. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
-6. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
-7. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
-8. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.8 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-9. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
-10. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
-11. **cron 재활성화** (§8-D-2) — 선결: 4번 dry-run 통과 + 5번 아이고 통합 + 10번 broadcasts 큐. 확정 스케줄:
-    - shared_products 가격체크: 04:30 ~ 01:00 KST, **동적 sleep**(`meta/stats.sharedProductCount` 기반), 분할 모드(N>50,000) + offset 진행도 보존 + Block zone 대기 (01:00~04:30 자동 sleep)
-    - category_best 갱신: 02:00 KST 1회 (sleep 80초)
-    - 알림: **즉시 발송 (가격 변동 감지 즉시)** + morning(07:00~09:00 KST 진입 시) / evening(19:30~21:00 KST 그날 가격 알림 미수신자) — 24h 중복 방지 가드
-12. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
-13. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
+1. **cron 첫 자동 실행 점검** (2026-05-02 04:30 KST) — GitHub Actions 로그: `[Cycle] N=35 daily=35 cycles=144 sleep=14628ms` 형식. rate-limited 흔적 / Block zone 자연 sleep / 알림 발송 카운터 / Expo Push 응답 확인
+2. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 흐름 `-1`. 운영 모니터링 카운터 정확성 + N≥50,000 split 모드 진입 판정 신뢰
+3. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포 워크플로우 검토 + 활성화. 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식 (HTML redirectWebUrl 파싱 + Secret `.trim()`)
+4. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인. 미동작 시 절대경로/navigate API로 변경
+5. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 ① 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지(`backfillProductIds`) ② 신규 추가 상품 4~5개 연속 추가 시 모두 하트 표시되는지(`extractProductId` 다중 패턴 + URL 후보 다중 시도)
+6. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** — 1.0.8 심사 통과 + Play Store 프로덕션 승급 확인 후
+7. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
+8. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
+9. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
+10. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.8 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+11. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
+12. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
+13. **legacy `price-check.yml` 정식 폐기** (Phase 3-C) — workflow_dispatch만 활성 상태로 두고 향후 파일 삭제 검토
+14. **가격변동 탭 실데이터 검증** — cron 가동 후 `recordPriceDrop` 기록 + UI 표시 확인
+15. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -359,10 +380,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인: 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.8 빌드 완료 (2026-05-01 기준)
-- iOS: **1.0.8 buildNumber 42 IPA 산출** (`~/jigumiya/builds/ios/jigumiya-1.0.8-42.ipa`) — Transporter 업로드 + App Store 심사 제출 대기
-- Android: **1.0.8 versionCode 42 AAB 산출** (`~/jigumiya/builds/android/jigumiya-1.0.8-42.aab`) — Play Console 업로드 대기
+## 현재 상태: 1.0.8 배포 진행 중 (2026-05-01 기준)
+- iOS: **App Store 심사 제출 완료** (1.0.8 buildNumber 42, Transporter 수동) — 심사 결과 대기
+- Android: **Play Console 프로덕션 업로드 완료** (1.0.8 versionCode 42) — 단계별 출시 진행
 - 1.0.8 주요 변경: 골드박스 API 호출 완전 제거 → **오늘의 특가**(`price_drops` 24h 상위 N + `category_best` fallback 1h AsyncStorage 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**(홈 mount + syncFromFirestore 직후 1회)
+- 서버 cron 활성화: `shared-price-check.yml` schedule `'30 19 * * *'` (= 04:30 KST) **활성** — 첫 자동 트리거 2026-05-02 04:30 KST. 동적 사이클 + 7종 알림 + 24h 가드 + Block zone + offset 진행도 + N=0 자가 치유 모두 코드 반영
 - 1.0.7 (bn41/vc41) 미배포 — 1.0.8에 통합되어 사용자에게는 1.0.8로 전달 (1.0.7 변경: BUG-42 무한로딩 방어 + 온보딩 문구 갱신 + 알림 라우팅 분기)
 - 1.0.6 (bn40/vc40) 배포 완료 (2026-04-26): iOS App Store 심사 제출 + Android 프로덕션 승급. 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
 - 1.0.5 (bn38/vc38) 배포 완료 (2026-04-24): Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
@@ -392,8 +414,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
     - flush 단계 분리: 스캔 사이클에서 `events.{drops, ups, targets, broadcastTier10, broadcastTier20}` 메모리 누적 → 끝에서 일괄 발송
     - 24h 통과 productId 0개면 push 자체 skip
   - 시작 로그 형식: `[Cycle] N=37 daily=37 cycles=144 sleep=13851ms offset=0~36 split=false`
-  - `.github/workflows/shared-price-check.yml`: 현재 workflow_dispatch만 활성, schedule 주석 (§8-D-2 활성화 대기)
-  - 활성화 선결: §8-C 아이고 통합 + 파트너스 문의 답변 + workflow_dispatch dry-run 통과 + category-best broadcasts 큐 (별도 PR)
+  - `.github/workflows/shared-price-check.yml`: **schedule `'30 19 * * *'` (= 04:30 KST) 활성** (2026-05-01, 46ccb4c). 첫 자동 트리거 2026-05-02 04:30 KST
+  - **N=0 자가 치유 + Block zone 시작 시점 graceful exit** (2026-05-01, c0d8859): `computeCycleConfig(actualCount)` — `meta/stats.sharedProductCount` 자동 갱신 미구현 환경 자가 보정. main 진입 직후 [01:00, 04:30) 시 즉시 종료
+  - 후속 운영 항목: 첫 자동 실행 점검(2026-05-02 04:30 KST) + `meta/stats.sharedProductCount` 자동 갱신(별도 PR) + category-best broadcasts 큐(별도 PR) + 아이고 cron 활성화(별도 작업)
 - 서버사이드 가격 체크 (legacy, Phase 3-C에서 폐기 예정): scripts/price-checker/ (파트너스 API 검색 → Firestore 업데이트 → Expo Push)
   - ✅ Puppeteer 삭제 → 파트너스 API searchProducts()로 교체 완료
   - ✅ GitHub Actions 정상 실행 확인 (Access Denied 해결)
