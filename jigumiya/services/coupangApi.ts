@@ -126,65 +126,6 @@ export async function searchProducts(
   }
 }
 
-// ─── 골드박스 API ───
-
-const GOLDBOX_PATH =
-  '/v2/providers/affiliate_open_api/apis/openapi/products/goldbox';
-
-export interface GoldboxProduct {
-  productId: number;
-  productName: string;
-  productPrice: number;
-  productImage: string;
-  productUrl: string;
-  categoryName: string;
-  isRocket: boolean;
-  isFreeShipping: boolean;
-}
-
-/** 골드박스(오늘의 특가) 상품 목록 조회 */
-export async function fetchGoldbox(
-  subId?: string,
-): Promise<GoldboxProduct[]> {
-  if (!hasCoupangApiKeys()) return [];
-
-  try {
-    const query = subId ? `subId=${subId}` : '';
-    const authorization = generateAuthorization('GET', GOLDBOX_PATH, query);
-    const url = query
-      ? `${BASE_URL}${GOLDBOX_PATH}?${query}`
-      : `${BASE_URL}${GOLDBOX_PATH}`;
-
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: authorization,
-        'Content-Type': 'application/json;charset=UTF-8',
-      },
-    });
-
-    const json = await res.json();
-    if (json.rCode === '0' && json.data) {
-      const items = Array.isArray(json.data) ? json.data : json.data.productData || [];
-      return items.slice(0, 10).map((p: any) => ({
-        productId: p.productId,
-        productName: p.productName,
-        productPrice: p.productPrice,
-        productImage: p.productImage,
-        productUrl: p.productUrl,
-        categoryName: p.categoryName || '',
-        isRocket: p.isRocket || false,
-        isFreeShipping: p.isFreeShipping || false,
-      }));
-    }
-    console.warn('[CoupangAPI] 골드박스 조회 실패:', json.rCode, json.rMessage);
-    return [];
-  } catch (e) {
-    console.warn('[CoupangAPI] 골드박스 요청 실패:', e);
-    return [];
-  }
-}
-
 // ─── 카테고리 베스트 API ───
 
 const BEST_CATEGORIES_PATH =
@@ -256,9 +197,42 @@ export async function fetchBestCategories(
   }
 }
 
-/** URL에서 productId 추출 */
+/**
+ * URL에서 productId 추출 (다중 패턴 대응)
+ *
+ * 매칭 패턴:
+ *   - /products/{id}            (vp/vm 정상 URL)
+ *   - ?productId={id}           (쿼리)
+ *   - pId%3D{id} / ?pId={id}    (단축/리다이렉트 페이지에 노출되는 변형)
+ *
+ * 단축 URL(`link.coupang.com/a/...`)은 본문 fetch 없이는 productId 노출 안 됨 → null.
+ */
 export function extractProductId(url: string): string | null {
-  const match = url.match(/\/products\/(\d+)/);
-  return match ? match[1] : null;
+  if (!url) return null;
+  const patterns = [
+    /\/products\/(\d+)/,
+    /[?&]productId=(\d+)/,
+    /pId%3D(\d+)/i,
+    /[?&]pId=(\d+)/,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** URL에서 vendorItemId 추출 (쿼리 + URL-encoded 변형) */
+export function extractVendorItemId(url: string): string | null {
+  if (!url) return null;
+  const patterns = [
+    /[?&]vendorItemId=(\d+)/,
+    /vendorItemId%3D(\d+)/i,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
 }
 

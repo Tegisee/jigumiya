@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View,
@@ -19,17 +19,32 @@ import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { ProductCard } from '../../components/ProductCard';
 import PriceChecker from '../../components/PriceChecker';
-import { fetchGoldbox, hasCoupangApiKeys, generateDeepLink, type GoldboxProduct } from '../../services/coupangApi';
+import { hasCoupangApiKeys, generateDeepLink } from '../../services/coupangApi';
+import {
+  subscribePriceDrops,
+  fetchAllCategoryBest,
+} from '../../services/firebase';
+import type { PriceDrop, BestProductItem } from '../../types';
 import { getAppShareMessage, STORE_LINKS } from '../../services/config';
+
+const DEALS_TARGET = 20;
+const BEST_POOL_CACHE_KEY = 'home-deals-best-pool';
+const BEST_POOL_CACHE_TTL_MS = 60 * 60 * 1000; // 1h
+const BEST_POOL_PER_CATEGORY = 5; // 19 × 5 = 95 후보
+
+type DealItem =
+  | { type: 'drop'; data: PriceDrop }
+  | { type: 'best'; data: BestProductItem };
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { trackedItems, syncFromFirestore } = useAppStore();
+  const { trackedItems, syncFromFirestore, backfillProductIds } = useAppStore();
   const items = trackedItems;
   const appStateRef = useRef(AppState.currentState);
   const [checkActive, setCheckActive] = useState(false);
   const lastCheckRef = useRef(0);
-  const [goldbox, setGoldbox] = useState<GoldboxProduct[]>([]);
+  const [drops, setDrops] = useState<PriceDrop[] | null>(null);
+  const [bestPool, setBestPool] = useState<BestProductItem[] | null>(null);
 
   useEffect(() => {
     if (lastCheckRef.current === 0) {
@@ -38,6 +53,9 @@ export default function HomeScreen() {
       setTimeout(() => setCheckActive(false), 120000);
     }
 
+    // productId 누락 항목 자가 치유 (단축 URL resolve 실패로 하트 버튼 사라진 케이스 복구)
+    backfillProductIds();
+
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         syncFromFirestore();
@@ -45,23 +63,108 @@ export default function HomeScreen() {
       appStateRef.current = nextState;
     });
 
-    // 골드박스 로드 (캐시 우선 → API 갱신)
-    AsyncStorage.getItem('goldbox-cache').then((cached) => {
-      if (cached) {
-        try { setGoldbox(JSON.parse(cached)); } catch {}
-      }
-    });
-    if (hasCoupangApiKeys()) {
-      fetchGoldbox().then((data) => {
-        if (data.length > 0) {
-          setGoldbox(data);
-          AsyncStorage.setItem('goldbox-cache', JSON.stringify(data)).catch(() => {});
-        }
-      }).catch(() => {});
-    }
-
     return () => sub.remove();
-  }, [syncFromFirestore]);
+  }, [syncFromFirestore, backfillProductIds]);
+
+  // 오늘의 특가: price_drops 24h 구독
+  useEffect(() => {
+    const unsub = subscribePriceDrops((next) => setDrops(next), 30, 24);
+    return unsub;
+  }, []);
+
+  // 오늘의 특가 fallback: category_best 풀 (1h AsyncStorage 캐시)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(BEST_POOL_CACHE_KEY);
+        if (raw) {
+          const cached = JSON.parse(raw) as { ts: number; pool: BestProductItem[] };
+          if (
+            cached?.pool?.length &&
+            Date.now() - cached.ts < BEST_POOL_CACHE_TTL_MS
+          ) {
+            if (!cancelled) setBestPool(cached.pool);
+            return;
+          }
+        }
+      } catch {}
+      try {
+        const cats = await fetchAllCategoryBest();
+        const pool: BestProductItem[] = [];
+        for (const cat of cats) {
+          const top = (cat.products ?? []).slice(0, BEST_POOL_PER_CATEGORY);
+          pool.push(...top);
+        }
+        if (!cancelled) setBestPool(pool);
+        AsyncStorage.setItem(
+          BEST_POOL_CACHE_KEY,
+          JSON.stringify({ ts: Date.now(), pool }),
+        ).catch(() => {});
+      } catch {
+        if (!cancelled) setBestPool([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const deals = useMemo<DealItem[]>(() => {
+    const sortedDrops = drops
+      ? [...drops].sort((a, b) => a.dropRate - b.dropRate)
+      : [];
+    const dropDeals: DealItem[] = sortedDrops
+      .slice(0, DEALS_TARGET)
+      .map((d) => ({ type: 'drop', data: d }));
+    const used = new Set(dropDeals.map((d) => d.data.productId));
+    const remain = DEALS_TARGET - dropDeals.length;
+    const bestDeals: DealItem[] = [];
+    if (remain > 0 && bestPool && bestPool.length > 0) {
+      for (const p of bestPool) {
+        if (bestDeals.length >= remain) break;
+        if (used.has(p.productId)) continue;
+        used.add(p.productId);
+        bestDeals.push({ type: 'best', data: p });
+      }
+    }
+    return [...dropDeals, ...bestDeals];
+  }, [drops, bestPool]);
+
+  const dealsLoaded = drops !== null || bestPool !== null;
+
+  const handleBuyDrop = useCallback(async (drop: PriceDrop) => {
+    if (drop.deepLink) {
+      try {
+        await Linking.openURL(drop.deepLink);
+        return;
+      } catch {}
+    }
+    const fallbackUrl = `https://www.coupang.com/vp/products/${drop.productId}`;
+    try {
+      const dl = await generateDeepLink(fallbackUrl);
+      if (dl?.shortenUrl) {
+        await Linking.openURL(dl.shortenUrl);
+        return;
+      }
+    } catch {}
+    try {
+      await Linking.openURL(fallbackUrl);
+    } catch {}
+  }, []);
+
+  const handleBuyBest = useCallback(async (item: BestProductItem) => {
+    try {
+      const dl = await generateDeepLink(item.productUrl);
+      if (dl?.shortenUrl) {
+        await Linking.openURL(dl.shortenUrl);
+        return;
+      }
+    } catch {}
+    try {
+      await Linking.openURL(item.productUrl);
+    } catch {}
+  }, []);
 
   const handleShareApp = async () => {
     try {
@@ -69,26 +172,62 @@ export default function HomeScreen() {
     } catch {}
   };
 
-  const renderGoldboxItem = (product: GoldboxProduct) => (
-    <TouchableOpacity
-      key={product.productId}
-      style={styles.goldboxCard}
-      onPress={() => Linking.openURL(product.productUrl)}
-      activeOpacity={0.8}
-    >
-      {product.productImage ? (
-        <Image source={{ uri: product.productImage }} style={styles.goldboxImage} />
-      ) : (
-        <View style={[styles.goldboxImage, styles.goldboxImagePlaceholder]}>
-          <Ionicons name="bag-outline" size={16} color={theme.subtext} />
+  const renderDeal = (deal: DealItem) => {
+    if (deal.type === 'drop') {
+      const d = deal.data;
+      const dropPct = Math.abs(Math.round(d.dropRate));
+      return (
+        <TouchableOpacity
+          key={`drop-${d.productId}`}
+          style={styles.goldboxCard}
+          onPress={() => handleBuyDrop(d)}
+          activeOpacity={0.8}
+        >
+          {d.thumbnail ? (
+            <Image source={{ uri: d.thumbnail }} style={styles.goldboxImage} />
+          ) : (
+            <View style={[styles.goldboxImage, styles.goldboxImagePlaceholder]}>
+              <Ionicons name="bag-outline" size={16} color={theme.subtext} />
+            </View>
+          )}
+          <View style={styles.goldboxInfo}>
+            <Text style={styles.goldboxName} numberOfLines={1}>{d.productName}</Text>
+            <View style={styles.dealsPriceRow}>
+              <Text style={styles.goldboxPrice} numberOfLines={1}>
+                {d.currentPrice.toLocaleString()}원
+              </Text>
+              <View style={styles.dealsBadge}>
+                <Text style={styles.dealsBadgeText}>-{dropPct}%</Text>
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+    const p = deal.data;
+    return (
+      <TouchableOpacity
+        key={`best-${p.productId}`}
+        style={styles.goldboxCard}
+        onPress={() => handleBuyBest(p)}
+        activeOpacity={0.8}
+      >
+        {p.productImage ? (
+          <Image source={{ uri: p.productImage }} style={styles.goldboxImage} />
+        ) : (
+          <View style={[styles.goldboxImage, styles.goldboxImagePlaceholder]}>
+            <Ionicons name="bag-outline" size={16} color={theme.subtext} />
+          </View>
+        )}
+        <View style={styles.goldboxInfo}>
+          <Text style={styles.goldboxName} numberOfLines={1}>{p.productName}</Text>
+          <Text style={styles.goldboxPrice} numberOfLines={1}>
+            {p.productPrice.toLocaleString()}원
+          </Text>
         </View>
-      )}
-      <View style={styles.goldboxInfo}>
-        <Text style={styles.goldboxName} numberOfLines={1}>{product.productName}</Text>
-        <Text style={styles.goldboxPrice}>{product.productPrice.toLocaleString()}원</Text>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -114,20 +253,26 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* 골드박스 상단 고정 */}
-      {goldbox.length > 0 && (
+      {/* 오늘의 특가 (가격 하락 + 카테고리 베스트 fallback) */}
+      {dealsLoaded && (
         <View style={styles.goldboxSection}>
           <View style={styles.goldboxHeader}>
             <Ionicons name="flash" size={14} color="#FFD700" />
             <Text style={styles.goldboxTitle}>오늘의 특가</Text>
           </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.goldboxScroll}
-          >
-            {goldbox.map(renderGoldboxItem)}
-          </ScrollView>
+          {deals.length === 0 ? (
+            <Text style={styles.dealsEmpty}>
+              아직 가격 변동 데이터가 부족해요. 가격이 내려가면 바로 알려드릴게요!
+            </Text>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.goldboxScroll}
+            >
+              {deals.map(renderDeal)}
+            </ScrollView>
+          )}
         </View>
       )}
 
@@ -298,7 +443,7 @@ const styles = StyleSheet.create({
     color: theme.subtext,
   },
 
-  // ── 골드박스 (상단 고정, 컴팩트) ──
+  // ── 오늘의 특가 (가격 하락 + 카테고리 베스트 fallback, 상단 고정 컴팩트) ──
   goldboxSection: {
     paddingVertical: 8,
     borderBottomWidth: 1,
@@ -353,6 +498,30 @@ const styles = StyleSheet.create({
     color: theme.primary,
     fontSize: 13,
     fontWeight: 'bold',
+    flexShrink: 1,
+  },
+  dealsPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dealsBadge: {
+    backgroundColor: '#E84545',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  dealsBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  dealsEmpty: {
+    color: theme.subtext,
+    fontSize: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    lineHeight: 18,
   },
 
   fab: {

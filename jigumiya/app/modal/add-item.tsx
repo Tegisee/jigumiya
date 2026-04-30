@@ -16,7 +16,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { MAX_TRACKED_ITEMS } from '../../services/config';
-import { generateDeepLink, hasCoupangApiKeys } from '../../services/coupangApi';
+import {
+  generateDeepLink,
+  hasCoupangApiKeys,
+  extractProductId,
+  extractVendorItemId,
+} from '../../services/coupangApi';
 import { callResolveAffiliate } from '../../services/firebase';
 import CoupangScraper, {
   ScrapedProduct,
@@ -52,14 +57,29 @@ async function fetchWithTimeout(
   }
 }
 
-/** URL에서 productId, vendorItemId 추출 */
-function extractIds(url: string): { productId?: string; vendorItemId?: string } {
-  const pidMatch = url.match(/\/products\/(\d+)/);
-  const vidMatch = url.match(/[?&]vendorItemId=(\d+)/);
-  return {
-    productId: pidMatch?.[1],
-    vendorItemId: vidMatch?.[1],
-  };
+/**
+ * URL 후보 여러 개에서 productId/vendorItemId 추출 (먼저 잡히는 값 채택).
+ * 단축 URL(link.coupang.com)이 resolve 실패해 남은 경우라도 affiliate/원본 URL에서 잡힐 수 있어
+ * 후보 다중 시도가 하트 버튼(productId 의존)의 누락을 줄여줌.
+ */
+function extractIds(
+  ...urls: (string | undefined | null)[]
+): { productId?: string; vendorItemId?: string } {
+  let productId: string | undefined;
+  let vendorItemId: string | undefined;
+  for (const u of urls) {
+    if (!u) continue;
+    if (!productId) {
+      const pid = extractProductId(u);
+      if (pid) productId = pid;
+    }
+    if (!vendorItemId) {
+      const vid = extractVendorItemId(u);
+      if (vid) vendorItemId = vid;
+    }
+    if (productId && vendorItemId) break;
+  }
+  return { productId, vendorItemId };
 }
 
 function parseProductName(text: string): string {
@@ -323,8 +343,13 @@ export default function AddItemModal() {
     const currentPrice = scraped?.price || 0;
     const thumbnail = scraped?.image || '';
 
-    // URL에서 productId/vendorItemId 추출 (가격 매칭 정확도용)
-    const ids = extractIds(resolvedUrl);
+    // URL에서 productId/vendorItemId 추출 (다중 후보 시도 — 하트 버튼 누락 방지)
+    const ids = extractIds(
+      scraped?.resolvedUrl,
+      resolvedUrl,
+      affiliateUrl,
+      parsedUrlRef.current,
+    );
 
     addItem({
       id: Date.now().toString(),

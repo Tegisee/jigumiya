@@ -18,6 +18,10 @@ import {
   removeTrackedRef,
   incrementTrackerCount,
 } from '../services/firebase';
+import {
+  extractProductId,
+  extractVendorItemId,
+} from '../services/coupangApi';
 
 interface AppState {
   notificationEnabled: boolean;
@@ -28,6 +32,7 @@ interface AppState {
   updateTargetPrice: (id: string, price: number) => void;
   updateItemPrice: (id: string, price: number) => void;
   syncFromFirestore: () => Promise<void>;
+  backfillProductIds: () => Promise<void>;
   toggleNotification: () => void;
   completeOnboarding: () => void;
   resetAllData: () => Promise<void>;
@@ -134,7 +139,55 @@ export const useAppStore = create<AppState>()(
         const items = await fetchItemsFromFirestore();
         if (items.length > 0) {
           set({ trackedItems: items });
+          // fresh fetch 결과에 productId 누락이 섞여 있어도 자가 보정
+          useAppStore.getState().backfillProductIds();
         }
+      },
+      /**
+       * productId 누락 trackedItem을 url/resolvedUrl에서 재추출해 자가 치유.
+       * 기존 추가 시점에 단축 URL resolve 실패로 productId 비어 저장된 케이스가
+       * 하트 버튼을 못 보이게 하므로(useFavoriteToggle.enabled=false) 진입 시 1회 보정.
+       * shared_products 카운터는 다른 단말 중복 증가 위험으로 건드리지 않음.
+       */
+      backfillProductIds: async () => {
+        const items = useAppStore.getState().trackedItems;
+        const patches: { id: string; productId?: string; vendorItemId?: string }[] = [];
+        for (const it of items) {
+          if (it.productId) continue;
+          const candidates = [it.resolvedUrl, it.url];
+          let pid: string | undefined;
+          let vid: string | undefined;
+          for (const u of candidates) {
+            if (!u) continue;
+            if (!pid) {
+              const v = extractProductId(u);
+              if (v) pid = v;
+            }
+            if (!vid) {
+              const v = extractVendorItemId(u);
+              if (v) vid = v;
+            }
+            if (pid && vid) break;
+          }
+          if (pid) patches.push({ id: it.id, productId: pid, vendorItemId: vid });
+        }
+        if (patches.length === 0) return;
+        set((state) => ({
+          trackedItems: state.trackedItems.map((it) => {
+            const p = patches.find((x) => x.id === it.id);
+            return p
+              ? { ...it, productId: p.productId, vendorItemId: p.vendorItemId ?? it.vendorItemId }
+              : it;
+          }),
+        }));
+        await Promise.all(
+          patches.map((p) =>
+            updateItemInFirestore(p.id, {
+              productId: p.productId,
+              ...(p.vendorItemId ? { vendorItemId: p.vendorItemId } : {}),
+            }),
+          ),
+        );
       },
       completeOnboarding: () => set({ hasSeenOnboarding: true }),
       toggleNotification: () =>
