@@ -19,8 +19,8 @@ name: Shared Products Price Check (019 §5-2)
 #   - 2026-04-27: 신설 (workflow_dispatch만 활성, schedule 주석 처리)
 
 on:
-  # schedule:
-  #   - cron: '30 19 * * *'  # 04:30 KST (= 19:30 UTC)
+  schedule:
+    - cron: '30 19 * * *'  # 04:30 KST (= 19:30 UTC) — 활성화 2026-05-01
   workflow_dispatch: {}
 
 jobs:
