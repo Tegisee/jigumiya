@@ -234,14 +234,42 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
       - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.7-41.ipa`
     - 1.0.7 주요 변경: BUG-42 무한로딩 방어 + 온보딩 문구 갱신 + 알림 라우팅 분기 (서버측 7종 알림은 cron 활성화 시 효과)
 
+- 2026-05-01 작업 (오늘의 특가 데이터 교체 + 하트 버튼 누락 fix + 1.0.8 빌드):
+
+  ① **골드박스 → 오늘의 특가 데이터 교체** (커밋 `dd15624`)
+    - 폐기: `services/coupangApi.ts:fetchGoldbox` + `GOLDBOX_PATH` + `GoldboxProduct` 통째로 제거 — 골드박스 API 호출 0건 (사용자 단말 직접 호출 폭증 + affiliate 미변환 클릭 모두 해소)
+    - 신규 데이터 출처: ① `subscribePriceDrops(cb, 30, 24)` — 24h, 최대 30개. 클라이언트에서 `dropRate asc` 정렬 → 상위 20개. ② `fetchAllCategoryBest()` 1h AsyncStorage 캐시(`home-deals-best-pool`, 카테고리당 5개 = 95개 후보) — drops 부족분만 채움. productId Set으로 중복 회피
+    - 빈 상태: drops + bestPool 둘 다 도착 후 합쳐서 0건이면 "아직 가격 변동 데이터가 부족해요. 가격이 내려가면 바로 알려드릴게요!" 안내 텍스트
+    - 클릭: drop은 `deepLink` 직링크, best는 `generateDeepLink(productUrl)` (feed 탭과 동일 패턴) — affiliate 변환 보장
+    - 타이틀 "오늘의 특가" 유지
+
+  ② **하트 버튼 누락 fix + productId 자가 치유** (커밋 `dd15624`)
+    - 증상: 신규 추가 상품 일부에서 하트 버튼이 안 보임. 간헐적
+    - 원인: `add-item.tsx:handleSave`의 `extractIds(resolvedUrl)` 정규식 `\/products\/(\d+)` 단일 패턴 → `link.coupang.com/a/...` 단축 URL이 resolve 실패로 남으면 productId 추출 0% → trackedItem `productId=undefined` 저장 → `useFavoriteToggle.enabled=false`로 하트 렌더 자체 안 됨. BUG-42 timeouts(8s/5s/5s) + Functions cold start + 네트워크 변동성 겹칠 때 발생
+    - **추출 정규식 보강** (`services/coupangApi.ts:extractProductId`): `/products/(\d+)` + `productId=(\d+)` + `pId%3D(\d+)` + `pId=(\d+)` 다중 패턴. `extractVendorItemId` 신설
+    - **다중 URL 후보 시도** (`add-item.tsx:extractIds`): `scraped?.resolvedUrl` → `resolvedUrl` → `affiliateUrl` → `parsedUrlRef.current` 순서로 시도, 먼저 잡히는 값 채택
+    - **자가 치유 액션** (`store/useAppStore.ts:backfillProductIds`): 로컬 trackedItems 중 productId 누락 항목을 `resolvedUrl`/`url`에서 재추출 → store + `updateItemInFirestore` 갱신. 홈 mount + `syncFromFirestore` 직후 1회 자동 호출
+    - **shared_products 카운터 미보강** (의도): 다른 단말 중복 증가 위험 → 다음 토글/삭제 시점에 자연 복구
+    - 한계: 모든 후보가 단축 URL인 극단 케이스(원본 입력 자체가 `link.coupang.com`이고 resolve 전부 실패)는 여전히 추출 불가. 필요 시 `services/productMeta.ts:parseShortUrl` 마지막 보강책 도입 가능
+
+  ③ **1.0.8 (bn42/vc42) 빌드 완료**
+    - `app.config.js`: version 1.0.8 / ios.buildNumber 42 / android.versionCode 42
+    - `android/app/build.gradle`: versionCode 42 / versionName "1.0.8" 동기화
+    - 산출물:
+      - Android: `~/jigumiya/builds/android/jigumiya-1.0.8-42.aab`
+      - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.8-42.ipa`
+    - 1.0.8 주요 변경: 골드박스 → 오늘의 특가 데이터 교체 + 하트 버튼 누락 fix + backfillProductIds 자가 치유
+    - 1.0.7은 미배포 — 1.0.8에 1.0.7 변경(BUG-42 무한로딩 방어 + 온보딩 문구 + 알림 라우팅 분기)이 모두 통합되어 사용자에게 1.0.8로 전달
+
 - 다음:
-  1. **1.0.7 Play Console 업로드** + **App Store 심사 제출** (Transporter 수동, `eas submit` 금지)
-  2. **`meta/config_jigumiya.minRequiredVersion = "1.0.7"` 콘솔 갱신** (사용자 직접) — 1.0.7 출시 후 적용
+  1. **1.0.8 Play Console 업로드** + **App Store 심사 제출** (Transporter 수동, `eas submit` 금지)
+  2. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** (사용자 직접) — 1.0.8 출시 후 적용
   3. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 실기기 확인. 미동작 시 `/(tabs)/price-drops` 절대경로 또는 navigate API로 변경 검토
-  4. **shared-price-checker workflow_dispatch 수동 dry-run** (cron 활성화 전, 동적 사이클 + 7종 알림 실제 동작 검증)
-  5. **아이고 실기기 테스트 통과** + 아이고 Functions 수정 이식 (지금이야 `e69d05e` 내용)
-  6. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2) — 선결: §8-C 아이고 통합 + 4번 dry-run 통과
-  7. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
+  4. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지 + 신규 추가 상품에서 하트 안정적으로 표시되는지 확인
+  5. **shared-price-checker workflow_dispatch 수동 dry-run** (cron 활성화 전, 동적 사이클 + 7종 알림 실제 동작 검증)
+  6. **아이고 실기기 테스트 통과** + 아이고 Functions 수정 이식 (지금이야 `e69d05e` 내용)
+  7. **cron 활성화 시점에 `shared-price-check.yml` + `price-check.yml` schedule 주석 동시 해제** (§8-D-2) — 선결: §8-C 아이고 통합 + 5번 dry-run 통과
+  8. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -299,23 +327,29 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식 (1콜 = 1회 vs 100회) + 카테고리 ID 전체 목록
 - [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작 확인
 - [ ] **선결**: 아이고 Firebase → jigumiya 통합 (베타 출시 이후, §8-C)
+- [x] **구현**: 골드박스 → 오늘의 특가 데이터 교체 — price_drops 24h 상위 N + category_best fallback (1h AsyncStorage 캐시), 골드박스 API 호출 0건 (2026-05-01, dd15624)
+- [x] **버그수정**: 하트 버튼 누락 — productId 추출 다중 패턴(/products/, productId=, pId%3D, pId=) + URL 후보 다중 시도(scraped/resolved/affiliate/parsed) + backfillProductIds 자가 치유 액션 (2026-05-01, dd15624)
+- [x] **빌드**: 지금이야 1.0.8 (bn42/vc42) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-05-01)
+- [ ] **배포**: 1.0.8 Play Console 업로드 + App Store 심사 제출 (Transporter 수동) + `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신
+- [ ] **검증**: 1.0.8 실기기 — 하트 백필 동작(기존 누락 상품 복구) + 신규 추가 시 하트 안정성 + 오늘의 특가 빈 상태 안내 + drop/best 카드 클릭 affiliate 변환
 
-## 다음 작업 순서 (2026-04-30 이후)
-1. **1.0.7 Play Console 업로드 + App Store 심사 제출** — Transporter 수동 (`eas submit` 금지). 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.7"` 갱신
-2. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.7 실기기 확인. 미동작 시 절대경로/navigate API로 변경
-3. **shared-price-checker workflow_dispatch 수동 dry-run** — 동적 사이클(N에 따른 cycles/sleep) + 7종 알림 + 24h 중복 방지 + Block zone 대기 + offset 진행도 실제 동작 검증
-4. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
-5. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
-6. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
-7. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.7 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-8. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
-9. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
-10. **cron 재활성화** (§8-D-2) — 선결: 3번 dry-run 통과 + 4번 아이고 통합 + 9번 broadcasts 큐. 확정 스케줄:
+## 다음 작업 순서 (2026-05-01 이후)
+1. **1.0.8 Play Console 업로드 + App Store 심사 제출** — Transporter 수동 (`eas submit` 금지). 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신
+2. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인. 미동작 시 절대경로/navigate API로 변경
+3. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 ① 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지(`backfillProductIds`) ② 신규 추가 상품 4~5개 연속 추가 시 모두 하트 표시되는지(`extractProductId` 다중 패턴 + URL 후보 다중 시도)
+4. **shared-price-checker workflow_dispatch 수동 dry-run** — 동적 사이클(N에 따른 cycles/sleep) + 7종 알림 + 24h 중복 방지 + Block zone 대기 + offset 진행도 실제 동작 검증
+5. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
+6. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
+7. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
+8. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.8 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
+9. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
+10. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
+11. **cron 재활성화** (§8-D-2) — 선결: 4번 dry-run 통과 + 5번 아이고 통합 + 10번 broadcasts 큐. 확정 스케줄:
     - shared_products 가격체크: 04:30 ~ 01:00 KST, **동적 sleep**(`meta/stats.sharedProductCount` 기반), 분할 모드(N>50,000) + offset 진행도 보존 + Block zone 대기 (01:00~04:30 자동 sleep)
     - category_best 갱신: 02:00 KST 1회 (sleep 80초)
     - 알림: **즉시 발송 (가격 변동 감지 즉시)** + morning(07:00~09:00 KST 진입 시) / evening(19:30~21:00 KST 그날 가격 알림 미수신자) — 24h 중복 방지 가드
-11. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
-12. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
+12. **가격변동 탭 실데이터 검증** — cron 재활성화 후 `recordPriceDrop` 기록 + UI 표시 확인
+13. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -325,10 +359,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - API 딥링크 정상 작동 확인: 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.7 빌드 완료 (2026-04-30 기준)
-- iOS: **1.0.7 buildNumber 41 IPA 산출** (`~/jigumiya/builds/ios/jigumiya-1.0.7-41.ipa`) — Transporter 업로드 + App Store 심사 제출 대기
-- Android: **1.0.7 versionCode 41 AAB 산출** (`~/jigumiya/builds/android/jigumiya-1.0.7-41.aab`) — Play Console 업로드 대기
-- 1.0.7 주요 변경: BUG-42 무한로딩 방어 (Functions 워밍업 + callable 8s/fetch 5s/deeplink 5s timeout) + 온보딩 문구 갱신 + 알림 라우팅 분기 (price-drops/home/detail) — 서버측 7종 알림은 cron 활성화 시 효과
+## 현재 상태: 1.0.8 빌드 완료 (2026-05-01 기준)
+- iOS: **1.0.8 buildNumber 42 IPA 산출** (`~/jigumiya/builds/ios/jigumiya-1.0.8-42.ipa`) — Transporter 업로드 + App Store 심사 제출 대기
+- Android: **1.0.8 versionCode 42 AAB 산출** (`~/jigumiya/builds/android/jigumiya-1.0.8-42.aab`) — Play Console 업로드 대기
+- 1.0.8 주요 변경: 골드박스 API 호출 완전 제거 → **오늘의 특가**(`price_drops` 24h 상위 N + `category_best` fallback 1h AsyncStorage 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**(홈 mount + syncFromFirestore 직후 1회)
+- 1.0.7 (bn41/vc41) 미배포 — 1.0.8에 통합되어 사용자에게는 1.0.8로 전달 (1.0.7 변경: BUG-42 무한로딩 방어 + 온보딩 문구 갱신 + 알림 라우팅 분기)
 - 1.0.6 (bn40/vc40) 배포 완료 (2026-04-26): iOS App Store 심사 제출 + Android 프로덕션 승급. 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
 - 1.0.5 (bn38/vc38) 배포 완료 (2026-04-24): Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
 - `eas.json` `appVersionSource: local` + `autoIncrement` 제거 → `app.config.js`가 버전 source of truth
