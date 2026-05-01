@@ -1,0 +1,57 @@
+name: Tracked Backfill (one-shot)
+
+# 1회 실행 보강 스크립트 — workflow_dispatch 전용 (cron 없음)
+#
+# 배경:
+#   2026-05-01 cron 첫 자동 실행에서 drops=2 감지했으나 push 발송 0건.
+#   원인: tracked.productId 필드 누락 + shared_products.trackerCount 음수.
+#   1.0.8 클라이언트 backfillProductIds로 못 잡는 미업그레이드 사용자 + 단축 URL 누락분 커버.
+#
+# 처리:
+#   Phase A — users/{uid}/items productId 보강 + tracked doc 생성
+#   Phase B — collectionGroup(tracked) productId 필드 보강 (doc ID 기반)
+#   Phase C — shared_products.trackerCount 실측 카운트로 정정 (음수/불일치)
+#
+# 권장 실행 순서:
+#   1. dry_run=true (기본) 로 1회 실행 → 카운터 검증
+#   2. 결과 확인 후 dry_run=false 로 실제 적용
+#   3. 다음 shared-price-check cron 실행에서 payloads N건 / trackers=양수 / lastNotifications 갱신 확인
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true면 스캔/계획만 출력 (쓰기 0). false면 실제 적용.'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/tracked-backfill
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/tracked-backfill
+        run: npx tsc
+
+      - name: Run backfill
+        working-directory: scripts/tracked-backfill
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: node dist/index.js
