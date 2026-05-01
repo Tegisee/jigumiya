@@ -278,14 +278,40 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
     - Android Play Console: 1.0.8 (vc42) **프로덕션 업로드 완료**
     - 다음 단계: 심사 통과 + Play Store 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신
 
-- 다음:
-  1. **cron 첫 자동 실행 점검** (2026-05-02 04:30 KST) — GitHub Actions 로그 확인: `[Cycle] N=35 daily=35 cycles=144 sleep=14628ms` 형식. rate-limited 흔적 없음, Block zone 자연 sleep, 알림 발송 카운터 확인
-  2. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 분기에서 `FieldValue.increment(+1)`, 삭제 흐름에서 `-1`. 운영 모니터링 카운터 정확성 확보 + N≥50,000 split 모드 진입 판정 신뢰 확보 (현재는 cron 측이 자가 보정)
-  3. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포의 `price-check.yml`/`shared-price-check.yml` 검토 + 활성화. 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식
-  4. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인
-  5. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지 + 신규 추가 상품에서 하트 안정적으로 표시되는지 확인
-  6. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/`에 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비
-  7. **legacy `price-check.yml` 정식 폐기** (Phase 3-C) — workflow_dispatch만 활성 상태로 두고 향후 파일 삭제 검토
+  ⑦ **cron 첫 자동 실행 분석** (2026-05-01 05:41 KST, run 25188247734)
+    - 실행 시각: cron `'30 19 * * *'` (UTC 19:30) = KST 04:30 예정 → GitHub 71분 지연으로 KST 05:41 시작 (정상 범위)
+    - 카운터: `scanned=35 processed=35 skipZero=11 skipToday=0 cacheHits=1 apiCalls=21 drops=2 ups=0 targets=0 bc10=0 bc20=0 notif=0 rateLimited=false elapsed=331.0s`
+    - 동적 사이클 정상 작동: `[Cycle] N=35 daily=35 cycles=144 sleep=14642ms offset=0~34 split=false`
+    - 가격 하락 감지 2건: productId 6570687310 14880→14780 (-0.7%), 9080722281 56680→56230 (-0.8%) → `price_drops` 컬렉션 정상 기록
+    - **푸시 발송 0건** (`payloads 0건, lastNotifications 업데이트 0명`)
+
+    **발견 문제 1: cron 04:30 KST 단일 실행 → morning/evening 알림 윈도우 진입 불가**
+    - 실행 시작 KST 05:41 → `morning=false evening=false` (morning 07~09 KST, evening 19:30~21 KST 둘 다 밖)
+    - `morning_greeting`, `evening_no_change`는 코드는 있지만 **트리거 영원히 0** (cron이 윈도우에 없음)
+    - 즉시 발송형(`price_drop_summary`, `target_reached`, `price_up_summary`, `broadcast_drop10/20`)은 시간대 게이트 없음 — `index.ts` L567/L589/L628/L662/L674 확인 결과 morning/evening 가드 없이 24h 중복 가드만 적용 (정상 즉시 발송 설계)
+    - **해결책 (옵션 A)**: 알림 전용 cron 2개 추가 — 07:30 KST(morning_greeting + 누적 drop summary 흡수), 20:00 KST(evening_no_change + 누적 drop summary). 가격체크 cron(04:30)은 그대로 유지
+
+    **발견 문제 2: `tracked.productId` 누락으로 사용자 추적상품 알림 발송 0건**
+    - 진짜 원인 — `index.ts:512` `fetchTrackers(productId)` = `collectionGroup('tracked').where('productId', '==', productId)`. **`tracked` 문서에 `productId` 필드 누락 시 매칭 0건** → trackers=[] → perUserDrops add 0 → payloads 0
+    - 1.0.8 클라이언트 `backfillProductIds` 자가 치유는 추가됐지만, **미업그레이드 사용자(1.0.7 이하) + 단축 URL resolve 실패 누락분은 서버 backfill 필요**
+    - 9080722281 (trackerCount=1)도 backfill 미적용 사용자 케이스에서 수신 실패 추정
+
+    **발견 문제 3: `shared_products.trackerCount` 음수 버그**
+    - 6570687310 로그 `trackers=-1` — `shared_products.trackerCount` 필드가 음수 누적
+    - 원인: addTrackedItem(+1) / removeTrackedItem(-1) 분기 비대칭 — 중복 감소 또는 신규 add 시 increment 누락 의심
+    - 추적자 실측은 collectionGroup 쿼리(문제 2 backfill 이후) 기준으로 재계산해 정정 필요
+
+- 다음 (우선순위):
+  1. **서버 backfill 스크립트** (빌드 불필요, workflow_dispatch 실행) — collectionGroup 'tracked' 전체 스캔 → `productId` 누락 문서를 `itemId`/`url`/`resolvedUrl`에서 `extractProductId` 다중 패턴으로 재추출 → 일괄 보강. 1.0.8 클라이언트 backfill + 미업그레이드 사용자 커버
+  2. **`shared_products.trackerCount` 음수 정정** — 전체 스캔 → 각 productId에 대해 collectionGroup 'tracked' 실측 카운트로 `trackerCount` 재계산. 작업 #1과 같은 스크립트에서 일괄 처리 가능
+  3. **알림 전용 cron 2개 추가** (옵션 A, 07:30/20:00 KST) — `shared-price-check.yml`에 schedule 추가 또는 `notify-only.yml` 신설. morning_greeting + evening_no_change + 누적 drop summary 발송 트리거. 가격체크 cron(04:30) 그대로 유지
+  4. **cron 자동 갱신 검증** (작업 #1~#3 완료 후) — 다음 자동 실행에서 `payloads N건` 정상 발송 + `lastNotifications` 업데이트 확인
+  5. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 -1. 카운터 정확성 + N≥50,000 split 진입 판정 신뢰
+  6. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포 검토 + Functions Resolver 이식
+  7. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 1.0.8 실기기 확인
+  8. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품 + 신규 추가 시 하트 안정성 확인
+  9. **category-best 브로드캐스트 큐 구현** (별도 PR)
+  10. **legacy `price-check.yml` 정식 폐기** (Phase 3-C)
 
 ### 참고 문서 (작업 리스트 외)
 - 012_Phase2계획.md — Phase 2 초기 기획 문서 (이력 보존)
@@ -351,26 +377,39 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **검증**: 1.0.8 실기기 — 하트 백필 동작(기존 누락 상품 복구) + 신규 추가 시 하트 안정성 + 오늘의 특가 빈 상태 안내 + drop/best 카드 클릭 affiliate 변환
 - [x] **활성화**: `shared-price-check.yml` cron `'30 19 * * *'` (= 04:30 KST) schedule 주석 해제 (2026-05-01, 46ccb4c)
 - [x] **버그수정**: cron 첫 가동 N=0 자가 치유 + Block zone 시작 시점 graceful exit — `computeCycleConfig(actualCount)` 시그니처 변경 + main 진입 직후 Block zone 즉시 종료 (2026-05-01, c0d8859)
-- [ ] **점검**: cron 첫 자동 실행 (2026-05-02 04:30 KST) — N=35 정상 인식 + rate-limited 흔적 없음 + Block zone 자연 sleep + 알림 발송 카운터
+- [x] **점검**: cron 첫 자동 실행 (2026-05-01 05:41 KST, run 25188247734) — N=35 정상 인식 + rate-limited 없음 + 동적 사이클 정상 + drops 2건 감지. **그러나 푸시 발송 0건 (3가지 문제 발견)** — 상세는 2026-05-01 ⑦ 항목 참조
+- [ ] **신설**: 서버 backfill 스크립트 (`scripts/tracked-backfill/`) — collectionGroup 'tracked' 스캔 → productId 누락 문서 일괄 보강 + trackerCount 음수 정정. workflow_dispatch 1회 실행
+- [ ] **수정**: `shared_products.trackerCount` 음수 정정 — collectionGroup 실측 카운트로 재계산 (서버 backfill 스크립트에 통합)
+- [ ] **추가**: 알림 전용 cron 2개 (07:30 / 20:00 KST) — morning_greeting + evening_no_change + 누적 drop summary 발송 트리거. 가격체크 cron(04:30)은 유지
+- [ ] **추적**: `addTrackedItem`/`removeTrackedItem` increment 비대칭 원인 — 카운터 음수 재발 방지
 - [ ] **별도 PR**: `meta/stats.sharedProductCount` 자동 갱신 — `services/firebase.ts:upsertSharedProduct` 신규 분기 +1, 삭제 -1. 운영 모니터링 카운터 정확성
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
 
-## 다음 작업 순서 (2026-05-01 이후)
-1. **cron 첫 자동 실행 점검** (2026-05-02 04:30 KST) — GitHub Actions 로그: `[Cycle] N=35 daily=35 cycles=144 sleep=14628ms` 형식. rate-limited 흔적 / Block zone 자연 sleep / 알림 발송 카운터 / Expo Push 응답 확인
-2. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 흐름 `-1`. 운영 모니터링 카운터 정확성 + N≥50,000 split 모드 진입 판정 신뢰
-3. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포 워크플로우 검토 + 활성화. 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식 (HTML redirectWebUrl 파싱 + Secret `.trim()`)
-4. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인. 미동작 시 절대경로/navigate API로 변경
-5. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 ① 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지(`backfillProductIds`) ② 신규 추가 상품 4~5개 연속 추가 시 모두 하트 표시되는지(`extractProductId` 다중 패턴 + URL 후보 다중 시도)
-6. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** — 1.0.8 심사 통과 + Play Store 프로덕션 승급 확인 후
-7. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의. `google-services.json` / `GoogleService-Info.plist` 교체 + `app.config.js` Firebase 설정 갱신 + 기존 아이고 유저 데이터 마이그레이션 계획
-8. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 커밋 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)을 아이고 `functions/src/index.ts`에도 동일 적용
-9. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
-10. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.8 승급 확인 후 가족 계정(다른 결제수단 + 다른 배송지)으로 Functions 경유 생성된 링크 클릭 → 구매 → 파트너스 대시보드 실적 집계 확인
-11. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
-12. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
-13. **legacy `price-check.yml` 정식 폐기** (Phase 3-C) — workflow_dispatch만 활성 상태로 두고 향후 파일 삭제 검토
-14. **가격변동 탭 실데이터 검증** — cron 가동 후 `recordPriceDrop` 기록 + UI 표시 확인
-15. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
+## 다음 작업 순서 (2026-05-01 cron 첫 자동 실행 분석 후)
+**최우선** (`notif=0` 사고 직접 해결):
+1. **서버 backfill 스크립트 신설** (`scripts/tracked-backfill/`) — collectionGroup 'tracked' 전체 스캔 → `productId` 누락 문서를 `itemId`/`url`/`resolvedUrl`에서 `extractProductId` 다중 패턴(/products/, productId=, pId%3D, pId=)으로 재추출 → 일괄 보강. workflow_dispatch 1회 실행 가정(빌드 불필요). 1.0.8 클라이언트 backfill로 못 잡는 미업그레이드 사용자 + 단축 URL 누락분 커버
+2. **`shared_products.trackerCount` 음수 정정** — 1번 스크립트에 통합. 각 productId에 대해 collectionGroup 'tracked' 실측 카운트로 `trackerCount` 재계산 (음수 발견 시 0 이상으로 보정)
+3. **알림 전용 cron 2개 추가** (옵션 A, 07:30 / 20:00 KST) — `shared-price-check.yml` schedule 추가 또는 `notify-only.yml` 신설. morning_greeting + evening_no_change + 누적 drop summary 발송 트리거. 가격체크 cron(04:30)은 유지. 알림 전용 모드는 가격체크 슬라이스 스킵하고 flush만 실행하도록 분기 필요
+4. **검증** (작업 1~3 완료 후) — 다음 자동 실행에서 `payloads N건` 정상 발송 + `lastNotifications` 업데이트 + `trackers=` 양수 출력 확인
+
+**중기**:
+5. **`meta/stats.sharedProductCount` 자동 갱신 구현** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 흐름 `-1`. 운영 모니터링 카운터 정확성 + N≥50,000 split 모드 진입 판정 신뢰
+6. **아이고 cron 활성화** (별도 작업) — `~/aigo/aigo` 레포 워크플로우 검토 + 활성화. 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식 (HTML redirectWebUrl 파싱 + Secret `.trim()`)
+7. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')`가 expo-router `(tabs)/price-drops.tsx`로 정상 이동하는지 1.0.8 실기기 확인
+8. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품의 하트가 홈 mount 1회로 살아나는지(`backfillProductIds`) + 신규 추가 시 하트 안정성 확인
+9. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** — 1.0.8 심사 통과 + Play Store 프로덕션 승급 확인 후
+10. **`addTrackedItem`/`removeTrackedItem` increment 비대칭 추적** — 카운터 음수 재발 방지 (작업 2의 정정 후 재발 모니터링)
+11. **아이고 Firebase → jigumiya 통합** (§8-C) — 아이고 베타 출시 이후 진행 합의
+12. **아이고 Functions 수정 이식** — 지금이야 `e69d05e` 내용(HTML `redirectWebUrl` 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)
+13. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업 (상세 파악 필요)
+14. **가족 계정 구매 테스트** — Play Store / App Store 1.0.5/1.0.6/1.0.8 승급 확인 후 Functions 경유 링크 → 파트너스 대시보드 실적 집계 확인
+
+**장기**:
+15. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식(1콜 = 1회 vs 100회) 확정 후 cron 호출량 재산정
+16. **category-best 브로드캐스트 큐 구현** (별도 PR) — `scripts/category-best-updater/` 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 기록 → shared-price-checker가 큐 소비
+17. **legacy `price-check.yml` 정식 폐기** (Phase 3-C) — workflow_dispatch만 활성 상태로 두고 향후 파일 삭제 검토
+18. **가격변동 탭 실데이터 검증** — cron 가동 후 `recordPriceDrop` 기록 + UI 표시 확인
+19. **Firebase App Check 검토** — Public repo 환경에서 apiKey 노출 후속 보강. unauthorized client SDK 사용 차단 (App Attest/DeviceCheck for iOS, Play Integrity for Android)
 
 ## 수익모델: 쿠팡 파트너스 단일 전략
 - 수수료: 3~10% (구매 발생 시 자동 수취)
@@ -384,7 +423,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - iOS: **App Store 심사 제출 완료** (1.0.8 buildNumber 42, Transporter 수동) — 심사 결과 대기
 - Android: **Play Console 프로덕션 업로드 완료** (1.0.8 versionCode 42) — 단계별 출시 진행
 - 1.0.8 주요 변경: 골드박스 API 호출 완전 제거 → **오늘의 특가**(`price_drops` 24h 상위 N + `category_best` fallback 1h AsyncStorage 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**(홈 mount + syncFromFirestore 직후 1회)
-- 서버 cron 활성화: `shared-price-check.yml` schedule `'30 19 * * *'` (= 04:30 KST) **활성** — 첫 자동 트리거 2026-05-02 04:30 KST. 동적 사이클 + 7종 알림 + 24h 가드 + Block zone + offset 진행도 + N=0 자가 치유 모두 코드 반영
+- 서버 cron 활성화: `shared-price-check.yml` schedule `'30 19 * * *'` (= 04:30 KST) **활성** — 첫 자동 실행 2026-05-01 05:41 KST 완료(success, 331s, GitHub 71분 지연 정상 범위). **drops=2 감지했으나 푸시 0건** — `tracked.productId` 누락(원인 1), cron 단일 실행으로 morning/evening 윈도우 미진입(원인 2), `trackerCount` 음수 버그(원인 3) 발견. 해결 진행 중 (서버 backfill + 알림 전용 cron 추가)
 - 1.0.7 (bn41/vc41) 미배포 — 1.0.8에 통합되어 사용자에게는 1.0.8로 전달 (1.0.7 변경: BUG-42 무한로딩 방어 + 온보딩 문구 갱신 + 알림 라우팅 분기)
 - 1.0.6 (bn40/vc40) 배포 완료 (2026-04-26): iOS App Store 심사 제출 + Android 프로덕션 승급. 019 §8-A 카테고리 베스트(950 상품) + feed 탭 UI 교체 + 가격변동 탭 신설(4탭 구조) + price_drops 컬렉션
 - 1.0.5 (bn38/vc38) 배포 완료 (2026-04-24): Firebase Functions Resolver 클라이언트 통합(dual-path), 파트너스 제휴 링크 근본 해결 (018)
