@@ -140,30 +140,50 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 2026-04-30 이전 작업 이력은 `docs/작업이력_archive.md`로 이동 (193줄/16.4KB)
 - 2026-05-01 이후 + 안정 참조 정보만 유지
 
-⑥ **iOS App Store ID 채움 + 1.0.9 빌드** (커밋 `98bbf69`, `09a12f6`)
+⑥ **iOS App Store ID 채움** (커밋 `98bbf69`)
 - `services/updateChecker.ts`: `IOS_APP_STORE_ID = '6760587430'` (App Store Connect 발급)
   - 이전 빈 문자열 → iOS 사용자 "업데이트 하기" 누를 때 `itms-apps://itunes.apple.com/app/id6760587430` 정상 이동
   - fallback: `https://apps.apple.com/app/id6760587430`
-- 알림 라우팅 매칭 fix (커밋 `09a12f6`):
-  - 증상: 가격 알림 클릭 → "상품을 찾을 수 없습니다" 빈 화면
-  - 원인: 서버 notifier가 `data.itemId = p.item.productId`로 보내는데, detail 화면이 `TrackedItem.id`로만 매칭 → `id`(클라이언트 UUID) ≠ `productId`(쿠팡 상품 ID)
-  - 수정: `app/detail/[id].tsx:30` `find((i) => i.id === id || i.productId === id)` — productId fallback 추가 한 줄
-  - "구매 후 자동 삭제로 보이던 현상"의 상당수도 이걸로 자연 해소(실제 데이터 존재했으나 detail 화면에서 못 찾았던 케이스)
-- **1.0.9 (bn43/vc43) 빌드 완료**:
-  - `app.config.js`: version 1.0.9 / ios.buildNumber 43 / android.versionCode 43
-  - `android/app/build.gradle`: versionCode 43 / versionName "1.0.9" 동기화
-  - 산출물:
-    - Android: `~/jigumiya/builds/android/jigumiya-1.0.9-43.aab`
-    - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.9-43.ipa`
-  - 1.0.9 주요 변경: iOS App Store ID 채움 + 알림 라우팅 매칭 fix(productId fallback)
 
-## 다음 작업 순서 (2026-05-02 §11 구현 + 1.0.9 빌드 후)
+⑦ **detail 화면 알림 라우팅 productId fallback** (커밋 `09a12f6`)
+- 증상: 가격 알림 클릭 → "상품을 찾을 수 없습니다" 빈 화면
+- 원인: 서버 notifier가 `data.itemId = p.item.productId`로 보내는데, detail 화면이 `TrackedItem.id`로만 매칭 → `id`(클라이언트 UUID) ≠ `productId`(쿠팡 상품 ID)
+- 수정: `app/detail/[id].tsx:30` `find((i) => i.id === id || i.productId === id)` — productId fallback 추가 한 줄
+- "구매 후 자동 삭제로 보이던 현상"의 상당수도 이걸로 자연 해소(실제 데이터 존재했으나 detail 화면에서 못 찾았던 케이스)
 
-**최우선** (배포 + 검증):
-1. **배포**: 1.0.9 (bn43/vc43) iOS App Store 심사 제출(Transporter 수동) + Android Play Console 프로덕션 업로드
-2. **갱신**: 1.0.9 심사 통과 + Play Store 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
-3. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
-4. **검증**: 오늘(2026-05-02) 20:00 KST evening 알림 수신 — notify-only.yml 첫 자동 실행
+⑧ **1.0.9 (bn44/vc44) 빌드 + 부분 배포** (커밋 `43c538b`, `38ce556`)
+- 첫 빌드 bn43/vc43(`43c538b`) → 재빌드 bn44/vc44(`38ce556`)로 단조 증가
+- `app.config.js`: version 1.0.9 / ios.buildNumber 44 / android.versionCode 44
+- `android/app/build.gradle`: versionCode 44 / versionName "1.0.9" 동기화 (gitignored)
+- 산출물:
+  - Android: `~/jigumiya/builds/android/jigumiya-1.0.9-44.aab` (58.7 MB)
+  - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.9-44.ipa` (15.9 MB)
+- 1.0.9 주요 변경: iOS App Store ID 채움 + 알림 라우팅 매칭 fix(productId fallback)
+- 배포 상태:
+  - **Android Play Console: 프로덕션 업로드 완료** (단계별 출시 진행)
+  - **iOS App Store: Transporter 업로드 + 심사 제출 미완** ← 다음 작업 우선순위
+
+⑨ **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신 완료** (Firebase Console 직접)
+- 1.0.8 Play Store 프로덕션 승급 확인 → 1.0.7 사용자에게 1.0.8 업데이트 알림 표시
+- 운영자가 1.0.9 사용 중이면 알림 안 뜸 (1.0.9 ≥ 1.0.8) — 정상 동작
+- 1.0.9 → "1.0.9"로 재갱신은 1.0.9 양 스토어 승급 후 진행
+
+⑩ **🚨 20:00 KST evening 알림 미수신** (조사 미완)
+- notify-only.yml 첫 자동 실행 예정 시각이었으나 운영자 단말 수신 0건
+- 가능한 원인 (내일 조사):
+  - cron이 트리거되지 않음 (GitHub Actions 페이지 확인 필요)
+  - 트리거됐지만 NOTIFY_ONLY=true 분기에서 graceful exit (활성 사용자 토큰 부재 등)
+  - flush 단계에서 24h 가드에 막힘 (오늘 다른 알림 수신했다면 evening_no_change 자동 스킵)
+  - tracked-backfill 적용했지만 여전히 productId 누락 사용자 존재
+- 다음 cron 자동 실행(2026-05-03 04:30 KST 가격체크 + 07:30 morning + 20:00 evening) 결과 확인 후 원인 파악
+
+## 다음 작업 순서 (2026-05-02 1.0.9 부분 배포 + evening 알림 미수신 사건)
+
+**최우선** (잔여 작업):
+1. **배포**: 1.0.9 (bn44/vc44) iOS App Store Transporter 업로드 + 심사 제출 (Android는 이미 Play Console 프로덕션 업로드 완료)
+2. **조사**: 20:00 KST evening 알림 미수신 원인 — gh run list로 notify-only.yml 첫 트리거 여부 + 로그 확인. 미트리거인지 trigger 후 graceful exit인지 분기. 내일 새벽 04:30 / 07:30 / 20:00 cron 자동 실행 결과로 패턴 확정
+3. **갱신**: 1.0.9 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
+4. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
 5. **검증**: 내일(2026-05-03) 가격체크 + 알림 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
 6. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
 7. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
@@ -209,10 +229,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **분리**: CLAUDE.md slim + docs/작업이력_archive.md 신설 (2026-05-02) — 60% 감소
 - [x] **수정**: `updateChecker.ts` IOS_APP_STORE_ID 채움 (6760587430) (2026-05-02, `98bbf69`)
 - [x] **버그수정**: detail 화면 알림 라우팅 매칭 — productId fallback (2026-05-02, `09a12f6`) — "상품을 찾을 수 없습니다" 빈 화면 해소
-- [x] **빌드**: 지금이야 1.0.9 (bn43/vc43) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-05-02)
-- [ ] **배포**: 1.0.9 App Store 심사 제출 (Transporter 수동) + Play Console 프로덕션 업로드
-- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` 콘솔 — 1.0.9 심사 통과 + Play Store 승급 후
-- [ ] **검증**: 오늘 20:00 KST evening 알림 수신 (notify-only.yml 첫 자동 실행)
+- [x] **빌드**: 지금이야 1.0.9 (bn44/vc44) 재빌드 — `app.config.js` + `android/app/build.gradle` 동기화, AAB/IPA 산출물 확보 (2026-05-02, `38ce556`). bn43/vc43은 1차 빌드(`43c538b`) 후 재빌드 필요로 폐기
+- [x] **배포 (Android)**: 1.0.9 (vc44) Play Console 프로덕션 업로드 완료 — 단계별 출시 진행
+- [ ] **배포 (iOS)**: 1.0.9 (bn44) Transporter 업로드 + App Store Connect 심사 제출 ← 잔여
+- [x] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.8"` Firebase Console 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 1.0.8 업데이트 알림 표시
+- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` — 1.0.9 양 스토어 승급 후
+- [ ] **🚨 조사**: 오늘 20:00 KST evening 알림 미수신 — notify-only.yml 첫 자동 실행 결과 미확인. gh run list 확인 + flush 분기 추적 필요
 - [ ] **검증**: 내일 가격체크 + 알림 정상 동작 (§11 자동화 첫 사이클)
 - [ ] **검증**: 1.0.9 실기기 — 알림 클릭 시 detail 화면 정상 표시 + iOS App Store 이동 정상
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
@@ -233,9 +255,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.9 빌드 완료 + cron 자동화 완료 (2026-05-02 기준)
-- 1.0.9 (bn43/vc43) **빌드 완료** — Android AAB / iOS IPA 산출물 확보. 배포(Transporter / Play Console) 대기
+## 현재 상태: 1.0.9 부분 배포 + cron 자동화 완료 (2026-05-02 기준)
+- 1.0.9 (bn44/vc44) **Android Play Console 프로덕션 업로드 완료** — iOS Transporter + 심사 제출은 잔여
 - 1.0.9 주요 변경: iOS App Store ID 채움(6760587430) + 알림 라우팅 매칭 fix(productId fallback) — "상품을 찾을 수 없습니다" 빈 화면 해소
+- `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 업데이트 알림 표시
+- **🚨 20:00 KST evening 알림 미수신** — notify-only.yml 첫 자동 실행 결과 미확인. 내일 04:30 / 07:30 / 20:00 cron 자동 실행 결과로 원인 파악 예정
 - 1.0.8 (bn42/vc42) 배포 진행 중: iOS App Store 심사 제출 + Android Play Console 프로덕션 업로드 (2026-05-01)
 - 1.0.8 주요 변경: 골드박스 API 제거 → **오늘의 특가**(price_drops 24h + category_best fallback 1h 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**
 - 서버 cron (2026-05-02 §11 자동화 적용 후):
