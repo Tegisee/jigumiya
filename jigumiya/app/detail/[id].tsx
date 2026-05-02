@@ -27,7 +27,9 @@ export default function DetailScreen() {
   const router = useRouter();
   const { trackedItems, removeItem, updateTargetPrice, updateItemPrice } = useAppStore();
 
-  const item = trackedItems.find((i) => i.id === id);
+  // 알림 라우팅은 itemId=productId로 보내므로(notifier.ts) productId fallback 매칭 필수.
+  // i.id(클라이언트 UUID) 또는 i.productId(쿠팡 상품 ID) 둘 다 허용.
+  const item = trackedItems.find((i) => i.id === id || i.productId === id);
 
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [newPrice, setNewPrice] = useState('');
