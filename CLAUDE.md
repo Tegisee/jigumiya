@@ -140,13 +140,33 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 2026-04-30 이전 작업 이력은 `docs/작업이력_archive.md`로 이동 (193줄/16.4KB)
 - 2026-05-01 이후 + 안정 참조 정보만 유지
 
-## 다음 작업 순서 (2026-05-02 §11 구현 + tracked-backfill 적용 후)
+⑥ **iOS App Store ID 채움 + 1.0.9 빌드** (커밋 `98bbf69`, `09a12f6`)
+- `services/updateChecker.ts`: `IOS_APP_STORE_ID = '6760587430'` (App Store Connect 발급)
+  - 이전 빈 문자열 → iOS 사용자 "업데이트 하기" 누를 때 `itms-apps://itunes.apple.com/app/id6760587430` 정상 이동
+  - fallback: `https://apps.apple.com/app/id6760587430`
+- 알림 라우팅 매칭 fix (커밋 `09a12f6`):
+  - 증상: 가격 알림 클릭 → "상품을 찾을 수 없습니다" 빈 화면
+  - 원인: 서버 notifier가 `data.itemId = p.item.productId`로 보내는데, detail 화면이 `TrackedItem.id`로만 매칭 → `id`(클라이언트 UUID) ≠ `productId`(쿠팡 상품 ID)
+  - 수정: `app/detail/[id].tsx:30` `find((i) => i.id === id || i.productId === id)` — productId fallback 추가 한 줄
+  - "구매 후 자동 삭제로 보이던 현상"의 상당수도 이걸로 자연 해소(실제 데이터 존재했으나 detail 화면에서 못 찾았던 케이스)
+- **1.0.9 (bn43/vc43) 빌드 완료**:
+  - `app.config.js`: version 1.0.9 / ios.buildNumber 43 / android.versionCode 43
+  - `android/app/build.gradle`: versionCode 43 / versionName "1.0.9" 동기화
+  - 산출물:
+    - Android: `~/jigumiya/builds/android/jigumiya-1.0.9-43.aab`
+    - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.9-43.ipa`
+  - 1.0.9 주요 변경: iOS App Store ID 채움 + 알림 라우팅 매칭 fix(productId fallback)
 
-**최우선** (검증 단계):
-1. **검증**: 오늘(2026-05-02) 20:00 KST evening 알림 수신 — notify-only.yml 첫 자동 실행. `evening_no_change` 또는 누적 drop_summary 발송 확인
-2. **검증**: 내일(2026-05-03) 가격체크 + 알림 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
-3. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
-4. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
+## 다음 작업 순서 (2026-05-02 §11 구현 + 1.0.9 빌드 후)
+
+**최우선** (배포 + 검증):
+1. **배포**: 1.0.9 (bn43/vc43) iOS App Store 심사 제출(Transporter 수동) + Android Play Console 프로덕션 업로드
+2. **갱신**: 1.0.9 심사 통과 + Play Store 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
+3. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
+4. **검증**: 오늘(2026-05-02) 20:00 KST evening 알림 수신 — notify-only.yml 첫 자동 실행
+5. **검증**: 내일(2026-05-03) 가격체크 + 알림 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
+6. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
+7. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
 
 **중기**:
 5. **`meta/stats.sharedProductCount` 자동 갱신** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 -1. N≥50,000 split 모드 진입 판정 신뢰
@@ -187,8 +207,14 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **구현**: §11 자동화 — `shared-price-check.yml` 10분 고정 cron + `INTERVAL_MATRIX` 12단계 + lastRunAt graceful exit (2026-05-02, `b49ea2e`)
 - [x] **신설**: docs/020_PriceChecker_CronDesign.md (2026-05-02, `4e548aa`) — N값 기반 cron 자동화 설계 문서
 - [x] **분리**: CLAUDE.md slim + docs/작업이력_archive.md 신설 (2026-05-02) — 60% 감소
+- [x] **수정**: `updateChecker.ts` IOS_APP_STORE_ID 채움 (6760587430) (2026-05-02, `98bbf69`)
+- [x] **버그수정**: detail 화면 알림 라우팅 매칭 — productId fallback (2026-05-02, `09a12f6`) — "상품을 찾을 수 없습니다" 빈 화면 해소
+- [x] **빌드**: 지금이야 1.0.9 (bn43/vc43) — `app.config.js` + `android/app/build.gradle` 동기화 완료, AAB/IPA 산출물 확보 (2026-05-02)
+- [ ] **배포**: 1.0.9 App Store 심사 제출 (Transporter 수동) + Play Console 프로덕션 업로드
+- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` 콘솔 — 1.0.9 심사 통과 + Play Store 승급 후
 - [ ] **검증**: 오늘 20:00 KST evening 알림 수신 (notify-only.yml 첫 자동 실행)
 - [ ] **검증**: 내일 가격체크 + 알림 정상 동작 (§11 자동화 첫 사이클)
+- [ ] **검증**: 1.0.9 실기기 — 알림 클릭 시 detail 화면 정상 표시 + iOS App Store 이동 정상
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
 - [ ] **추적**: `addTrackedItem`/`removeTrackedItem` increment 비대칭 원인 (재발 모니터링)
 - [ ] **별도 PR**: `meta/stats.sharedProductCount` 자동 갱신
@@ -207,9 +233,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.8 배포 진행 중 + cron 자동화 완료 (2026-05-02 기준)
-- iOS: **App Store 심사 제출 완료** (1.0.8 buildNumber 42, Transporter 수동) — 심사 결과 대기
-- Android: **Play Console 프로덕션 업로드 완료** (1.0.8 versionCode 42) — 단계별 출시 진행
+## 현재 상태: 1.0.9 빌드 완료 + cron 자동화 완료 (2026-05-02 기준)
+- 1.0.9 (bn43/vc43) **빌드 완료** — Android AAB / iOS IPA 산출물 확보. 배포(Transporter / Play Console) 대기
+- 1.0.9 주요 변경: iOS App Store ID 채움(6760587430) + 알림 라우팅 매칭 fix(productId fallback) — "상품을 찾을 수 없습니다" 빈 화면 해소
+- 1.0.8 (bn42/vc42) 배포 진행 중: iOS App Store 심사 제출 + Android Play Console 프로덕션 업로드 (2026-05-01)
 - 1.0.8 주요 변경: 골드박스 API 제거 → **오늘의 특가**(price_drops 24h + category_best fallback 1h 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**
 - 서버 cron (2026-05-02 §11 자동화 적용 후):
   - `shared-price-check.yml` `'*/10 * * * *'` (10분 고정) **활성** — 코드 N값 기반 간격 결정 + lastRunAt graceful exit
