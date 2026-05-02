@@ -1,0 +1,60 @@
+name: Notify Only (07:30 / 20:00 KST)
+
+# 알림 전용 cron — morning_greeting / evening_no_change / 누적 drop_summary 발송 트리거
+#
+# 배경:
+#   2026-05-01 cron 첫 자동 실행 분석 (CLAUDE.md ⑥ 발견 문제 1):
+#     - 가격체크 cron(04:30 KST)은 morning(07-09) / evening(19:30-21) 윈도우 외부
+#     - morning_greeting / evening_no_change 트리거 영원히 0건
+#   해결책 옵션 A 채택 — 알림 전용 cron 2개로 시간대 윈도우 진입 보장
+#
+# 동작:
+#   - NOTIFY_ONLY=true env로 shared-price-checker 진입
+#   - 가격 스캔 완전 스킵 (Cycle/slice/API 호출 0회)
+#   - price_drops 24h 컬렉션 조회 → events.drops/targets/broadcast 재구성
+#   - flush 단계 그대로 실행:
+#     · morning_greeting   (07:30 트리거 → isMorningTime() true)
+#     · evening_no_change  (20:00 트리거 → isEveningTime() true)
+#     · price_drop_summary (사용자당 1개 합산, 24h 가드)
+#     · target_reached     (24h 가드)
+#     · broadcast_drop10/20 (tier별 24h 가드)
+#
+# 가격체크 cron(04:30 KST, shared-price-check.yml)은 그대로 유지 — 가격 스캔만 담당.
+# 두 cron은 같은 lastNotifications 24h 가드를 공유하므로 자연스럽게 중복 방지.
+
+on:
+  schedule:
+    # 07:30 KST = 22:30 UTC (전날) — morning_greeting 윈도우 (07-09 KST)
+    - cron: '30 22 * * *'
+    # 20:00 KST = 11:00 UTC — evening_no_change 윈도우 (19:30-21 KST)
+    - cron: '0 11 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  notify-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # 가격 스캔 없으므로 짧은 timeout 충분
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/shared-price-checker
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/shared-price-checker
+        run: npx tsc
+
+      - name: Run notify-only
+        working-directory: scripts/shared-price-checker
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          NOTIFY_ONLY: 'true'
+        run: node dist/index.js

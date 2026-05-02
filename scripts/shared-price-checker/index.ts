@@ -25,6 +25,13 @@
  *
  * 발송 시점: 스캔 사이클 종료 후 일괄 flush (스캔 ~1분 내라 사실상 즉시).
  * 카테고리 베스트 측 broadcast 큐는 별도 PR (category-best-updater 갱신 시 기록).
+ *
+ * 모드:
+ *   - 기본 (가격체크 모드): 04:30 KST cron (shared-price-check.yml). 가격 스캔 + flush
+ *   - NOTIFY_ONLY=true (알림 전용 모드): 07:30 / 20:00 KST cron (notify-only.yml).
+ *     가격 스캔 스킵, price_drops 24h 조회로 events.drops 재구성 → flush.
+ *     morning_greeting / evening_no_change / 누적 drop_summary 발송 트리거가 목적.
+ *     04:30 새벽에 발송되던 drop_summary가 morning/evening 시간대로 미뤄짐 (UX 개선).
  */
 
 import { initializeApp, cert } from 'firebase-admin/app';
@@ -281,6 +288,71 @@ async function fetchTrackers(productId: string): Promise<TrackerInfo[]> {
   return trackers;
 }
 
+/**
+ * NOTIFY_ONLY 모드 — price_drops 24h 컬렉션 조회로 events.drops 재구성.
+ * productId별 dedup (가장 최신 drop만 유지) + 추적자 매핑 + tier10/20 broadcast 분류.
+ * 24h 가드 + flush 단계 중복 방지가 발송 측에서 이미 적용되므로 안전하게 다시 채워도 OK.
+ */
+async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
+  const since = Date.now() - ONE_DAY_MS;
+  const snap = await db
+    .collection('price_drops')
+    .where('createdAt', '>=', since)
+    .get();
+
+  const byProductId = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
+  for (const d of snap.docs) {
+    const productId = d.data().productId as string | undefined;
+    if (!productId) continue;
+    const createdAt = (d.data().createdAt as number | undefined) ?? 0;
+    const existing = byProductId.get(productId);
+    const existingCreatedAt =
+      ((existing?.data().createdAt as number | undefined) ?? 0) || 0;
+    if (!existing || existingCreatedAt < createdAt) {
+      byProductId.set(productId, d);
+    }
+  }
+
+  for (const [productId, d] of byProductId) {
+    const data = d.data();
+    const productName = (data.productName as string | undefined) ?? '';
+    if (!productName) continue;
+    const currentPrice = Number(data.currentPrice || 0);
+    const previousPrice = Number(data.prevPrice || 0);
+    const dropRate = Number(data.dropRate || 0);
+    if (currentPrice <= 0 || previousPrice <= 0) continue;
+
+    const trackers = await fetchTrackers(productId);
+    const brief: ProductBrief = {
+      productId,
+      productName,
+      currentPrice,
+      previousPrice,
+    };
+    events.drops.push({ ...brief, dropRate, trackers });
+
+    // target_reached 추출
+    for (const t of trackers) {
+      const target = t.targetPrice;
+      if (target && target > 0 && currentPrice <= target) {
+        events.targets.push({ uid: t.uid, item: brief, targetPrice: target });
+      }
+    }
+
+    // 브로드캐스트 분류 (24h 가드는 flush에서 처리)
+    if (dropRate <= BROADCAST_TIER20) {
+      events.broadcastTier20.push(brief);
+    } else if (dropRate <= BROADCAST_TIER10) {
+      events.broadcastTier10.push(brief);
+    }
+  }
+
+  console.log(
+    `[NotifyOnly] price_drops 24h scanned=${snap.size} dedup=${byProductId.size} drops=${events.drops.length} targets=${events.targets.length} bc10=${events.broadcastTier10.length} bc20=${events.broadcastTier20.length}`,
+  );
+  return byProductId.size;
+}
+
 /** 활성 사용자 (token 보유 + notificationEnabled !== false) */
 async function fetchActiveUsers(
   client: Firestore,
@@ -323,17 +395,20 @@ async function main() {
   const cutoff = todayKstMidnight();
   const morningMode = isMorningTime();
   const eveningMode = isEveningTime();
+  const notifyOnly =
+    (process.env.NOTIFY_ONLY ?? 'false').toLowerCase() === 'true';
   console.log(
     '[SharedPriceChecker] 시작:',
     new Date(startedAt).toISOString(),
     'morning=' + morningMode,
     'evening=' + eveningMode,
+    'notifyOnly=' + notifyOnly,
   );
 
-  // 시작 시점이 Block zone(01:00~04:30 KST) 내부면 즉시 graceful 종료.
+  // Block zone(01:00~04:30 KST) 가드는 가격체크 모드 전용.
+  // notify-only 모드는 가격 스캔을 안 하므로 Block zone과 무관 — 가드 건너뜀.
   // sleep 대기는 빌링 낭비 — 다음 cron(04:30 정시)이 알아서 트리거.
-  // 사이클 진행 중 Block zone 진입은 별도(`waitIfInBlockedZone`)로 처리.
-  {
+  if (!notifyOnly) {
     const { hour, minute } = getKstHourMinute();
     const inBlocked =
       (hour >= 1 && hour < 4) || (hour === 4 && minute < 30);
@@ -346,36 +421,6 @@ async function main() {
       return;
     }
   }
-
-  // shared_products 풀을 cycle config 산출 전에 fetch — 실제 size를 진실 원천으로 사용.
-  // meta/stats.sharedProductCount(자동 갱신 미구현)에 종속되지 않게 자가 보정.
-  const all = await fetchAllSharedProducts();
-  console.log(`[SharedPriceChecker] shared_products 풀 ${all.length}개`);
-
-  const config = await computeCycleConfig(all.length);
-  const { sleepMs } = config;
-
-  const bestCache = await loadCategoryBestCache(db);
-  console.log(`[SharedPriceChecker] category_best 캐시 ${bestCache.size}개`);
-
-  // slice 산출: split 모드는 startOffset부터 dailyCount개 (래핑), 그 외는 전체
-  let slice: SharedDoc[];
-  if (config.needsSplit && all.length > 0) {
-    const start = config.startOffset % all.length;
-    const end = start + config.dailyCount;
-    slice =
-      end <= all.length
-        ? all.slice(start, end)
-        : [...all.slice(start), ...all.slice(0, end - all.length)];
-  } else {
-    slice = all;
-  }
-  const sliceEndOffset = config.startOffset + slice.length;
-  console.log(
-    `[Cycle] N=${config.totalCount} daily=${config.dailyCount} cycles=${config.cyclesPerDay} ` +
-      `sleep=${sleepMs}ms offset=${config.startOffset}~${Math.max(config.startOffset, sliceEndOffset - 1)} ` +
-      `split=${config.needsSplit}`,
-  );
 
   const events: RawEvents = {
     drops: [],
@@ -392,8 +437,43 @@ async function main() {
   let priceDrops = 0;
   let rateLimited = false;
   let processedCount = 0; // slice 내 평가 완료 갯수 (rate-limited 시 미증가)
+  let config: CycleConfig | undefined;
 
-  for (let i = 0; i < slice.length; i++) {
+  if (notifyOnly) {
+    // 가격 스캔 완전 스킵 — price_drops 24h 컬렉션 조회로 events 재구성.
+    await loadDropsForNotifyOnly(events);
+  } else {
+    // shared_products 풀을 cycle config 산출 전에 fetch — 실제 size를 진실 원천으로 사용.
+    // meta/stats.sharedProductCount(자동 갱신 미구현)에 종속되지 않게 자가 보정.
+    const all = await fetchAllSharedProducts();
+    console.log(`[SharedPriceChecker] shared_products 풀 ${all.length}개`);
+
+    config = await computeCycleConfig(all.length);
+    const { sleepMs } = config;
+
+    const bestCache = await loadCategoryBestCache(db);
+    console.log(`[SharedPriceChecker] category_best 캐시 ${bestCache.size}개`);
+
+    // slice 산출: split 모드는 startOffset부터 dailyCount개 (래핑), 그 외는 전체
+    let slice: SharedDoc[];
+    if (config.needsSplit && all.length > 0) {
+      const start = config.startOffset % all.length;
+      const end = start + config.dailyCount;
+      slice =
+        end <= all.length
+          ? all.slice(start, end)
+          : [...all.slice(start), ...all.slice(0, end - all.length)];
+    } else {
+      slice = all;
+    }
+    const sliceEndOffset = config.startOffset + slice.length;
+    console.log(
+      `[Cycle] N=${config.totalCount} daily=${config.dailyCount} cycles=${config.cyclesPerDay} ` +
+        `sleep=${sleepMs}ms offset=${config.startOffset}~${Math.max(config.startOffset, sliceEndOffset - 1)} ` +
+        `split=${config.needsSplit}`,
+    );
+
+    for (let i = 0; i < slice.length; i++) {
     await waitIfInBlockedZone();
     processedCount = i + 1; // 낙관적 — rate-limited break 시 i로 롤백
     const item = slice[i];
@@ -530,6 +610,7 @@ async function main() {
       // newPrice > prevPrice
       const trackers = await fetchTrackers(productId);
       events.ups.push({ ...brief, dropRate, trackers });
+    }
     }
   }
 
@@ -719,8 +800,8 @@ async function main() {
 
   await cleanupInvalidTokens(invalidTokens);
 
-  // split 모드: 처리한 마지막 index 기준 lastCheckedOffset 갱신
-  if (config.needsSplit && config.totalCount > 0 && processedCount > 0) {
+  // split 모드: 처리한 마지막 index 기준 lastCheckedOffset 갱신 (notify-only는 가격 스캔 없으므로 스킵)
+  if (config && config.needsSplit && config.totalCount > 0 && processedCount > 0) {
     const nextOffset =
       (config.startOffset + processedCount) % config.totalCount;
     try {
@@ -738,7 +819,7 @@ async function main() {
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `[SharedPriceChecker] 완료 scanned=${scanned} processed=${processedCount} skipZero=${skipZero} skipToday=${skipToday} ` +
+    `[SharedPriceChecker] 완료 mode=${notifyOnly ? 'notify-only' : 'price-check'} scanned=${scanned} processed=${processedCount} skipZero=${skipZero} skipToday=${skipToday} ` +
       `cacheHits=${cacheHits} apiCalls=${apiCalls} drops=${priceDrops} ups=${events.ups.length} ` +
       `targets=${events.targets.length} bc10=${events.broadcastTier10.length} bc20=${events.broadcastTier20.length} ` +
       `notif=${payloads.length} rateLimited=${rateLimited} elapsed=${elapsed}s`,
