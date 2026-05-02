@@ -65,6 +65,27 @@ const ONE_DAY_MS = 24 * 3600 * 1000;
 const BROADCAST_TIER10 = -10; // dropRate ≤ -10 (== 10% 이상 하락)
 const BROADCAST_TIER20 = -20;
 
+// ─── §11 자동화 설계 — N값 기반 실행 타이밍 자동 결정 ───
+// docs/020 §3 매트릭스 — [최대 N, 간격 분]. 오름차순 정렬 필수 (lookupBaseInterval 선형 탐색).
+// N > 13,200은 추후 검토 숙제 — 안전을 위해 가장 큰 간격(330)으로 fallback.
+const INTERVAL_MATRIX: ReadonlyArray<readonly [number, number]> = [
+  [400, 10],
+  [600, 15],
+  [800, 20],
+  [1200, 30],
+  [1800, 45],
+  [2400, 60],
+  [3600, 90],
+  [4800, 120],
+  [6000, 150],
+  [7200, 180],
+  [9600, 240],
+  [13200, 330],
+];
+const PEAK_HOUR_START = 7;  // 07:00 KST 포함
+const PEAK_HOUR_END = 23;   // 23:00 KST 미포함 (즉 22:59까지 피크)
+const OFF_PEAK_MULTIPLIER = 2; // 비피크는 간격 ×2 (docs/020 §11)
+
 // ─── Firebase Admin 초기화 ───
 const serviceAccount = JSON.parse(
   process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}',
@@ -93,6 +114,63 @@ function getKstHourMinute(): { hour: number; minute: number } {
 function isMorningTime(): boolean {
   const { hour } = getKstHourMinute();
   return hour >= 7 && hour < 9;
+}
+
+/**
+ * §11 §3 매트릭스 룩업 — N값에 따른 기본 cron 간격 (분).
+ * N > 13,200은 추후 검토 숙제(§3) — 가장 큰 간격(330분)으로 안전 fallback.
+ */
+function lookupBaseInterval(n: number): number {
+  for (const [maxN, minutes] of INTERVAL_MATRIX) {
+    if (n <= maxN) return minutes;
+  }
+  return INTERVAL_MATRIX[INTERVAL_MATRIX.length - 1][1];
+}
+
+/** 07:00 ≤ hour < 23:00 KST (피크 시간대, §5) */
+function isPeakHour(hour: number): boolean {
+  return hour >= PEAK_HOUR_START && hour < PEAK_HOUR_END;
+}
+
+/**
+ * §11 실행 간격 — 피크는 base 그대로, 비피크는 base × 2.
+ * Block zone(01:00~04:30) 진입은 별도 가드(`waitIfInBlockedZone`)에서 처리하므로
+ * 본 함수는 시간 외 가드 없음 — 호출 측에서 Block zone 분기를 먼저 적용한다.
+ */
+function computeEffectiveInterval(n: number, hour: number): number {
+  const base = lookupBaseInterval(n);
+  return isPeakHour(hour) ? base : base * OFF_PEAK_MULTIPLIER;
+}
+
+/** §11 lastRunAt 읽기 — meta/stats.lastRunAt (없으면 0 = 첫 실행으로 처리) */
+async function readLastRunAt(): Promise<number> {
+  try {
+    const snap = await db.collection('meta').doc('stats').get();
+    return (snap.data()?.lastRunAt as number | undefined) ?? 0;
+  } catch (e) {
+    console.warn('[Schedule] meta/stats.lastRunAt 읽기 실패 → 0', e);
+    return 0;
+  }
+}
+
+/** §11 lastRunAt 갱신 — main 시작 시각으로 기록 (start-to-start 간격 유지) */
+async function writeLastRunAt(at: number): Promise<void> {
+  try {
+    await db.collection('meta').doc('stats').set({ lastRunAt: at }, { merge: true });
+  } catch (e) {
+    console.warn('[Schedule] meta/stats.lastRunAt 갱신 실패:', e);
+  }
+}
+
+/** §11 shared_products count() — 인터벌 사전판정용 (full fetch 회피) */
+async function countSharedProducts(): Promise<number> {
+  try {
+    const snap = await db.collection('shared_products').count().get();
+    return snap.data().count as number;
+  } catch (e) {
+    console.warn('[Schedule] shared_products count() 실패 → 0', e);
+    return 0;
+  }
 }
 
 /** 19:30 ≤ now < 21:00 KST */
@@ -420,6 +498,31 @@ async function main() {
       );
       return;
     }
+  }
+
+  // §11 자동화 가드 — yml은 10분 고정 트리거, 코드가 N값 기반 간격 결정.
+  // notify-only 모드는 별도 cron schedule(07:30/20:00) → 본 가드 면제.
+  // 첫 실행(lastRunAt=0)은 즉시 통과.
+  if (!notifyOnly) {
+    const n = await countSharedProducts();
+    const { hour } = getKstHourMinute();
+    const interval = computeEffectiveInterval(n, hour);
+    const lastRunAt = await readLastRunAt();
+    const sinceMs = startedAt - lastRunAt;
+    const sinceMin = sinceMs / 60_000;
+    const peak = isPeakHour(hour);
+    const peakLabel = peak ? 'peak' : 'offPeak';
+    const sinceLabel = lastRunAt > 0 ? `${sinceMin.toFixed(1)}min` : 'first';
+
+    if (lastRunAt > 0 && sinceMs < interval * 60_000) {
+      console.log(
+        `[Schedule] N=${n} interval=${interval}min(${peakLabel}) since=${sinceLabel} — 간격 미달, 즉시 종료`,
+      );
+      return;
+    }
+    console.log(
+      `[Schedule] N=${n} interval=${interval}min(${peakLabel}) since=${sinceLabel} — 실행 진행`,
+    );
   }
 
   const events: RawEvents = {
@@ -799,6 +902,12 @@ async function main() {
   console.log(`[Flush] lastNotifications 업데이트 ${updateCount}명`);
 
   await cleanupInvalidTokens(invalidTokens);
+
+  // §11 lastRunAt 갱신 — start-to-start 간격을 유지하기 위해 startedAt 기록.
+  // notify-only는 §11 가드 면제이므로 갱신도 스킵 (price-check 전용 카운터).
+  if (!notifyOnly) {
+    await writeLastRunAt(startedAt);
+  }
 
   // split 모드: 처리한 마지막 index 기준 lastCheckedOffset 갱신 (notify-only는 가격 스캔 없으므로 스킵)
   if (config && config.needsSplit && config.totalCount > 0 && processedCount > 0) {

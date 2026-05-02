@@ -20,13 +20,16 @@ name: Shared Products Price Check (019 §5-2)
 
 on:
   schedule:
-    - cron: '30 19 * * *'  # 04:30 KST (= 19:30 UTC) — 활성화 2026-05-01
+    # 10분 고정 트리거 — 코드(§11)가 N값 기반 간격 결정 + lastRunAt 가드로 실제 실행 여부 판정
+    # 10분은 §3 매트릭스 최단 간격(N≤400 시 10분)의 공약수.
+    # 간격 미달 시 graceful exit (~2~5초). Block zone(01:00~04:30 KST)은 별도 가드로 회피.
+    - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
 jobs:
   shared-price-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # 5h50m — GitHub Actions 6h 한도 안전 마진
+    timeout-minutes: 350  # 5h50m — N=13,200 단일 cycle 5h30m + 마진. 대부분 invocation은 graceful exit 5초 종료
 
     steps:
       - uses: actions/checkout@v4
