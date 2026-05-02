@@ -177,6 +177,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - tracked-backfill 적용했지만 여전히 productId 누락 사용자 존재
 - 다음 cron 자동 실행(2026-05-03 04:30 KST 가격체크 + 07:30 morning + 20:00 evening) 결과 확인 후 원인 파악
 
+⑪ **legacy `price-check.yml` 완전 비활성화 + evening_no_change 가드 완화** (2026-05-02)
+- **legacy 워크플로우 폐기**: `.github/workflows/price-check.yml` → `price-check.yml.disabled` 확장자 변경. GitHub Actions 미인식 → schedule + workflow_dispatch 모두 무효화. 파일은 히스토리 보존 목적으로 유지 (재활성화하려면 파일명 되돌리기). Phase 3 shared-price-checker가 가격 체크 전담 → legacy price-checker 정식 폐기 완료
+- **evening_no_change 가드 완화** (`scripts/shared-price-checker/index.ts:871`): `hadAlertToday` + `pricedAlertedUids` 두 가드 모두 제거 → 19:30~21:00 KST 활성 사용자 전원에게 발송 (24h evening 가드만 적용). 그날 다른 가격 알림 수신 여부와 무관. 사고 원인이었던 "비추적자도 evening 차단되는 의심 케이스" 차단 경로 제거 — 다음 20:00 KST cron에서 효과 검증
+
 ## 다음 작업 순서 (2026-05-02 1.0.9 부분 배포 + evening 알림 미수신 사건)
 
 **최우선** (잔여 작업):
@@ -203,7 +207,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 **장기**:
 15. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식 확정 후 cron 호출량 재산정
 16. **category-best 브로드캐스트 큐** (별도 PR) — 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 → shared-price-checker 소비
-17. **legacy `price-check.yml` 정식 폐기** (Phase 3-C)
+17. ~~**legacy `price-check.yml` 정식 폐기** (Phase 3-C)~~ — 2026-05-02 완료 (`.disabled` 확장자)
 18. **가격변동 탭 실데이터 검증** — cron 가동 후 `recordPriceDrop` 기록 + UI 표시 확인
 19. **Firebase App Check 검토** — Public repo apiKey 노출 후속 보강
 
@@ -234,7 +238,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **배포 (iOS)**: 1.0.9 (bn44) Transporter 업로드 + App Store Connect 심사 제출 ← 잔여
 - [x] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.8"` Firebase Console 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 1.0.8 업데이트 알림 표시
 - [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` — 1.0.9 양 스토어 승급 후
-- [ ] **🚨 조사**: 오늘 20:00 KST evening 알림 미수신 — notify-only.yml 첫 자동 실행 결과 미확인. gh run list 확인 + flush 분기 추적 필요
+- [ ] **🚨 조사**: 오늘 20:00 KST evening 알림 미수신 — notify-only.yml 첫 자동 실행 결과 미확인. gh run list 확인 + flush 분기 추적 필요. 2026-05-02 evening 가드 완화 패치(⑪) 적용 → 다음 20:00 KST cron 결과로 검증
+- [x] **폐기**: legacy `price-check.yml` → `.yml.disabled` (2026-05-02) — GitHub Actions 미인식
+- [x] **완화**: `evening_no_change` 가드 — `hadAlertToday` + `pricedAlertedUids` 제거 (2026-05-02) — 19:30~21:00 KST 활성 사용자 전원 발송 (24h 가드만)
 - [ ] **검증**: 내일 가격체크 + 알림 정상 동작 (§11 자동화 첫 사이클)
 - [ ] **검증**: 1.0.9 실기기 — 알림 클릭 시 detail 화면 정상 표시 + iOS App Store 이동 정상
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
@@ -302,7 +308,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - **알림 7종 시스템** (`ee60516`): morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20
   - 각 type 3개 후보 문구 랜덤, `{N}` placeholder
   - 사용자당 합산 (drop/up summary), target 통과 시 drop summary 중복 제외
-  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기, evening은 그날 가격 알림 미수신자만
+  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기, evening은 19:30~21:00 KST 활성 사용자 전원 (24h evening 가드만, 2026-05-02 hadAlertToday + pricedAlertedUids 가드 제거)
   - 24h 중복 방지: `users/{uid}.lastNotifications` (morning/evening/priceDrop[pid]/priceUp[pid]/targetReached[pid]/broadcast.tier10|tier20)
   - flush 단계 분리: 메모리 누적 → 끝에서 일괄 발송. 24h 통과 productId 0개면 push skip
 - createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
@@ -318,10 +324,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 500개 batch 분할, DRY_RUN 안전장치
 - **2026-05-02 dry_run=false 실행 완료** — productId 누락 5건 보강 + trackerCount 정정. 다음 cron 실행에서 `trackers=` 양수 확인 대기
 
-### legacy price-checker (Phase 3-C에서 폐기 예정, 비활성)
+### legacy price-checker (정식 폐기, 2026-05-02)
 - 위치: `scripts/price-checker/` — 파트너스 API 검색 → Firestore → Expo Push
+- 워크플로우: `.github/workflows/price-check.yml.disabled` (확장자로 비활성화, GitHub Actions 미인식)
 - 재시도 루프 제거 완료 (2026-04-24, `46c20e5`): 상품당 1회 검색, 매칭 실패 시 즉시 스킵
-- 🚨 cron 비활성 (2026-04-24 야간) — Phase 3 `shared_products` 완료 후 정식 폐기
+- 폐기 이력: cron 비활성(2026-04-24 야간) → 파일 `.disabled` 확장자(2026-05-02). Phase 3 shared-price-checker가 가격 체크 전담
+- 재활성화 시 파일명 되돌리고 schedule 주석 해제 — 단, 019 §4-2 중복 처리 검증 필요
 - Secrets: FIREBASE_SERVICE_ACCOUNT_KEY, COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY. Node.js 24
 - **쿠팡 파트너스 공식 Rate Limit**: 검색 API 1분/50회, 리포트 API 1시간/500회, 모든 API 합산 1분/100회, 링크 생성 1분/50회
 

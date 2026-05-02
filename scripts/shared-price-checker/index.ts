@@ -868,18 +868,13 @@ async function main() {
     }
   }
 
-  // 6. evening_no_change (그날 가격 알림 미수신자만)
+  // 6. evening_no_change — 19:30~21:00 KST 활성 사용자 전원 (24h 가드만 적용).
+  // 2026-05-02: hadAlertToday 가드 제거 — 그날 가격 알림 수신 여부와 무관하게 발송.
+  // pricedAlertedUids 가드도 제거 — 같은 flush에서 다른 알림을 받았더라도 evening은 별개로 발송.
   if (eveningMode) {
     for (const user of activeUsers.values()) {
       const last = user.lastNotifications.evening ?? 0;
       if (now - last < ONE_DAY_MS) continue;
-      if (pricedAlertedUids.has(user.uid)) continue;
-      const ln = user.lastNotifications;
-      const hadAlertToday =
-        anyTimestampSince(ln.priceDrop, todayKst) ||
-        anyTimestampSince(ln.priceUp, todayKst) ||
-        anyTimestampSince(ln.targetReached, todayKst);
-      if (hadAlertToday) continue;
       payloads.push({ type: 'evening_no_change', token: user.token });
       markUpdate(user.uid, 'lastNotifications.evening', now);
     }

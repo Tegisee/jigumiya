@@ -1,4 +1,8 @@
-name: Price Check Bot
+name: Price Check Bot (DISABLED)
+
+# 2026-05-02 완전 비활성화: 파일 확장자를 `.yml.disabled`로 변경 → GitHub Actions 미인식.
+# Phase 3 shared-price-checker가 가격 체크를 전담하므로 legacy price-checker는 정식 폐기.
+# 재활성화하려면 파일명을 `price-check.yml`로 되돌리면 됨 (히스토리 보존 목적 유지).
 
 on:
   # 비활성화 유지 (2026-04-24 burst rate 과호출 → 긴급 차단).
