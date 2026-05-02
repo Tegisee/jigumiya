@@ -5,9 +5,7 @@ import { getMetaConfig } from './firebase';
 
 const DISMISSED_VERSION_KEY = 'update_prompt_dismissed_version';
 const ANDROID_PACKAGE = 'com.jigumiya.app';
-// TODO: App Store Connect에서 발급된 실제 ID(숫자)로 교체.
-//       빈 값인 동안 iOS는 스토어 이동 동작 없음 (Alert만 표시).
-const IOS_APP_STORE_ID = '';
+const IOS_APP_STORE_ID = '6760587430';
 
 /** "1.0.6" vs "1.0.10" semver 부분 비교. 음수/0/양수 반환. */
 export function compareVersion(a: string, b: string): number {
