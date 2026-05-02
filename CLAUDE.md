@@ -177,20 +177,27 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - tracked-backfill 적용했지만 여전히 productId 누락 사용자 존재
 - 다음 cron 자동 실행(2026-05-03 04:30 KST 가격체크 + 07:30 morning + 20:00 evening) 결과 확인 후 원인 파악
 
-⑪ **legacy `price-check.yml` 완전 비활성화 + evening_no_change 가드 완화** (2026-05-02)
+⑪ **legacy `price-check.yml` 완전 비활성화 + evening_no_change 가드 완화** (2026-05-02, `fd6afe3`)
 - **legacy 워크플로우 폐기**: `.github/workflows/price-check.yml` → `price-check.yml.disabled` 확장자 변경. GitHub Actions 미인식 → schedule + workflow_dispatch 모두 무효화. 파일은 히스토리 보존 목적으로 유지 (재활성화하려면 파일명 되돌리기). Phase 3 shared-price-checker가 가격 체크 전담 → legacy price-checker 정식 폐기 완료
 - **evening_no_change 가드 완화** (`scripts/shared-price-checker/index.ts:871`): `hadAlertToday` + `pricedAlertedUids` 두 가드 모두 제거 → 19:30~21:00 KST 활성 사용자 전원에게 발송 (24h evening 가드만 적용). 그날 다른 가격 알림 수신 여부와 무관. 사고 원인이었던 "비추적자도 evening 차단되는 의심 케이스" 차단 경로 제거 — 다음 20:00 KST cron에서 효과 검증
 
-## 다음 작업 순서 (2026-05-02 1.0.9 부분 배포 + evening 알림 미수신 사건)
+⑫ **morning_greeting 가드 점검 + 07:30 KST 트리거 미발생 원인 규명** (2026-05-02)
+- **morning_greeting 점검 결과** (`index.ts:740-748`): **이미 24h 가드만 적용**, 추가 수정 불필요. evening_no_change와 달리 처음부터 `hadAlertToday`/`pricedAlertedUids` 가드 없음 — 코드/문서 변경 0건
+- **20:00 KST evening 사고 분석 (run 25251082619)**: schedule cron `'0 11 * * *'` 정상 트리거(11:40 UTC = 20:40 KST). 모든 step(checkout/setup-node/npm install/tsc/node) 정상 실행. `[SharedPriceChecker] 시작 morning=false evening=true notifyOnly=true` → `[NotifyOnly] drops=1 targets=0 bc10=0 bc20=0` → `[Flush] 활성 사용자 54명 payloads 0건` → workflow 자체는 결함 없음. **0건 원인은 flush 단의 evening 가드** — fd6afe3 패치로 차단 경로 제거 완료
+- **07:30 KST schedule 트리거 미발생 원인**: `notify-only.yml` 커밋 `0bdc445` push 시각 = **2026-05-02 09:54:18 KST**, 첫 22:30 UTC schedule 시각(= 2026-05-02 07:30 KST)보다 **2시간 24분 늦음** → 파일이 존재하지 않아서 GitHub Actions가 트리거할 수 없었던 단순 타이밍 이슈. cron 표현식 `'30 22 * * *'` 자체는 정상. 11:00 UTC schedule(20:00 KST)은 09:54 push 후 ~1시간 6분 뒤라 정상 등록됨
+- **첫 morning 자동 트리거 예정**: 2026-05-03 07:30 KST. 09:00 KST 이후 `gh run list --workflow=notify-only.yml`로 schedule trigger run 확인
+
+## 다음 작업 순서 (2026-05-02 1.0.9 부분 배포 + evening 가드 완화 + morning 트리거 대기)
 
 **최우선** (잔여 작업):
 1. **배포**: 1.0.9 (bn44/vc44) iOS App Store Transporter 업로드 + 심사 제출 (Android는 이미 Play Console 프로덕션 업로드 완료)
-2. **조사**: 20:00 KST evening 알림 미수신 원인 — gh run list로 notify-only.yml 첫 트리거 여부 + 로그 확인. 미트리거인지 trigger 후 graceful exit인지 분기. 내일 새벽 04:30 / 07:30 / 20:00 cron 자동 실행 결과로 패턴 확정
-3. **갱신**: 1.0.9 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
-4. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
-5. **검증**: 내일(2026-05-03) 가격체크 + 알림 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
-6. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
-7. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
+2. **🚨 검증 (내일 09:00 KST 이후)**: 2026-05-03 07:30 KST morning 첫 자동 트리거 — `notify-only.yml` push 시점 이슈로 오늘은 미발생. `gh run list`로 schedule run 발생 확인 + `morning=true` 로그 + `payloads N건`
+3. **🚨 검증 (내일 21:00 KST 이후)**: 2026-05-03 20:00 KST evening 가드 완화(`fd6afe3`) 효과 — `payloads ≈ 활성 사용자 수` 기대. 0건 지속 시 24h evening 가드 의심 → Firestore 직접 조회
+4. **갱신**: 1.0.9 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
+5. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
+6. **검증**: 내일(2026-05-03) 가격체크 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
+7. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
+8. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
 
 **중기**:
 5. **`meta/stats.sharedProductCount` 자동 갱신** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 -1. N≥50,000 split 모드 진입 판정 신뢰
@@ -238,9 +245,13 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [ ] **배포 (iOS)**: 1.0.9 (bn44) Transporter 업로드 + App Store Connect 심사 제출 ← 잔여
 - [x] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.8"` Firebase Console 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 1.0.8 업데이트 알림 표시
 - [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` — 1.0.9 양 스토어 승급 후
-- [ ] **🚨 조사**: 오늘 20:00 KST evening 알림 미수신 — notify-only.yml 첫 자동 실행 결과 미확인. gh run list 확인 + flush 분기 추적 필요. 2026-05-02 evening 가드 완화 패치(⑪) 적용 → 다음 20:00 KST cron 결과로 검증
+- [x] **조사**: 20:00 KST evening 알림 미수신 — schedule trigger 발생(run 25251082619, 11:40 UTC) + 모든 step 정상 실행 + flush 단계에서 payloads 0건. workflow 결함 아닌 evening 가드(hadAlertToday/pricedAlertedUids)에 막힘. `fd6afe3` 패치로 차단 경로 제거 → 2026-05-03 20:00 KST cron 결과로 효과 검증
+- [x] **점검**: morning_greeting 가드 (2026-05-02) — 원래부터 24h 가드만 적용, 수정 불필요 (evening과 달리 처음부터 `hadAlertToday`/`pricedAlertedUids` 없음)
+- [x] **규명**: 07:30 KST 트리거 미발생 원인 — `notify-only.yml` push 시각(09:54 KST)이 첫 schedule(07:30 KST)보다 늦어서 GitHub Actions가 트리거 불가. cron 표현식 자체는 정상. 첫 morning 자동 트리거는 2026-05-03 07:30 KST 예정
 - [x] **폐기**: legacy `price-check.yml` → `.yml.disabled` (2026-05-02) — GitHub Actions 미인식
 - [x] **완화**: `evening_no_change` 가드 — `hadAlertToday` + `pricedAlertedUids` 제거 (2026-05-02) — 19:30~21:00 KST 활성 사용자 전원 발송 (24h 가드만)
+- [ ] **🚨 검증 (내일)**: 2026-05-03 07:30 KST morning 첫 자동 실행 — `gh run list --workflow=notify-only.yml`로 schedule trigger 발생 확인 + `morning=true notifyOnly=true` 로그 + `payloads N건` (24h 가드 통과 사용자 수)
+- [ ] **🚨 검증 (내일)**: 2026-05-03 20:00 KST evening 가드 완화 효과 — `fd6afe3` 패치 후 첫 evening cron에서 `payloads ≈ 활성 사용자 수` 확인. 0건 지속 시 24h evening 가드 의심 → Firestore `users/{uid}.lastNotifications.evening` 직접 조회
 - [ ] **검증**: 내일 가격체크 + 알림 정상 동작 (§11 자동화 첫 사이클)
 - [ ] **검증**: 1.0.9 실기기 — 알림 클릭 시 detail 화면 정상 표시 + iOS App Store 이동 정상
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
@@ -265,7 +276,8 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 1.0.9 (bn44/vc44) **Android Play Console 프로덕션 업로드 완료** — iOS Transporter + 심사 제출은 잔여
 - 1.0.9 주요 변경: iOS App Store ID 채움(6760587430) + 알림 라우팅 매칭 fix(productId fallback) — "상품을 찾을 수 없습니다" 빈 화면 해소
 - `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 업데이트 알림 표시
-- **🚨 20:00 KST evening 알림 미수신** — notify-only.yml 첫 자동 실행 결과 미확인. 내일 04:30 / 07:30 / 20:00 cron 자동 실행 결과로 원인 파악 예정
+- **20:00 KST evening 알림 미수신 사고 분석 완료** — schedule trigger 발생(11:40 UTC) + step 정상 실행, flush 가드(`hadAlertToday`/`pricedAlertedUids`)에서 차단됨. `fd6afe3`로 두 가드 제거 → 2026-05-03 20:00 KST 결과 검증 대기
+- **07:30 KST morning 첫 트리거 미발생** — `notify-only.yml` push(09:54 KST)가 첫 schedule(07:30 KST)보다 늦어서 정상. 2026-05-03 07:30 KST 첫 자동 트리거 예정
 - 1.0.8 (bn42/vc42) 배포 진행 중: iOS App Store 심사 제출 + Android Play Console 프로덕션 업로드 (2026-05-01)
 - 1.0.8 주요 변경: 골드박스 API 제거 → **오늘의 특가**(price_drops 24h + category_best fallback 1h 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**
 - 서버 cron (2026-05-02 §11 자동화 적용 후):
