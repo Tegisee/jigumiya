@@ -126,10 +126,16 @@ export default function AddItemModal() {
   const parsedUrlRef = useRef('');
   const resolvedUrlRef = useRef('');
   const affiliateUrlRef = useRef('');
+  // 'url' 외 단계 진행 중에 쿠팡 앱 갔다 돌아올 때 useFocusEffect가 state를 리셋하지 않도록
+  // 최신 step을 ref로 추적 (stale closure 회피)
+  const stepRef = useRef<Step>('url');
+  stepRef.current = step;
 
-  // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응)
+  // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응).
+  // 단, scraping/target 진행 중에는 보존 — 쿠팡 앱 이탈 후 복귀 시 처음부터 다시 시작 방지.
   useFocusEffect(
     useCallback(() => {
+      if (stepRef.current !== 'url') return;
       setUrl(sharedUrl ?? '');
       setTargetPrice('');
       setStep('url');
@@ -143,7 +149,7 @@ export default function AddItemModal() {
 
   const suggestedPrice = scraped?.price ? Math.round(scraped.price * 0.9) : null;
 
-  // 1단계: "다음" 버튼 → URL resolve + 딥링크 생성 → 스크래핑 시작
+  // 1단계: "다음" 버튼 → 사전 검증 + iOS 공유 시 가이드 Alert → proceedFromUrl
   const handleNext = async () => {
     const parsedUrl = extractUrl(url);
     if (!parsedUrl.includes('coupang.com')) {
@@ -158,6 +164,24 @@ export default function AddItemModal() {
       return;
     }
 
+    // iOS + 공유 진입: 쿠팡 앱 잠시 열릴 가능성 안내 (Universal Link 우회 실패 케이스 대비)
+    if (Platform.OS === 'ios' && isFromShare) {
+      Alert.alert(
+        '쿠팡 앱이 잠깐 열릴 수 있어요',
+        '확인 후 지금이야 앱으로 돌아와주세요',
+        [
+          { text: '취소', style: 'cancel' },
+          { text: '확인', onPress: () => proceedFromUrl(parsedUrl) },
+        ],
+      );
+      return;
+    }
+
+    proceedFromUrl(parsedUrl);
+  };
+
+  // 1단계 본 처리 — URL resolve + 딥링크 생성 → 스크래핑 시작
+  const proceedFromUrl = async (parsedUrl: string) => {
     parsedUrlRef.current = parsedUrl;
     retryCountRef.current = 0;
     setStep('scraping');
@@ -239,19 +263,25 @@ export default function AddItemModal() {
     startScrape(scrapeTarget);
   };
 
-  /** iOS: HTML fetch → html prop, Android: URL 직접 로드 */
+  /** iOS: HTML fetch (8s timeout) → html prop, Android: URL 직접 로드 */
   const startScrape = async (targetUrl: string) => {
     if (Platform.OS === 'ios') {
       try {
         console.log('[AddItem] iOS: HTML fetch 시작 →', targetUrl.slice(0, 80));
-        const res = await fetch(targetUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'ko-KR,ko;q=0.9',
+        const res = await fetchWithTimeout(
+          targetUrl,
+          {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+              'Accept':
+                'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'ko-KR,ko;q=0.9',
+            },
+            redirect: 'follow',
           },
-          redirect: 'follow',
-        });
+          8000,
+        );
         if (res.ok) {
           const html = await res.text();
           console.log('[AddItem] iOS: HTML fetch 성공, length=', html.length);
@@ -260,10 +290,10 @@ export default function AddItemModal() {
           return;
         }
       } catch (e) {
-        console.warn('[AddItem] iOS: HTML fetch 실패, URL 폴백 →', e);
+        console.warn('[AddItem] iOS: HTML fetch timeout/실패, URL 폴백 →', e);
       }
     }
-    // Android 또는 iOS fetch 실패 시 URL 직접 로드
+    // Android 또는 iOS fetch 실패/타임아웃 시 URL 직접 로드
     setScrapeHtml(null);
     setScrapeUrl(targetUrl);
   };
