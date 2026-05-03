@@ -85,10 +85,12 @@ export default function RootLayout() {
     // 앱 실행 직후 뱃지 초기화
     clearBadgeCount();
 
-    // background → active 전환 시 뱃지 초기화
+    // background → active 전환 시 뱃지 초기화 + Functions warmup 재발사
+    // (idle timeout으로 인스턴스가 종료된 케이스 보강 — 다음 callResolveAffiliate 콜드 회피)
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         clearBadgeCount();
+        warmupResolveAffiliate();
       }
     });
 

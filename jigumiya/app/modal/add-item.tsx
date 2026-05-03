@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,7 +22,10 @@ import {
   extractProductId,
   extractVendorItemId,
 } from '../../services/coupangApi';
-import { callResolveAffiliate } from '../../services/firebase';
+import {
+  callResolveAffiliate,
+  warmupResolveAffiliate,
+} from '../../services/firebase';
 import CoupangScraper, {
   ScrapedProduct,
 } from '../../components/CoupangScraper';
@@ -131,6 +134,12 @@ export default function AddItemModal() {
   const stepRef = useRef<Step>('url');
   stepRef.current = step;
 
+  // 모달 mount 시 Functions 워밍업 — 사용자가 URL 확인 + "다음" 누르는 1~2s 동안 컨테이너 init.
+  // _layout.tsx launch 워밍업이 idle timeout/늦은 진입 케이스를 못 잡을 때 보강.
+  useEffect(() => {
+    warmupResolveAffiliate();
+  }, []);
+
   // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응).
   // 단, scraping/target 진행 중에는 보존 — 쿠팡 앱 이탈 후 복귀 시 처음부터 다시 시작 방지.
   useFocusEffect(
@@ -192,6 +201,7 @@ export default function AddItemModal() {
     let resolved = parsedUrl;
     let affiliate = parsedUrl;
 
+    const t0 = Date.now();
     const functionsResult = await withTimeout(
       callResolveAffiliate(parsedUrl),
       8000,
@@ -200,6 +210,9 @@ export default function AddItemModal() {
       console.warn('[AddItem] callResolveAffiliate timeout/error:', e);
       return { ok: false as const, error: 'timeout', detail: String(e) };
     });
+    console.log(
+      `[AddItem] Functions resolve ${Date.now() - t0}ms ok=${functionsResult.ok}`,
+    );
     if (functionsResult.ok) {
       resolved = functionsResult.originalUrl;
       affiliate = functionsResult.shortenUrl;
