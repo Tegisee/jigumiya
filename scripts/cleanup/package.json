@@ -1,0 +1,16 @@
+{
+  "name": "jigumiya-cleanup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "run:morning-20260503": "node dist/cleanup-morning-20260503.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.4.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2"
+  }
+}

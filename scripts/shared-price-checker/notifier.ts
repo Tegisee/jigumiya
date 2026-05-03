@@ -182,13 +182,24 @@ function buildMessage(p: PushPayload): {
   }
 }
 
+export interface SendResult {
+  successfulTokens: Set<string>;
+  invalidTokens: string[];
+}
+
 /**
- * 푸시 발송 — 발송 실패한(만료) 토큰 목록 반환 (cleanup용)
+ * 푸시 발송. chunk 단위 try/catch + batch 거절 시 1건씩 fallback (다른 EAS projectId 토큰 혼재 방어).
+ *
+ * 반환:
+ *   - successfulTokens: ticket.status === 'ok'로 응답된 토큰 (lastNotifications 업데이트 대상)
+ *   - invalidTokens: DeviceNotRegistered / InvalidCredentials 토큰 (cleanup 대상)
  */
 export async function sendSmartNotifications(
   payloads: PushPayload[],
-): Promise<string[]> {
-  if (payloads.length === 0) return [];
+): Promise<SendResult> {
+  const successfulTokens = new Set<string>();
+  const invalidTokens: string[] = [];
+  if (payloads.length === 0) return { successfulTokens, invalidTokens };
 
   const valid = payloads.filter((p) => Expo.isExpoPushToken(p.token));
 
@@ -204,31 +215,58 @@ export async function sendSmartNotifications(
   });
 
   const chunks = expo.chunkPushNotifications(messages);
-  const tickets: ExpoPushTicket[] = [];
 
   for (const chunk of chunks) {
+    let tickets: ExpoPushTicket[] = [];
     try {
-      const result = await expo.sendPushNotificationsAsync(chunk);
-      tickets.push(...result);
-      console.log('[Push] 발송:', result.length, '건');
+      tickets = await expo.sendPushNotificationsAsync(chunk);
+      console.log('[Push] 발송:', tickets.length, '건');
     } catch (e) {
-      console.error('[Push] 발송 실패:', e);
-    }
-  }
-
-  const invalidTokens: string[] = [];
-  tickets.forEach((ticket, i) => {
-    if (ticket.status === 'error') {
-      const token = messages[i]?.to as string;
-      if (
-        ticket.details?.error === 'DeviceNotRegistered' ||
-        ticket.details?.error === 'InvalidCredentials'
-      ) {
-        console.log('[Push] 만료 토큰:', token?.slice(0, 30));
-        if (token) invalidTokens.push(token);
+      console.warn(
+        '[Push] batch 거절 → 1건씩 재시도:',
+        e instanceof Error ? e.message.slice(0, 200) : String(e),
+      );
+      // 한 batch에 다른 EAS projectId 토큰이 섞이면 Expo가 전체 거절. 1건씩 보내면 충돌 회피.
+      tickets = [];
+      for (const m of chunk) {
+        try {
+          const single = await expo.sendPushNotificationsAsync([m]);
+          tickets.push(...single);
+        } catch (innerE) {
+          const tokenStr =
+            typeof m.to === 'string' ? m.to : Array.isArray(m.to) ? m.to[0] : '';
+          console.warn(
+            '[Push] 단건 실패:',
+            tokenStr?.slice(0, 30),
+            innerE instanceof Error ? innerE.message.slice(0, 120) : String(innerE),
+          );
+          // index 정합성 유지용 sentinel — ProviderError는 cleanup 대상 아님 (토큰 보존)
+          tickets.push({
+            status: 'error',
+            message: innerE instanceof Error ? innerE.message : String(innerE),
+            details: { error: 'ProviderError' },
+          } as unknown as ExpoPushTicket);
+        }
       }
     }
-  });
 
-  return invalidTokens;
+    tickets.forEach((ticket, i) => {
+      const m = chunk[i];
+      const token =
+        typeof m?.to === 'string' ? m.to : Array.isArray(m?.to) ? m.to[0] : '';
+      if (ticket.status === 'ok') {
+        if (token) successfulTokens.add(token);
+      } else if (ticket.status === 'error') {
+        if (
+          ticket.details?.error === 'DeviceNotRegistered' ||
+          ticket.details?.error === 'InvalidCredentials'
+        ) {
+          console.log('[Push] 만료 토큰:', token?.slice(0, 30));
+          if (token) invalidTokens.push(token);
+        }
+      }
+    });
+  }
+
+  return { successfulTokens, invalidTokens };
 }

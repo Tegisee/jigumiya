@@ -881,12 +881,26 @@ async function main() {
   }
 
   console.log(`[Flush] payloads ${payloads.length}건`);
-  const invalidTokens = await sendSmartNotifications(payloads);
+  const { successfulTokens, invalidTokens } =
+    await sendSmartNotifications(payloads);
+
+  // 발송 성공한 토큰의 uid만 lastNotifications 업데이트 — 발송 실패 시 24h 가드 박히지 않도록.
+  // (이전: send 전에 markUpdate가 무조건 등록됨 → batch 거절(다른 projectId 혼재 등) 시 0건 발송에도
+  //  Firestore 가드만 박혀 후속 cron 전부 24h 차단 → 알림 0건 사고 원인)
+  const successfulUids = new Set<string>();
+  for (const user of activeUsers.values()) {
+    if (successfulTokens.has(user.token)) successfulUids.add(user.uid);
+  }
 
   // lastNotifications 일괄 업데이트 (dotted-path)
   let updateCount = 0;
+  let skippedNotSent = 0;
   for (const [uid, paths] of updates) {
     if (Object.keys(paths).length === 0) continue;
+    if (!successfulUids.has(uid)) {
+      skippedNotSent++;
+      continue;
+    }
     try {
       await db.collection('users').doc(uid).update(paths);
       updateCount++;
@@ -894,7 +908,9 @@ async function main() {
       console.warn(`[Flush] lastNotifications 업데이트 실패 ${uid}:`, e);
     }
   }
-  console.log(`[Flush] lastNotifications 업데이트 ${updateCount}명`);
+  console.log(
+    `[Flush] lastNotifications 업데이트 ${updateCount}명 (발송 성공 ${successfulUids.size}명 / 미발송 가드 스킵 ${skippedNotSent}명)`,
+  );
 
   await cleanupInvalidTokens(invalidTokens);
 
