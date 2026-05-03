@@ -27,7 +27,15 @@ status: §8-A/§8-B 완료 + 1.0.6 배포 + §12 알림 7종 + §5-2 동적 사�
 | 앱 알림 라우팅 분기 (price-drops/home/detail) | ✅ 완료 (2026-04-30) | `resolveNotificationRoute` 헬퍼 (커밋 `c66489f`). 실기기 검증 미완료 |
 | 온보딩 문구 갱신 ("가격 변동 시 즉시 알림") | ✅ 완료 (2026-04-30) | OnboardingScreen Step 1 (커밋 `ffa5154`) |
 | 1.0.7 (bn41/vc41) 빌드 완료 | ✅ 완료 (2026-04-30) | AAB/IPA 산출, Play/App Store 업로드 대기 |
-| §8-D-2 cron 활성화 (schedule 주석 해제) | ⏸ 대기 | 선결: §8-C 아이고 통합 + workflow_dispatch dry-run + category-best broadcasts 큐 |
+| §8-D-2 cron 활성화 (`shared-price-check.yml` schedule 주석 해제) | ✅ 완료 (2026-05-01, `46ccb4c`) | 1.0.8 배포와 함께 04:30 KST 매일 자동 실행 |
+| §11 자동화 — yml 10분 고정 + 코드 N값 기반 간격 결정 | ✅ 완료 (2026-05-02, `b49ea2e`) | `INTERVAL_MATRIX` 12단계 + lastRunAt graceful exit |
+| `notify-only.yml` 신설 — morning/evening 시간대 진입 보장 | ✅ 완료 (2026-05-02, `0bdc445`) | 07:30 / 20:00 KST schedule + `NOTIFY_ONLY=true` 분기 + `loadDropsForNotifyOnly()` |
+| `evening_no_change` 가드 완화 | ✅ 완료 (2026-05-02, `fd6afe3`) | `hadAlertToday` + `pricedAlertedUids` 두 가드 제거 → 19:30~21:00 KST 활성 사용자 전원 발송 (24h evening 가드만) |
+| 🚨 Expo batch 거절 방어 — chunk try/catch + 1건씩 fallback | ✅ 완료 (2026-05-03, `096c69a`) | `users` 컬렉션에 다른 EAS projectId 토큰 혼재 시 batch 전체 거절 사고 직접 fix |
+| 🚨 markUpdate 순서 버그 fix — 발송 성공 토큰만 24h 가드 갱신 | ✅ 완료 (2026-05-03, `096c69a`) | `sendSmartNotifications` 반환을 `{ successfulTokens, invalidTokens }`로 변경. 발송 0건 시 lastNotifications도 0건 갱신 |
+| 잘못 박힌 lastNotifications.morning 55명 정리 | ✅ 완료 (2026-05-03) | `cleanup-morning-20260503.ts` 1회성 — 5/2 22:30~23:30 UTC 범위 morning 가드 unset (DRY_RUN 안전장치) |
+| 🐛 price_drops 중복 표시 fix — autoId → doc(productId).set 멱등 upsert | ✅ 완료 (2026-05-03, `2dc12c3`) | 같은 상품 24h 내 여러 번 하락 시 동일 문서 덮어쓰기. UI 표시 한정 버그 (알림 발송은 dedup 정상) |
+| price_drops 옛 autoId 문서 9건 wipe | ✅ 완료 (2026-05-03) | `wipe-price-drops-20260503.ts` — 고유 productId 6개 / 중복 그룹 2개 정리. 다음 cron이 새 키 체계로 재구축 |
 | category-best 브로드캐스트 큐 (category-best-updater 측) | ⏸ 별도 PR | 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 기록 → shared-price-checker가 큐 소비 |
 | ~~`category-best-update.yml` 낮 2회 보조 업데이트~~ | ❌ 폐기 | rate-limited 시 당일 중단 원칙(§4-1·§5-2) |
 
@@ -77,6 +85,39 @@ match /category_best/{categoryId} {
 ---
 
 ## 3. Firestore 컬렉션 구조
+
+### 3-0. `price_drops/{productId}` (멱등 upsert, 2026-05-03 정책 변경)
+
+**문서 ID 규약**: 문서 ID = productId (이전: autoId).
+
+```
+price_drops/{productId}  ← 이전: price_drops/{autoId}
+├── productId: string         ← 문서 ID와 동일 (필드는 검증/하위 호환용)
+├── productName: string
+├── thumbnail: string
+├── prevPrice: number         ← 직전 cron 시점 가격
+├── currentPrice: number      ← 이번 cron 시점 가격
+├── dropRate: number          ← (newPrice - prevPrice) / prevPrice * 100, 소수 2자리
+├── trackerCount: number
+├── deepLink: string          ← https://www.coupang.com/vp/products/{productId}
+└── createdAt: number         ← 마지막 변동 시각 (ms)
+```
+
+**정책 변경 배경 (2026-05-03 fix)**:
+- 이전: `db.collection('price_drops').add({...})` autoId → 같은 productId가 cron마다 별도 문서로 누적
+- 결과: 24h window 내 변동 횟수만큼 중복 → 홈 "오늘의 특가" / 가격변동 탭에 동일 상품 N번 표시 (사용자 보고: 한 상품 3장)
+- Fix: `db.collection('price_drops').doc(productId).set({...})` 멱등 upsert
+- 효과: productId당 24h 내 항상 1문서. 같은 상품 추가 하락 시 동일 문서 덮어쓰기. 마지막 변동만 보존
+
+**한계 (현 정책 수용 범위)**:
+- 첫 변동(예: 10,000 → 9,500)의 prevPrice 손실 → 두 번째 변동(9,500 → 9,400) 후 화면 표시는 "9,500 → 9,400 (-1%)"
+- 누적 변동 폭 표시가 필요해지면 별도 `priceHistory/{productId}/changes/{autoId}` 서브컬렉션 분리 (관심사 분리)
+- 알림 발송 측(`loadDropsForNotifyOnly`)은 이전부터 productId별 dedup 했으므로 이번 fix와 무관
+
+**1회성 wipe (2026-05-03)**:
+- `scripts/cleanup/wipe-price-drops-20260503.ts` — 옛 autoId 문서 9건 batch delete (productId 6개 / 중복 그룹 2개)
+- DRY_RUN=true 기본값, productId별 중복 통계 출력
+- 다음 cron이 새 키 체계로 재구축
 
 ### 3-1. `category_best/{categoryId}` (신규)
 ```
@@ -468,3 +509,48 @@ isEveningTime():  (hour===19 && minute>=30) || hour===20    // [19:30, 21:00)
 - `scripts/shared-price-checker/notifier.ts` — `PushPayload` discriminated union, MESSAGES 상수, buildMessage, sendSmartNotifications
 - `scripts/shared-price-checker/index.ts` — 스캔 단계 events 누적, flush 단계 24h 가드 + 합산 + lastNotifications dotted-path update
 - `app/_layout.tsx` + `services/notifications.ts` — `resolveNotificationRoute` 헬퍼로 알림 클릭 라우팅 분기 (커밋 `c66489f`)
+
+### 12-9. 🚨 알림 0건 사고 + 직접 fix (2026-05-03 `096c69a`)
+
+#### 사고 발생 (run 25263678929 / 5/3 07:40 KST)
+- payloads 111건 빌드됐으나 Expo가 batch 전체 거절
+- 에러: `"All push notification messages in the same request must be for the same project; check the details field to investigate conflicting tokens"`
+- 원인: `users` 컬렉션에 서로 다른 EAS projectId로 발급된 ExponentPushToken 혼재 → Expo Push Service가 한 batch에 다른 projectId 토큰 섞이면 거절
+- 추정 출처: 아이고 토큰 누수 / 사용자 단말의 EAS projectId 변경 이력 / dev/preview 프로파일 토큰
+
+#### 2차 피해 — markUpdate 순서 버그
+- 코드 흐름:
+  ```ts
+  // 이전 (버그):
+  if (morningMode) for (user of activeUsers) { payloads.push(...); markUpdate(user.uid, ...); }
+  // ...
+  await sendSmartNotifications(payloads);  // ← Expo가 batch 거절 (0건 발송)
+  for ([uid, paths] of updates) await db.collection('users').doc(uid).update(paths);  // ← 24h 가드는 박힘!
+  ```
+- 결과: 0건 발송에도 Firestore에 `lastNotifications.morning = now` 박힘 → 후속 cron(08:08 morning notify-only 등) 전부 24h 가드에 막혀 알림 0건
+- 같은 메커니즘이 모든 알림 type(drop/up/target/evening/broadcast)에 동일 적용됨
+
+#### Fix 1 (notifier.ts) — chunk 단위 try/catch + 1건씩 fallback
+- `sendSmartNotifications` 반환을 `{ successfulTokens: Set<string>; invalidTokens: string[] }`로 변경
+- 각 chunk를 try/catch로 감싸고, batch 거절 시 1건씩 재시도 (다른 projectId 격리)
+- 단건 실패는 `ProviderError` sentinel로 cleanup 회피 (만료 토큰 X, 다음 cron 재시도)
+- `ticket.status === 'ok'` 응답 토큰만 successfulTokens에 등록
+
+#### Fix 2 (index.ts) — successfulTokens 기반 lastNotifications 업데이트
+- `successfulTokens` → `activeUsers` 역방향 매핑으로 `successfulUids` 산출
+- updates 일괄 커밋 단계에서 `successfulUids` 미포함 uid 스킵
+- 발송 0건이면 lastNotifications도 0건 갱신 → 24h 가드 잘못 박히지 않음
+- 새 로그 형식: `[Flush] lastNotifications 업데이트 N명 (발송 성공 M명 / 미발송 가드 스킵 K명)`
+- Edge: 한 사용자가 여러 type 알림 받을 때 일부만 성공해도 successfulUids 포함 → 모든 paths 적용 (uid 단위 가드, message 단위 아님). 본 사고 시나리오(batch 전체 거절)에서는 영향 없음
+
+#### Fix 3 — 잘못 박힌 morning 가드 정리
+- `scripts/cleanup/cleanup-morning-20260503.ts` — 1회성
+- 5/2 22:30~23:30 UTC 범위(= 5/3 07:30~08:30 KST) `lastNotifications.morning` 값을 `FieldValue.delete()`
+- DRY_RUN 안전장치 + FIREBASE_SERVICE_ACCOUNT_KEY env
+- 실행 결과: scanned=142 candidates=55 updated=55 — 잘못 박힌 5/3 07:47:14 UTC 단일 timestamp 55명분 모두 제거. 다른 합법 가드 오삭제 0
+
+### 12-10. 향후 검증/조사
+
+- **다음 가격 변동 시 검증**: `[Push] batch 거절 → 1건씩 재시도` 로그 발생 시 fallback 동작 확인. `발송 성공 M명 / 미발송 가드 스킵 K명` 분기에서 K값으로 batch 거절 영향 정량화
+- **users 컬렉션 token projectId 분포 조사** (별도 작업): 다른 projectId 토큰 보유 사용자 식별 → 토큰 재발급 유도 또는 cleanup
+- **morning/evening 시간대별 cron 분리** §8-D-2 (검토): 현재 `notify-only.yml`이 두 시각 한 파일. 분리 시 운영성 ↑

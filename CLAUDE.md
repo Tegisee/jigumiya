@@ -187,73 +187,124 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - **07:30 KST schedule 트리거 미발생 원인**: `notify-only.yml` 커밋 `0bdc445` push 시각 = **2026-05-02 09:54:18 KST**, 첫 22:30 UTC schedule 시각(= 2026-05-02 07:30 KST)보다 **2시간 24분 늦음** → 파일이 존재하지 않아서 GitHub Actions가 트리거할 수 없었던 단순 타이밍 이슈. cron 표현식 `'30 22 * * *'` 자체는 정상. 11:00 UTC schedule(20:00 KST)은 09:54 push 후 ~1시간 6분 뒤라 정상 등록됨
 - **첫 morning 자동 트리거 예정**: 2026-05-03 07:30 KST. 09:00 KST 이후 `gh run list --workflow=notify-only.yml`로 schedule trigger run 확인
 
-## 다음 작업 순서 (2026-05-02 1.0.9 부분 배포 + evening 가드 완화 + morning 트리거 대기)
+### 2026-05-03 작업 (알림 0건 사고 직접 해결 + price_drops 중복 fix + iOS 무한로딩 + Android 콜드 스타트 + 1.0.10 빌드)
+
+① **🚨 알림 0건 사고 — Expo batch 거절 + markUpdate 순서 버그** (커밋 `096c69a`)
+- **사고 상황 (run 25263678929 / 5/3 07:40 KST)**: payloads 111건 빌드됐으나 Expo가 batch 전체 거절. 에러: `"All push notification messages in the same request must be for the same project; check the details field to investigate conflicting tokens"`. `users` 컬렉션에 서로 다른 EAS projectId 토큰이 혼재(아이고 토큰 누수 추정)
+- **2차 피해**: `markUpdate`가 `sendSmartNotifications` 호출 전에 `lastNotifications.morning`을 먼저 등록 → 0건 발송에도 Firestore에 24h 가드 박힘 → 후속 cron(08:08 morning notify-only 등) 전부 차단되어 알림 0건
+- **연쇄 영향**: 같은 메커니즘이 모든 알림 type(drop/up/target/evening/broadcast)에 동일 적용됨. 20:30 KST priceUp이 1건만 발송된 이유 = 매칭 사용자 1명 → batch에 토큰 1개 → projectId 충돌 미발생 우연
+- **Fix 1 (notifier.ts)**: `sendSmartNotifications` 반환을 `{ successfulTokens, invalidTokens }`로 변경. chunk 단위 try/catch + batch 거절 시 1건씩 재시도 (다른 projectId 격리). 단건 실패는 `ProviderError` sentinel로 cleanup 회피 (만료 토큰 X, 다음 cron 재시도). `ticket.status === 'ok'` 응답 토큰만 successfulTokens에 등록
+- **Fix 2 (index.ts)**: `successfulTokens` → `activeUsers` 역방향 매핑으로 `successfulUids` 산출. updates 일괄 커밋 단계에서 `successfulUids` 미포함 uid 스킵 → 발송 0건이면 lastNotifications도 0건 갱신. 새 로그 형식 `[Flush] lastNotifications 업데이트 N명 (발송 성공 M명 / 미발송 가드 스킵 K명)`
+- **Fix 3 (cleanup-morning-20260503.ts)**: 1회성 정리 — 5/2 22:30~23:30 UTC(= 5/3 07:30~08:30 KST) 범위 morning 가드 unset. DRY_RUN 안전장치, FIREBASE_SERVICE_ACCOUNT_KEY env 사용. 실행: scanned=142 candidates=55 updated=55 — 잘못 박힌 5/3 07:47:14 UTC morning 타임스탬프 55명분 모두 제거 완료
+
+② **price_drops 중복 표시 버그 fix** (커밋 `2dc12c3`)
+- **증상**: 홈 "오늘의 특가" / 가격변동 탭에 같은 상품이 N번 표시 (사용자 확인 결과 한 상품 3장)
+- **원인**: `recordPriceDrop`이 `db.collection('price_drops').add({...})` autoId로 기록 → 같은 productId가 cron마다 별도 문서로 누적. 24h window 내 변동 횟수만큼 중복. `loadDropsForNotifyOnly`는 productId별 dedup 했으므로 알림 발송 영향 없음 — UI 표시 한정 버그
+- **Fix A (price-drop.ts)**: `add()` → `doc(productId).set()` 멱등 upsert. 같은 상품은 같은 문서 덮어쓰기. 24h window 내 productId당 항상 1문서 보장. 마지막 변동 정보만 보존 (누적 변동 폭 필요해지면 별도 priceHistory 컬렉션 분리)
+- **Fix A2 (wipe-price-drops-20260503.ts)**: 1회성 wipe — 옛 autoId 문서 전체 삭제. DRY_RUN 안전장치, productId별 중복 통계 출력. 실행: 총 9개 / 고유 productId 6개 / 중복 그룹 2개 (`8522615082` → 3건, `8957561934` → 2건) → 9개 모두 batch delete. 다음 cron이 새 키 체계로 채움
+
+③ **iOS 공유 무한로딩 fix** (커밋 `9de8269`)
+- **원인 3종 콤보**: ① `startScrape` iOS HTML fetch에 timeout 부재 → link.coupang.com 또는 vp URL fetch가 행 걸리면 `await` 무한 대기. 부모 30s 가드 + 1s 재시도 + 30s = 최대 60s까지 스피너. ② Universal Link로 쿠팡 앱이 떠 사용자가 이탈/복귀하는 흐름에 가이드 부재. ③ `useFocusEffect`가 매 focus마다 state 리셋 — scraping/target 진행 중에 쿠팡 갔다 돌아오면 'url' 단계로 강제 복귀
+- **Fix 1 (handleNext 분리 + iOS 공유 가이드 Alert)**: 사전 검증(쿠팡 도메인/10개 한도) 통과 후 `Platform.OS === 'ios' && isFromShare`면 Alert 노출. 확인 시 `proceedFromUrl(parsedUrl)` 호출, 취소 시 step 'url' 유지. Alert 문구: "쿠팡 앱이 잠깐 열릴 수 있어요 / 확인 후 지금이야 앱으로 돌아와주세요". 안드로이드와 비공유 진입은 즉시 `proceedFromUrl`로 진행 (기존 UX 유지)
+- **Fix 2 (useFocusEffect step 보존)**: `stepRef`로 최신 step 추적 (stale closure 회피). `step !== 'url'`이면 초기화 스킵 — 스크래핑/저장 진행 중 쿠팡 앱 이탈/복귀 안전
+- **Fix 3 (startScrape iOS fetch timeout)**: `fetch(...)` → `fetchWithTimeout(..., 8000)`. 8s 후 throw → `setScrapeUrl` 폴백 진입. 무한 대기 차단. 최악 시나리오 ~50s에 scrapeFailed 화면 노출 (이전 무한)
+
+④ **Android 상품 추가 콜드 스타트 완화 — A+D+E 적용** (커밋 `601b166`)
+- **배경**: Android 첫 호출 딜레이 보고 (Functions 콜드 스타트 의심). 기존 워밍업은 `_layout.tsx` launch 시 1회만(인증 후 fire-and-forget) — idle timeout으로 인스턴스 종료된 경우 / launch 직후 진입 케이스에 효과 부족
+- **A. `add-item.tsx` 모달 mount 시 warmup 추가**: `useEffect(() => { warmupResolveAffiliate(); }, [])` — 사용자가 URL 확인/다음 누르는 1~2s 동안 컨테이너 init 진행. 다른 탭 보다가 공유 진입한 케이스도 커버
+- **D. proceedFromUrl Functions 응답시간 로그**: `[AddItem] Functions resolve {ms}ms ok={bool}` — 실측 데이터로 콜드 vs warm 분포 확인 (향후 `minInstances: 1` 검토 근거)
+- **E. `_layout.tsx` AppState active 전환 시 warmup 재발사**: 앱 background→active 시 `clearBadgeCount`와 함께 `warmupResolveAffiliate()` 호출 — idle timeout(~15분) 후 인스턴스 종료된 케이스 회복
+- **B (`minInstances: 1`) 보류**: 월 ~$5~10 비용 → 실측 데이터 보고 다음 회차 결정
+
+⑤ **1.0.10 (bn45/vc45) 빌드 + 배포 완료** (커밋 `b88976d`)
+- `app.config.js`: version 1.0.10 / ios.buildNumber 45 / android.versionCode 45
+- `android/app/build.gradle`: versionCode 45 / versionName "1.0.10" 동기화 (gitignored)
+- 산출물:
+  - Android: `~/jigumiya/builds/android/jigumiya-1.0.10-45.aab`
+  - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.10-45.ipa`
+- 1.0.10 주요 변경: ①~④ 모두 통합 (알림 batch 거절 방어 + markUpdate 순서 fix + price_drops 멱등 upsert + iOS 무한로딩 fix + Android 콜드 스타트 완화)
+- 배포 상태:
+  - **Android: Play Store 프로덕션 검토 중**
+  - **iOS: App Store 심사 대기 중**
+
+⑥ **수동 cron 검증 (run 25281593187, 23:19 KST)** (5/3 야간)
+- 코드 변경 후 첫 검증 실행 — 새 로그 형식 확인:
+  - `[Schedule] N=51 interval=20min(offPeak) since=22.2min — 실행 진행` (§11 가드 정상)
+  - `[Flush] 활성 사용자 55명 / payloads 0건 / lastNotifications 업데이트 0명 (발송 성공 0명 / 미발송 가드 스킵 0명)` ← Fix 2 새 로그 형식 출력 정상
+  - `완료 mode=price-check scanned=51 ups=0 drops=0 notif=0 elapsed=393.1s`
+- `shared_products` 풀 51개 (직전 47 → +4 증가, wipe 이후 신규 등록분)
+- 가격 변동 0건이라 batch try/catch 실동작 검증 미완 — 다음 가격 변동 시 `[Push] batch 거절 → 1건씩 재시도` 로그 발생으로 검증 가능
+
+## 다음 작업 순서 (2026-05-04 1.0.10 배포 검토 + 검증 + 후속 작업)
 
 **최우선** (잔여 작업):
-1. **배포**: 1.0.9 (bn44/vc44) iOS App Store Transporter 업로드 + 심사 제출 (Android는 이미 Play Console 프로덕션 업로드 완료)
-2. **🚨 검증 (내일 09:00 KST 이후)**: 2026-05-03 07:30 KST morning 첫 자동 트리거 — `notify-only.yml` push 시점 이슈로 오늘은 미발생. `gh run list`로 schedule run 발생 확인 + `morning=true` 로그 + `payloads N건`
-3. **🚨 검증 (내일 21:00 KST 이후)**: 2026-05-03 20:00 KST evening 가드 완화(`fd6afe3`) 효과 — `payloads ≈ 활성 사용자 수` 기대. 0건 지속 시 24h evening 가드 의심 → Firestore 직접 조회
-4. **갱신**: 1.0.9 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.9"` Firebase Console 갱신
-5. **검증**: 1.0.9 실기기 — 가격 알림 클릭 시 detail 화면 정상 표시(productId fallback) + iOS "업데이트 하기" → App Store 이동 정상
-6. **검증**: 내일(2026-05-03) 가격체크 정상 동작 — §11 자동화 첫 사이클 결과 확인 (`[Schedule]` 로그 + `trackers=` 양수 + `payloads N건` + `lastRunAt`/`lastNotifications` 갱신)
-7. **검증**: §11 인터벌 가드 동작 — 매 10분 cron 트리거에서 간격 미달 graceful exit 빈도 확인 (현 N=37 → 피크 10분 / 비피크 20분)
-8. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
+1. **🚨 검증**: 1.0.10 (bn45/vc45) Play Store / App Store 심사 결과 모니터링. 양 스토어 승급 시 단계적 출시 진행
+2. **🚨 검증**: 1.0.10 실기기 — ① iOS 공유 가이드 Alert 노출 + Functions 정상 시 ~10s 내 target step ② Android 모달 진입 시 `[AddItem] Functions resolve {ms}ms ok=true` 로그로 콜드/warm 분포 표본 수집 (최소 20회) ③ 가격변동 탭 + 오늘의 특가 같은 productId 1번씩만 표시 ④ 알림 클릭 시 detail 화면 정상 표시
+3. **🚨 검증**: 다음 가격 변동 발생 시 batch 거절 방어 실동작 — `[Push] batch 거절 → 1건씩 재시도` 로그 발생 시 fallback 동작 확인 + `발송 성공 M명 / 미발송 가드 스킵 K명` 분기에서 K값으로 batch 거절 영향 정량화
+4. **🚨 검증**: 5/4 07:30 / 20:00 KST notify-only cron — Fix 1+2 적용 후 첫 morning/evening 자동 트리거에서 `payloads N건` + `lastNotifications 업데이트 N명` 분기 출력 확인
+5. **갱신**: 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` Firebase Console 갱신
+6. **모니터링**: Functions 응답시간 로그 분포 — 평균 ≤1s면 현 상태 유지 / 1~3s + 5s+ 콜드 스파이크면 `minInstances: 1` 검토 (월 ~$5~10 비용 vs UX 가치)
+7. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
+
+**뒤로 미뤄둔 작업** (2026-05-04 이후 일정 배정):
+- **그래프 Y축 가격 표시 버그**: 1~2일 추가 관찰 후 패턴 확인 (재현 조건 불명확 — 일별 데이터 변동 폭 영향 의심)
+- **공지사항 팝업 + 전체 푸시 기능 추가**: 지금이야/아이고 별도 구현. 운영자가 Firebase Console에서 공지 등록 → 활성 사용자 전체 broadcast. cron 별도 분리 검토
+- **category-best 브로드캐스트 큐**: `category-best-updater`에 직전 스냅샷 비교 → 10/20% 하락 감지 → `broadcasts/{id}` 큐. `shared-price-checker`가 매 사이클 끝에서 미발송 broadcasts 처리 (별도 PR)
+- **cron schedule 최적화 §8-D-2**: morning/evening 시간대별 분리 인스턴스 검토. 현재 `notify-only.yml`이 07:30 + 20:00 두 시각 스케줄 한 파일. 분리 시 morning 전용 / evening 전용 yml 가능 → 운영성 ↑
+- **Functions `minInstances: 1`**: 1.0.10 실측 데이터(2번 항목) 본 후 결정. 평균 응답시간 + 콜드 분포 기반 판단
+- **shared_products 가격체크 cron dry-run 검증**: workflow_dispatch로 dry-run 모드 추가 — 실제 Firestore write 안 하고 가격 비교만 진행하는 옵션. 디버깅 + 변경 전 사전 검증용
 
 **중기**:
-5. **`meta/stats.sharedProductCount` 자동 갱신** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 -1. N≥50,000 split 모드 진입 판정 신뢰
-6. **아이고 cron 활성화** (`~/aigo/aigo` 레포) — 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식
-7. **앱 측 price-drops 탭 라우팅 검증** — `router.push('/price-drops')` 1.0.8 실기기 확인
-8. **하트 버튼 백필 동작 검증** — 1.0.8 실기기에서 기존 누락 상품 + 신규 추가 시 하트 안정성
-9. **`meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신** — 심사 통과 + Play Store 승급 후
-10. **`addTrackedItem`/`removeTrackedItem` increment 비대칭 추적** — 카운터 음수 재발 방지
-11. **아이고 Firebase → jigumiya 통합** (§8-C) — 베타 출시 이후
-12. **아이고 Functions 수정 이식** — 지금이야 `e69d05e`(HTML redirectWebUrl 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)
-13. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업
-14. **가족 계정 구매 테스트** — Functions 경유 링크 → 파트너스 대시보드 실적 집계 확인
+8. **`meta/stats.sharedProductCount` 자동 갱신** (별도 PR) — `services/firebase.ts:upsertSharedProduct` 신규 시 `FieldValue.increment(+1)`, 삭제 -1. N≥50,000 split 모드 진입 판정 신뢰
+9. **users 컬렉션 다른 EAS projectId 토큰 조사** — Expo batch 거절 근본 원인 파악. 어느 사용자가 어느 projectId 토큰 보유 중인지 식별 → 해당 사용자 토큰 재발급 유도 또는 cleanup
+10. **아이고 cron 활성화** (`~/aigo/aigo` 레포) — 선결: 아이고 1.0.8급 배포 + Functions Resolver 이식
+11. **하트 버튼 백필 동작 검증** — 1.0.10 실기기에서 기존 누락 상품 + 신규 추가 시 하트 안정성
+12. **`addTrackedItem`/`removeTrackedItem` increment 비대칭 추적** — 카운터 음수 재발 방지
+13. **아이고 Firebase → jigumiya 통합** (§8-C) — 베타 출시 이후
+14. **아이고 Functions 수정 이식** — 지금이야 `e69d05e`(HTML redirectWebUrl 파싱 + Secret `.trim()` + `request.auth` 검증 + `allUsers:run.invoker`)
+15. **아이고 알림 버그 + 계정 삭제 수정** — 별도 작업
+16. **가족 계정 구매 테스트** — Functions 경유 링크 → 파트너스 대시보드 실적 집계 확인
 
 **장기**:
-15. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식 확정 후 cron 호출량 재산정
-16. **category-best 브로드캐스트 큐** (별도 PR) — 갱신 시 10/20% 하락 감지 → `broadcasts/{id}` 큐 → shared-price-checker 소비
-17. ~~**legacy `price-check.yml` 정식 폐기** (Phase 3-C)~~ — 2026-05-02 완료 (`.disabled` 확장자)
-18. **가격변동 탭 실데이터 검증** — cron 가동 후 `recordPriceDrop` 기록 + UI 표시 확인
-19. **Firebase App Check 검토** — Public repo apiKey 노출 후속 보강
+17. **쿠팡 파트너스 문의 답변 수신** — `bestcategories` 호출 카운팅 방식 확정 후 cron 호출량 재산정
+18. **Firebase App Check 검토** — Public repo apiKey 노출 후속 보강
 
 ## 미완 TODO (확정 작업만)
 
+### 2026-05-03 완료
+- [x] **🚨 사고 해결**: Expo batch 거절 방어 — `notifier.ts` chunk try/catch + 1건씩 fallback (2026-05-03, `096c69a`)
+- [x] **🚨 사고 해결**: markUpdate 순서 버그 — `index.ts` successfulTokens 기반 lastNotifications 업데이트 (2026-05-03, `096c69a`)
+- [x] **신설**: cleanup-morning-20260503.ts — 잘못 박힌 morning 가드 55명 unset 완료 (DRY_RUN 안전장치 + 실행)
+- [x] **버그수정**: price_drops 중복 표시 — `add()` → `doc(productId).set()` 멱등 upsert (2026-05-03, `2dc12c3`)
+- [x] **신설**: wipe-price-drops-20260503.ts — 옛 autoId 문서 9건 batch delete 완료
+- [x] **버그수정**: iOS 공유 무한로딩 — 가이드 Alert + step 보존 + iOS fetch 8s timeout (2026-05-03, `9de8269`)
+- [x] **개선**: Android 콜드 스타트 완화 — 모달 mount warmup + AppState active warmup + 응답시간 로그 (2026-05-03, `601b166`)
+- [x] **빌드**: 지금이야 1.0.10 (bn45/vc45) — `app.config.js` + `android/app/build.gradle` 동기화 (2026-05-03, `b88976d`). AAB/IPA 산출물 확보
+- [x] **배포 (Android)**: 1.0.10 (vc45) Play Store 프로덕션 검토 중 (단계적 출시 대기)
+- [x] **배포 (iOS)**: 1.0.10 (bn45) App Store 심사 대기 중
+
+### 2026-05-04 이후 미완
+- [ ] **🚨 검증**: 1.0.10 실기기 — iOS 가이드 Alert + Android 응답시간 로그 분포 + price_drops 단일 표시 + 알림 클릭 detail
+- [ ] **🚨 검증**: 다음 가격 변동 발생 시 `[Push] batch 거절 → 1건씩 재시도` 로그 발생으로 Fix 1 실동작 확인
+- [ ] **🚨 검증**: 5/4 morning/evening cron — Fix 1+2 적용 후 `payloads N건` + `lastNotifications 업데이트 N명 (발송 성공 M명 / 미발송 가드 스킵 K명)` 분기 출력
+- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` 또는 `"1.0.10"` — 양 스토어 승급 후 즉시 갱신
+- [ ] **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 검토 근거 수집 (최소 20회 표본)
+- [ ] **조사**: users 컬렉션 다른 EAS projectId 토큰 분포 — batch 거절 근본 원인 파악
+- [ ] **관찰**: 그래프 Y축 가격 표시 버그 — 1~2일 추가 데이터로 재현 조건 확인
+- [ ] **신규 기능**: 공지사항 팝업 + 전체 푸시 broadcast — 지금이야/아이고 별도 구현
+- [ ] **별도 PR**: category-best 브로드캐스트 큐 — `category-best-updater`에 10/20% 감지 로직 추가
+- [ ] **검토**: cron schedule 최적화 §8-D-2 — morning/evening 시간대별 yml 분리 검토
+- [ ] **검토**: shared_products 가격체크 cron dry-run 모드 — workflow_dispatch input으로 변경 검증
+
+### 누적 미완 (이전부터)
 - [ ] **검증**: 뱃지 카운트 0 초기화 — 다음 푸시 알림 수신 후 foreground 전환 시 뱃지 제거 확인
 - [ ] **검증**: 파트너스 실적 — Functions 경유 가족 구매 테스트 집계 확인
 - [ ] **합의**: Firebase 공유 구조(jigumiya 프로젝트 기반 통합) — 아이고 베타 출시 이후
 - [ ] **이식**: 아이고 Functions에 동일 수정 (HTML redirectWebUrl 파싱 + Secret `.trim()`)
 - [ ] **수정**: 아이고 알림 버그 + 계정 삭제 버그
-- [ ] **테스트**: shared-price-checker `workflow_dispatch` 수동 실행 → dry-run 검증
-- [ ] **배포**: 1.0.7 미배포(1.0.8에 통합) → `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 콘솔 갱신 (심사 통과 + Play Store 승급 후)
 - [ ] **검증**: 앱 측 price-drops 탭 라우팅 — `router.push('/price-drops')`가 expo-router에서 `(tabs)/price-drops.tsx`로 정상 이동
 - [ ] **검토**: Firebase App Check 활성화 (Public repo 환경 추가 보강)
-- [ ] **별도 PR**: category-best 브로드캐스트 큐
 - [ ] **대기**: 쿠팡 파트너스 문의 답변 — `bestcategories` 호출 카운팅 방식
-- [ ] **검증**: 가격변동 탭 실제 데이터 — cron 재활성화 후 `recordPriceDrop` 동작
-- [ ] **검증**: 1.0.8 실기기 — 하트 백필 + 신규 추가 안정성 + 오늘의 특가 빈 상태 + drop/best 카드 클릭 affiliate 변환
-- [x] **신설**: 서버 backfill 스크립트 (`scripts/tracked-backfill/`) — productId 누락 보강 + trackerCount 음수 정정 (2026-05-02, `08009b3`). dry_run=false 실행 완료 — productId 누락 5건 보강
-- [x] **추가**: 알림 전용 cron 2개 신설 (`notify-only.yml`, 07:30 / 20:00 KST) — `NOTIFY_ONLY` env 분기 + `loadDropsForNotifyOnly()` (2026-05-02, `0bdc445`)
-- [x] **구현**: §11 자동화 — `shared-price-check.yml` 10분 고정 cron + `INTERVAL_MATRIX` 12단계 + lastRunAt graceful exit (2026-05-02, `b49ea2e`)
-- [x] **신설**: docs/020_PriceChecker_CronDesign.md (2026-05-02, `4e548aa`) — N값 기반 cron 자동화 설계 문서
-- [x] **분리**: CLAUDE.md slim + docs/작업이력_archive.md 신설 (2026-05-02) — 60% 감소
-- [x] **수정**: `updateChecker.ts` IOS_APP_STORE_ID 채움 (6760587430) (2026-05-02, `98bbf69`)
-- [x] **버그수정**: detail 화면 알림 라우팅 매칭 — productId fallback (2026-05-02, `09a12f6`) — "상품을 찾을 수 없습니다" 빈 화면 해소
-- [x] **빌드**: 지금이야 1.0.9 (bn44/vc44) 재빌드 — `app.config.js` + `android/app/build.gradle` 동기화, AAB/IPA 산출물 확보 (2026-05-02, `38ce556`). bn43/vc43은 1차 빌드(`43c538b`) 후 재빌드 필요로 폐기
-- [x] **배포 (Android)**: 1.0.9 (vc44) Play Console 프로덕션 업로드 완료 — 단계별 출시 진행
-- [ ] **배포 (iOS)**: 1.0.9 (bn44) Transporter 업로드 + App Store Connect 심사 제출 ← 잔여
-- [x] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.8"` Firebase Console 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 1.0.8 업데이트 알림 표시
-- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` — 1.0.9 양 스토어 승급 후
-- [x] **조사**: 20:00 KST evening 알림 미수신 — schedule trigger 발생(run 25251082619, 11:40 UTC) + 모든 step 정상 실행 + flush 단계에서 payloads 0건. workflow 결함 아닌 evening 가드(hadAlertToday/pricedAlertedUids)에 막힘. `fd6afe3` 패치로 차단 경로 제거 → 2026-05-03 20:00 KST cron 결과로 효과 검증
-- [x] **점검**: morning_greeting 가드 (2026-05-02) — 원래부터 24h 가드만 적용, 수정 불필요 (evening과 달리 처음부터 `hadAlertToday`/`pricedAlertedUids` 없음)
-- [x] **규명**: 07:30 KST 트리거 미발생 원인 — `notify-only.yml` push 시각(09:54 KST)이 첫 schedule(07:30 KST)보다 늦어서 GitHub Actions가 트리거 불가. cron 표현식 자체는 정상. 첫 morning 자동 트리거는 2026-05-03 07:30 KST 예정
-- [x] **폐기**: legacy `price-check.yml` → `.yml.disabled` (2026-05-02) — GitHub Actions 미인식
-- [x] **완화**: `evening_no_change` 가드 — `hadAlertToday` + `pricedAlertedUids` 제거 (2026-05-02) — 19:30~21:00 KST 활성 사용자 전원 발송 (24h 가드만)
-- [ ] **🚨 검증 (내일)**: 2026-05-03 07:30 KST morning 첫 자동 실행 — `gh run list --workflow=notify-only.yml`로 schedule trigger 발생 확인 + `morning=true notifyOnly=true` 로그 + `payloads N건` (24h 가드 통과 사용자 수)
-- [ ] **🚨 검증 (내일)**: 2026-05-03 20:00 KST evening 가드 완화 효과 — `fd6afe3` 패치 후 첫 evening cron에서 `payloads ≈ 활성 사용자 수` 확인. 0건 지속 시 24h evening 가드 의심 → Firestore `users/{uid}.lastNotifications.evening` 직접 조회
-- [ ] **검증**: 내일 가격체크 + 알림 정상 동작 (§11 자동화 첫 사이클)
-- [ ] **검증**: 1.0.9 실기기 — 알림 클릭 시 detail 화면 정상 표시 + iOS App Store 이동 정상
 - [ ] **별도 작업**: 아이고 cron 활성화 (`~/aigo/aigo` 레포)
 - [ ] **추적**: `addTrackedItem`/`removeTrackedItem` increment 비대칭 원인 (재발 모니터링)
 - [ ] **별도 PR**: `meta/stats.sharedProductCount` 자동 갱신
@@ -272,13 +323,17 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.9 부분 배포 + cron 자동화 완료 (2026-05-02 기준)
-- 1.0.9 (bn44/vc44) **Android Play Console 프로덕션 업로드 완료** — iOS Transporter + 심사 제출은 잔여
-- 1.0.9 주요 변경: iOS App Store ID 채움(6760587430) + 알림 라우팅 매칭 fix(productId fallback) — "상품을 찾을 수 없습니다" 빈 화면 해소
-- `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 갱신 완료 (2026-05-02) — 1.0.7 사용자에게 업데이트 알림 표시
-- **20:00 KST evening 알림 미수신 사고 분석 완료** — schedule trigger 발생(11:40 UTC) + step 정상 실행, flush 가드(`hadAlertToday`/`pricedAlertedUids`)에서 차단됨. `fd6afe3`로 두 가드 제거 → 2026-05-03 20:00 KST 결과 검증 대기
-- **07:30 KST morning 첫 트리거 미발생** — `notify-only.yml` push(09:54 KST)가 첫 schedule(07:30 KST)보다 늦어서 정상. 2026-05-03 07:30 KST 첫 자동 트리거 예정
-- 1.0.8 (bn42/vc42) 배포 진행 중: iOS App Store 심사 제출 + Android Play Console 프로덕션 업로드 (2026-05-01)
+## 현재 상태: 1.0.10 배포 검토 + 알림 시스템 fix 완료 (2026-05-04 기준)
+- 1.0.10 (bn45/vc45) **Play Store 프로덕션 검토 중 / App Store 심사 대기 중** (2026-05-03 빌드 완료)
+- 1.0.10 주요 변경:
+  - 🚨 알림 0건 사고 fix: Expo batch 거절 방어 (chunk try/catch + 1건씩 fallback) + markUpdate 순서 교정 (발송 성공 토큰만 24h 가드 갱신)
+  - 🚨 잘못 박힌 lastNotifications.morning 55명 정리 완료 (cleanup-morning-20260503)
+  - 🐛 price_drops 중복 표시 fix: `add()` → `doc(productId).set()` 멱등 upsert + 옛 autoId 문서 9건 wipe
+  - 🐛 iOS 공유 무한로딩 fix: 가이드 Alert + useFocusEffect step 보존 + startScrape 8s timeout
+  - ⚡ Android 콜드 스타트 완화: 모달 mount warmup + AppState active warmup 재발사 + 응답시간 로그
+- 1.0.9 (bn44/vc44) Android 프로덕션 업로드 완료, iOS 심사 제출 미완 — 1.0.10에 통합되어 1.0.9는 부분 배포 상태로 종결
+- `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 유지 (2026-05-02 갱신) — 1.0.10 양 스토어 승급 후 "1.0.10"으로 갱신
+- 1.0.8 (bn42/vc42) 배포 완료 (2026-05-01)
 - 1.0.8 주요 변경: 골드박스 API 제거 → **오늘의 특가**(price_drops 24h + category_best fallback 1h 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**
 - 서버 cron (2026-05-02 §11 자동화 적용 후):
   - `shared-price-check.yml` `'*/10 * * * *'` (10분 고정) **활성** — 코드 N값 기반 간격 결정 + lastRunAt graceful exit
