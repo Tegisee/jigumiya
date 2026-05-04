@@ -53,11 +53,15 @@ import {
   isCacheStablePrice,
 } from './category-best-cache.js';
 import { recordPriceDrop } from './price-drop.js';
+import { processCategoryRoundRobin } from './category-cycle.js';
 
 // ─── 설정 ───
-const DEFAULT_SLEEP_MS = 1500; // 분당 40회 (공식 한도 50회의 80%) — sleep 하한
+// F (2026-05-04): sleep 정책 단순화 — 외부 cron(*/10 * * * *)이 사이클 분산 담당.
+//   이전: max(1500, BUDGET_MS / (N×cyclesPerDay))로 산출 → N=51 시 ~10초 (잔재 설계).
+//   현재: DEFAULT_SLEEP_MS 단일값. 보수 권장 2000ms (응답 0.5s 포함 시 분당 24회 ≈ 한도 48%).
+const DEFAULT_SLEEP_MS = 2000; // 분당 24~30회 — 검색 한도 50/분의 48~60%
 const DAILY_CAPACITY = 50_000; // 하루 처리 가능 상품 수 (분할 모드 진입 임계)
-const MAX_CYCLES = 144; // 일일 최대 사이클 (10분에 1회 == 24h × 6)
+const MAX_CYCLES = 144; // 일일 최대 사이클 (10분에 1회 == 24h × 6) — cyclesPerDay 산출 용도만 잔존
 const BUDGET_MS = 1230 * 60 * 1000; // 가용 20.5h ms (04:30~01:00 KST)
 const KST_OFFSET = 9 * 3600 * 1000;
 const PRICE_HISTORY_KEEP = 90;
@@ -173,6 +177,15 @@ async function countSharedProducts(): Promise<number> {
   }
 }
 
+/** KST 날짜 문자열 'YYYY-MM-DD' — morning/evening 24h jitter 방어용 (E) */
+function formatKstDate(ms: number): string {
+  const kst = new Date(ms + KST_OFFSET);
+  const y = kst.getUTCFullYear();
+  const m = String(kst.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(kst.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /** 19:30 ≤ now < 21:00 KST */
 function isEveningTime(): boolean {
   const { hour, minute } = getKstHourMinute();
@@ -222,35 +235,30 @@ async function computeCycleConfig(actualCount: number): Promise<CycleConfig> {
     };
   }
 
+  // F: sleepMs는 항상 DEFAULT_SLEEP_MS — BUDGET_MS/(N×cycles) 균등 분산 산식은 §11 외부 cron으로 대체됨.
   if (actualCount > DAILY_CAPACITY) {
     const startOffset = ((lastOffset % actualCount) + actualCount) % actualCount;
     return {
       totalCount: actualCount,
       dailyCount: DAILY_CAPACITY,
       cyclesPerDay: 1,
-      sleepMs: Math.max(
-        DEFAULT_SLEEP_MS,
-        Math.floor(BUDGET_MS / DAILY_CAPACITY),
-      ),
+      sleepMs: DEFAULT_SLEEP_MS,
       startOffset,
       needsSplit: true,
     };
   }
 
-  const cycleDurationMin = actualCount / 40;
+  // cyclesPerDay는 로그/통계용으로만 산출 — 실제 사이클 분산은 yml 10분 cron + §11 lookupBaseInterval.
+  const cycleDurationMin = actualCount / 30; // 분당 30회 가정 (sleep 2s 기준)
   const cyclesPerDay = Math.max(
     1,
-    Math.min(MAX_CYCLES, Math.floor(1230 / cycleDurationMin)),
-  );
-  const sleepMs = Math.max(
-    DEFAULT_SLEEP_MS,
-    Math.floor(BUDGET_MS / (actualCount * cyclesPerDay)),
+    Math.min(MAX_CYCLES, Math.floor(1230 / Math.max(cycleDurationMin, 1))),
   );
   return {
     totalCount: actualCount,
     dailyCount: actualCount,
     cyclesPerDay,
-    sleepMs,
+    sleepMs: DEFAULT_SLEEP_MS,
     startOffset: 0,
     needsSplit: false,
   };
@@ -299,37 +307,52 @@ interface SharedDoc {
   data: DocumentData;
 }
 
-interface TrackerInfo {
+export interface TrackerInfo {
   uid: string;
   targetPrice?: number;
 }
 
 interface LastNotifications {
-  morning?: number;
-  evening?: number;
+  // E (2026-05-04): morning/evening은 24h ms 가드 → KST 날짜 가드로 전환.
+  morningKstDate?: string; // 'YYYY-MM-DD' (KST)
+  eveningKstDate?: string;
+  morning?: number; // legacy, no longer read
+  evening?: number; // legacy, no longer read
   priceDrop?: Record<string, number>;
   priceUp?: Record<string, number>;
   targetReached?: Record<string, number>;
-  broadcast?: { tier10?: number; tier20?: number };
+  broadcast?: { tier10?: number; tier20?: number }; // legacy, 미사용
+  // G v2 (2026-05-04): 카테고리 베스트 broadcast 24h 가드 (productId별)
+  categoryBroadcast?: Record<string, number>;
 }
 
 interface UserState {
   uid: string;
   token: string;
+  // G v2 (2026-05-04): 알림 발송 시 앱 식별. legacy(필드 미설정) → 'jigumiya'로 가정.
+  app: 'jigumiya' | 'aigo';
   lastNotifications: LastNotifications;
 }
 
-interface ProductEvent extends ProductBrief {
+export interface ProductEvent extends ProductBrief {
   dropRate: number;
   trackers: TrackerInfo[];
 }
 
-interface RawEvents {
+export interface CategoryBroadcastItem {
+  brief: ProductBrief;
+  dropRate: number; // 음수 (예: -12.5 = 12.5% 하락)
+  app: 'jigumiya' | 'aigo'; // 발송 대상 앱 (출처 컬렉션에 따라 결정)
+}
+
+export interface RawEvents {
   drops: ProductEvent[];
   ups: ProductEvent[];
   targets: { uid: string; item: ProductBrief; targetPrice: number }[];
-  broadcastTier10: ProductBrief[];
-  broadcastTier20: ProductBrief[];
+  broadcastTier10: ProductBrief[]; // legacy 통계
+  broadcastTier20: ProductBrief[]; // legacy 통계
+  // G v2 (2026-05-04): 카테고리 베스트 -10% 이상 급락 → 추적자 외 활성 사용자 전체 발송
+  categoryBroadcasts: CategoryBroadcastItem[];
 }
 
 // ─── Firestore I/O ───
@@ -431,24 +454,44 @@ async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
   return byProductId.size;
 }
 
-/** 활성 사용자 (token 보유 + notificationEnabled !== false) */
+/** 활성 사용자 (token 보유 + notificationEnabled !== false) — app 필드 보존
+ *
+ * G v2 (2026-05-04): C(app !== 'jigumiya' 차단) 정책에서 모든 앱 사용자를 picking으로 변경.
+ *   - 기존: jigumiya만 picking → category_best_baby/event_best broadcast 발송 대상 0명 문제
+ *   - 신규: 모든 활성 사용자 picking + app 필드 보존 → flush 단에서 app별 분기
+ *     · jigumiya 전용 알림(morning/evening/target/drop/up): user.app === 'jigumiya'만 발송
+ *     · category_broadcast: 컬렉션별 app 매칭 (category_best→jigumiya, baby/event→aigo)
+ *   - app 필드 매핑: 'aigo' → aigo, 그 외(미설정 포함) → jigumiya (legacy 호환)
+ *
+ * 5/3 알림 0건 사고 방어 효과 유지: app 필드가 잘못된 토큰은 batch 거절 후 cleanup으로 자연 제거.
+ */
 async function fetchActiveUsers(
   client: Firestore,
 ): Promise<Map<string, UserState>> {
   const snap = await client.collection('users').get();
   const map = new Map<string, UserState>();
+  let countJigumiya = 0;
+  let countAigo = 0;
   for (const u of snap.docs) {
     const d = u.data() ?? {};
     const token = d.expoPushToken as string | undefined;
     if (!token) continue;
     if (d.notificationEnabled === false) continue;
+    const appField = d.app as string | undefined;
+    const app: 'jigumiya' | 'aigo' = appField === 'aigo' ? 'aigo' : 'jigumiya';
+    if (app === 'aigo') countAigo++;
+    else countJigumiya++;
     map.set(u.id, {
       uid: u.id,
       token,
+      app,
       lastNotifications:
         (d.lastNotifications as LastNotifications | undefined) ?? {},
     });
   }
+  console.log(
+    `[ActiveUsers] jigumiya=${countJigumiya} aigo=${countAigo} (총 ${map.size}명)`,
+  );
   return map;
 }
 
@@ -531,6 +574,7 @@ async function main() {
     targets: [],
     broadcastTier10: [],
     broadcastTier20: [],
+    categoryBroadcasts: [],
   };
   let scanned = 0;
   let skipZero = 0;
@@ -715,20 +759,42 @@ async function main() {
       events.ups.push({ ...brief, dropRate, trackers });
     }
     }
+
+    // G v2 (2026-05-04): shared_products 순회 끝난 후 카테고리 단위 round-robin 끼워넣기.
+    // 3개 컬렉션(category_best / category_best_baby / event_best) 각 2개씩 = 6콜/사이클.
+    // rate-limited 발생 시 스킵 (당일 재실행 없음). 합계 로그는 모듈 내부에서 출력.
+    if (!rateLimited) {
+      const catStats = await processCategoryRoundRobin({
+        db,
+        events,
+        sleepMs: DEFAULT_SLEEP_MS,
+        batchSize: 2,
+      });
+      apiCalls += catStats.apiCalls;
+      priceDrops += catStats.drops;
+      if (catStats.rateLimited) rateLimited = true;
+    }
   }
 
   // ─── Flush 단계 ───
   const activeUsers = await fetchActiveUsers(db);
-  console.log(`[Flush] 활성 사용자 ${activeUsers.size}명`);
+  // jigumiya/aigo 사용자 분리 — jigumiya 전용 알림과 컬렉션별 broadcast 분기에 사용
+  const jigumiyaUsers = new Map(
+    [...activeUsers].filter(([, u]) => u.app === 'jigumiya'),
+  );
+  const aigoUsers = new Map(
+    [...activeUsers].filter(([, u]) => u.app === 'aigo'),
+  );
 
   const payloads: PushPayload[] = [];
-  const updates = new Map<string, Record<string, number>>();
+  // E: morning/evening은 KST 날짜 문자열, 변동 알림은 ms timestamp — 두 타입 혼용.
+  const updates = new Map<string, Record<string, number | string>>();
   const pricedAlertedUids = new Set<string>();
-  const targetedSet = new Set<string>(); // 'uid:productId' — drop_summary 중복 제외용
   const todayKst = todayKstMidnight();
   const now = Date.now();
+  const todayKstStr = formatKstDate(now); // E: morning/evening jitter 방어용 KST 날짜
 
-  function markUpdate(uid: string, path: string, value: number) {
+  function markUpdate(uid: string, path: string, value: number | string) {
     let u = updates.get(uid);
     if (!u) {
       u = {};
@@ -737,146 +803,204 @@ async function main() {
     u[path] = value;
   }
 
-  // 1. morning_greeting
+  // 1. morning_greeting — 지금이야 사용자 전용 (E: KST 날짜 가드)
   if (morningMode) {
-    for (const user of activeUsers.values()) {
-      const last = user.lastNotifications.morning ?? 0;
-      if (now - last < ONE_DAY_MS) continue;
+    for (const user of jigumiyaUsers.values()) {
+      if (user.lastNotifications.morningKstDate === todayKstStr) continue;
       payloads.push({ type: 'morning_greeting', token: user.token });
-      markUpdate(user.uid, 'lastNotifications.morning', now);
+      markUpdate(user.uid, 'lastNotifications.morningKstDate', todayKstStr);
     }
   }
 
-  // 2. target_reached (상품별 1개 — 가드 통과 시 drop_summary에서 제외)
+  // 2~4. 변동 알림 — 지금이야 사용자 전용 (jigumiyaUsers).
+  //  - target_reached: 사용자당 첫 번째 통과 상품 1건 (B 통합 유지)
+  //  - drops: H1 (2026-05-04, v2): 사용자당 1건 통합 → 상품별 각각 1건씩 발송으로 변경
+  //           예) 관심상품 3개 동시 하락 → 3건 알림 (각각 detail 라우팅 + "{name} {prev}원 → {curr}원 ↓")
+  //           target 통과 상품(같은 productId)은 자동 제외 (target_reached로 이미 발송)
+  //  - ups: 사용자당 1건 합산 유지 (사용자 사양 명시 X — drop만 분리 요청)
+  // 24h productId 가드 유지 — 같은 상품 하루 안 여러 번 차단.
+  // C: shared_products 가격 하락 → 해당 상품 관심등록자에게만 (shared 출처 broadcast는 폐기, 아래 §5).
+  interface UserBucket {
+    drops: ProductBrief[];
+    ups: ProductBrief[];
+    target?: { item: ProductBrief; targetPrice: number };
+  }
+  const userBuckets = new Map<string, UserBucket>();
+  function getBucket(uid: string): UserBucket {
+    let b = userBuckets.get(uid);
+    if (!b) {
+      b = { drops: [], ups: [] };
+      userBuckets.set(uid, b);
+    }
+    return b;
+  }
+
+  // 2-A. targets — 가드 통과 항목만 bucket.target에 등록 (사용자당 첫 번째 1건만 보존)
   for (const ev of events.targets) {
-    const user = activeUsers.get(ev.uid);
+    const user = jigumiyaUsers.get(ev.uid);
     if (!user) continue;
     const last =
       user.lastNotifications.targetReached?.[ev.item.productId] ?? 0;
     if (now - last < ONE_DAY_MS) continue;
-    payloads.push({
-      type: 'target_reached',
-      token: user.token,
-      item: ev.item,
-      targetPrice: ev.targetPrice,
-    });
-    markUpdate(
-      user.uid,
-      `lastNotifications.targetReached.${ev.item.productId}`,
-      now,
-    );
-    pricedAlertedUids.add(user.uid);
-    targetedSet.add(`${user.uid}:${ev.item.productId}`);
+    const b = getBucket(user.uid);
+    if (!b.target) b.target = { item: ev.item, targetPrice: ev.targetPrice };
   }
 
-  // 3. price_drop_summary (사용자당 1개, target 통과 상품 제외)
-  const perUserDrops = new Map<string, ProductBrief[]>();
+  // 2-B. drops — target 통과 상품(같은 productId)은 자동 제외
   for (const ev of events.drops) {
     for (const t of ev.trackers) {
-      const user = activeUsers.get(t.uid);
+      const user = jigumiyaUsers.get(t.uid);
       if (!user) continue;
-      if (targetedSet.has(`${user.uid}:${ev.productId}`)) continue;
+      const existing = userBuckets.get(user.uid);
+      if (
+        existing?.target &&
+        existing.target.item.productId === ev.productId
+      )
+        continue;
       const last = user.lastNotifications.priceDrop?.[ev.productId] ?? 0;
       if (now - last < ONE_DAY_MS) continue;
-      let arr = perUserDrops.get(user.uid);
-      if (!arr) {
-        arr = [];
-        perUserDrops.set(user.uid, arr);
-      }
-      arr.push({
+      const b = getBucket(user.uid);
+      b.drops.push({
         productId: ev.productId,
         productName: ev.productName,
         currentPrice: ev.currentPrice,
         previousPrice: ev.previousPrice,
       });
-      markUpdate(
-        user.uid,
-        `lastNotifications.priceDrop.${ev.productId}`,
-        now,
-      );
     }
   }
-  for (const [uid, items] of perUserDrops) {
-    if (items.length === 0) continue;
-    const user = activeUsers.get(uid);
-    if (!user) continue;
-    payloads.push({
-      type: 'price_drop_summary',
-      token: user.token,
-      items,
-    });
-    pricedAlertedUids.add(uid);
-  }
 
-  // 4. price_up_summary (사용자당 1개)
-  const perUserUps = new Map<string, ProductBrief[]>();
+  // 2-C. ups (사용자당 합산 1건 유지)
   for (const ev of events.ups) {
     for (const t of ev.trackers) {
-      const user = activeUsers.get(t.uid);
+      const user = jigumiyaUsers.get(t.uid);
       if (!user) continue;
       const last = user.lastNotifications.priceUp?.[ev.productId] ?? 0;
       if (now - last < ONE_DAY_MS) continue;
-      let arr = perUserUps.get(user.uid);
-      if (!arr) {
-        arr = [];
-        perUserUps.set(user.uid, arr);
-      }
-      arr.push({
+      const b = getBucket(user.uid);
+      b.ups.push({
         productId: ev.productId,
         productName: ev.productName,
         currentPrice: ev.currentPrice,
         previousPrice: ev.previousPrice,
       });
-      markUpdate(user.uid, `lastNotifications.priceUp.${ev.productId}`, now);
     }
   }
-  for (const [uid, items] of perUserUps) {
-    if (items.length === 0) continue;
-    const user = activeUsers.get(uid);
+
+  // 2-D. push 단계 — H1 변경: target 1건 + drops 상품별 각각 1건 + ups 합산 1건 (병행 발송 가능)
+  for (const [uid, b] of userBuckets) {
+    const user = jigumiyaUsers.get(uid);
     if (!user) continue;
-    payloads.push({
-      type: 'price_up_summary',
-      token: user.token,
-      items,
-    });
-    pricedAlertedUids.add(uid);
-  }
 
-  // 5. broadcast_drop20 → broadcast_drop10 (전체 활성 사용자, 24h tier별 가드)
-  if (events.broadcastTier20.length > 0) {
-    for (const user of activeUsers.values()) {
-      const last = user.lastNotifications.broadcast?.tier20 ?? 0;
-      if (now - last < ONE_DAY_MS) continue;
+    // target_reached (사용자당 1건)
+    if (b.target) {
       payloads.push({
-        type: 'broadcast_drop20',
+        type: 'target_reached',
         token: user.token,
-        items: events.broadcastTier20,
+        item: b.target.item,
+        targetPrice: b.target.targetPrice,
       });
-      markUpdate(user.uid, 'lastNotifications.broadcast.tier20', now);
+      markUpdate(
+        uid,
+        `lastNotifications.targetReached.${b.target.item.productId}`,
+        now,
+      );
+      pricedAlertedUids.add(uid);
+    }
+
+    // H1: drops 상품별 각각 1건씩 (notifier.ts items.length===1이면 detail 라우팅 + 단일 형식)
+    for (const drop of b.drops) {
+      payloads.push({
+        type: 'price_drop_summary',
+        token: user.token,
+        items: [drop],
+      });
+      markUpdate(uid, `lastNotifications.priceDrop.${drop.productId}`, now);
+    }
+    if (b.drops.length > 0) pricedAlertedUids.add(uid);
+
+    // ups 합산 1건 (기존 유지)
+    if (b.ups.length > 0) {
+      payloads.push({
+        type: 'price_up_summary',
+        token: user.token,
+        items: b.ups,
+      });
+      for (const it of b.ups) {
+        markUpdate(uid, `lastNotifications.priceUp.${it.productId}`, now);
+      }
+      pricedAlertedUids.add(uid);
     }
   }
-  if (events.broadcastTier10.length > 0) {
-    for (const user of activeUsers.values()) {
-      const last = user.lastNotifications.broadcast?.tier10 ?? 0;
-      if (now - last < ONE_DAY_MS) continue;
-      payloads.push({
-        type: 'broadcast_drop10',
-        token: user.token,
-        items: events.broadcastTier10,
-      });
-      markUpdate(user.uid, 'lastNotifications.broadcast.tier10', now);
+
+  // 5. broadcast — shared_products 출처는 폐기(§C). 카테고리 베스트 출처는 부활(H2).
+  //
+  // H2 (2026-05-04, G v2): category-cycle.ts에서 dropRate ≤ -10% 감지 시 events.categoryBroadcasts에 push.
+  // 발송 대상: 컬렉션별 app 매칭 사용자 — 추적자(이미 §2-D drop 알림 받음) 제외 → 중복 발송 방지.
+  //   - category_best                       → jigumiya 사용자 전체
+  //   - category_best_baby / event_best     → broadcast 발송 X
+  //     (아이고 앱에 가격변동 탭이 없어 클릭 후 확인할 화면이 없음 — 추적자에게만 §2-D 도달)
+  //   targetMap의 'aigo' 분기는 방어적 코드 — 현재 events.categoryBroadcasts에는 jigumiya만 들어옴.
+  // 24h productId별 가드: lastNotifications.categoryBroadcast.{productId}.
+  if (events.categoryBroadcasts.length > 0) {
+    // 추적자 set 구성 — drops/ups에 등장한 trackers의 (productId, uid) 조합
+    const trackerUidsByProductId = new Map<string, Set<string>>();
+    for (const ev of events.drops) {
+      let s = trackerUidsByProductId.get(ev.productId);
+      if (!s) {
+        s = new Set();
+        trackerUidsByProductId.set(ev.productId, s);
+      }
+      for (const t of ev.trackers) s.add(t.uid);
     }
+    for (const ev of events.ups) {
+      let s = trackerUidsByProductId.get(ev.productId);
+      if (!s) {
+        s = new Set();
+        trackerUidsByProductId.set(ev.productId, s);
+      }
+      for (const t of ev.trackers) s.add(t.uid);
+    }
+
+    let bcCount = 0;
+    for (const item of events.categoryBroadcasts) {
+      const targetMap = item.app === 'jigumiya' ? jigumiyaUsers : aigoUsers;
+      const trackers =
+        trackerUidsByProductId.get(item.brief.productId) ?? new Set<string>();
+      for (const user of targetMap.values()) {
+        if (trackers.has(user.uid)) continue; // 추적자는 §2-D에서 별도 알림 → 중복 방지
+        const last =
+          user.lastNotifications.categoryBroadcast?.[item.brief.productId] ?? 0;
+        if (now - last < ONE_DAY_MS) continue;
+        payloads.push({
+          type: 'category_broadcast',
+          token: user.token,
+          item: item.brief,
+          dropRate: item.dropRate,
+        });
+        markUpdate(
+          user.uid,
+          `lastNotifications.categoryBroadcast.${item.brief.productId}`,
+          now,
+        );
+        bcCount++;
+      }
+    }
+    console.log(
+      `[CategoryBroadcast] items=${events.categoryBroadcasts.length} 발송 ${bcCount}건 (추적자/24h 가드 통과만)`,
+    );
+  }
+  if (events.broadcastTier20.length > 0 || events.broadcastTier10.length > 0) {
+    console.log(
+      `[Broadcast-Legacy] tier20=${events.broadcastTier20.length} tier10=${events.broadcastTier10.length} — 통계만 유지 (shared_products 출처 발송 폐기)`,
+    );
   }
 
-  // 6. evening_no_change — 19:30~21:00 KST 활성 사용자 전원 (24h 가드만 적용).
-  // 2026-05-02: hadAlertToday 가드 제거 — 그날 가격 알림 수신 여부와 무관하게 발송.
-  // pricedAlertedUids 가드도 제거 — 같은 flush에서 다른 알림을 받았더라도 evening은 별개로 발송.
+  // 6. evening_no_change — 지금이야 사용자 전용 (19:30~21:00 KST, E: KST 날짜 가드).
   if (eveningMode) {
-    for (const user of activeUsers.values()) {
-      const last = user.lastNotifications.evening ?? 0;
-      if (now - last < ONE_DAY_MS) continue;
+    for (const user of jigumiyaUsers.values()) {
+      if (user.lastNotifications.eveningKstDate === todayKstStr) continue;
       payloads.push({ type: 'evening_no_change', token: user.token });
-      markUpdate(user.uid, 'lastNotifications.evening', now);
+      markUpdate(user.uid, 'lastNotifications.eveningKstDate', todayKstStr);
     }
   }
 

@@ -3,6 +3,8 @@ import { createHmac } from 'crypto';
 const BASE_URL = 'https://api-gateway.coupang.com';
 const SEARCH_PATH =
   '/v2/providers/affiliate_open_api/apis/openapi/v1/products/search';
+const BEST_CATEGORIES_PATH =
+  '/v2/providers/affiliate_open_api/apis/openapi/v1/products/bestcategories';
 
 const ACCESS_KEY = (process.env.COUPANG_ACCESS_KEY || '').trim();
 const SECRET_KEY = (process.env.COUPANG_SECRET_KEY || '').trim();
@@ -218,5 +220,175 @@ export async function fetchCurrentPrice(
     price: best.productPrice,
     image: best.productImage,
     name: best.productName,
+  };
+}
+
+// ─── G (2026-05-04 v2): 카테고리 단위 round-robin용 fetch 함수 ───
+
+export interface BestCategoryProduct {
+  rank: number;
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  productUrl: string;
+  isRocket: boolean;
+  isFreeShipping: boolean;
+}
+
+export type BestCategoryResult =
+  | { ok: true; products: BestCategoryProduct[] }
+  | { ok: false; rateLimited: boolean; reason: string };
+
+/** category_best용 — bestcategories API (categoryId, limit=50으로 한 번에 50개 응답) */
+export async function fetchBestCategoryProducts(
+  categoryId: number,
+  limit: number = 50,
+): Promise<BestCategoryResult> {
+  if (!ACCESS_KEY || !SECRET_KEY) {
+    return { ok: false, rateLimited: false, reason: 'no_keys' };
+  }
+
+  const path = `${BEST_CATEGORIES_PATH}/${categoryId}`;
+  const query = `limit=${limit}`;
+  const authorization = generateAuthorization('GET', path, query);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}?${query}`, {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json;charset=UTF-8',
+      },
+    });
+  } catch (e) {
+    console.warn(`[BestCat] ${categoryId} fetch 실패:`, e);
+    return { ok: false, rateLimited: false, reason: 'fetch_error' };
+  }
+
+  if (res.status === 429) {
+    return { ok: false, rateLimited: true, reason: 'http_429' };
+  }
+
+  let json: any;
+  try {
+    json = await res.json();
+  } catch {
+    return {
+      ok: false,
+      rateLimited: false,
+      reason: `bad_json_status_${res.status}`,
+    };
+  }
+
+  if (isRateLimited(res.status, json.rCode, json.rMessage)) {
+    return { ok: false, rateLimited: true, reason: `rcode_${json.rCode}` };
+  }
+
+  if (json.rCode === '0' && json.data) {
+    const items = Array.isArray(json.data)
+      ? json.data
+      : json.data.productData || [];
+    const products: BestCategoryProduct[] = items.map(
+      (p: any, idx: number) => ({
+        rank: typeof p.rank === 'number' ? p.rank : idx + 1,
+        productId: String(p.productId),
+        productName: String(p.productName ?? ''),
+        productPrice: Number(p.productPrice ?? 0),
+        productImage: String(p.productImage ?? ''),
+        productUrl: String(p.productUrl ?? ''),
+        isRocket: !!p.isRocket,
+        isFreeShipping: !!p.isFreeShipping,
+      }),
+    );
+    return { ok: true, products };
+  }
+
+  return {
+    ok: false,
+    rateLimited: false,
+    reason: `rcode_${json.rCode || 'unknown'}`,
+  };
+}
+
+export interface SearchedCategoryProduct {
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  productUrl: string;
+  isRocket: boolean;
+}
+
+export type SearchCategoryResult =
+  | { ok: true; products: SearchedCategoryProduct[]; rawCount: number }
+  | { ok: false; rateLimited: boolean; reason: string };
+
+/** category_best_baby / event_best용 — search API (keyword, limit=50, 클라이언트 minPrice 필터) */
+export async function searchKeywordCategoryProducts(
+  keyword: string,
+  limit: number = 50,
+  minPrice: number = 0,
+): Promise<SearchCategoryResult> {
+  if (!ACCESS_KEY || !SECRET_KEY) {
+    return { ok: false, rateLimited: false, reason: 'no_keys' };
+  }
+
+  const query = `keyword=${encodeURIComponent(keyword)}&limit=${limit}`;
+  const authorization = generateAuthorization('GET', SEARCH_PATH, query);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${SEARCH_PATH}?${query}`, {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json;charset=UTF-8',
+      },
+    });
+  } catch (e) {
+    console.warn(`[SearchCat] "${keyword}" fetch 실패:`, e);
+    return { ok: false, rateLimited: false, reason: 'fetch_error' };
+  }
+
+  if (res.status === 429) {
+    return { ok: false, rateLimited: true, reason: 'http_429' };
+  }
+
+  let json: any;
+  try {
+    json = await res.json();
+  } catch {
+    return {
+      ok: false,
+      rateLimited: false,
+      reason: `bad_json_status_${res.status}`,
+    };
+  }
+
+  if (isRateLimited(res.status, json.rCode, json.rMessage)) {
+    return { ok: false, rateLimited: true, reason: `rcode_${json.rCode}` };
+  }
+
+  if (json.rCode === '0' && json.data?.productData) {
+    const raw = json.data.productData as any[];
+    const all: SearchedCategoryProduct[] = raw.map((p: any) => ({
+      productId: String(p.productId),
+      productName: String(p.productName ?? ''),
+      productPrice: Number(p.productPrice ?? 0),
+      productImage: String(p.productImage ?? ''),
+      productUrl: String(p.productUrl ?? ''),
+      isRocket: !!p.isRocket,
+    }));
+    const filtered =
+      minPrice > 0 ? all.filter((p) => p.productPrice >= minPrice) : all;
+    return { ok: true, products: filtered, rawCount: raw.length };
+  }
+
+  return {
+    ok: false,
+    rateLimited: false,
+    reason: `rcode_${json.rCode || 'unknown'}`,
   };
 }

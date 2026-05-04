@@ -20,8 +20,15 @@ export type PushPayload =
     }
   | { type: 'price_up_summary'; token: string; items: ProductBrief[] }
   | { type: 'evening_no_change'; token: string }
-  | { type: 'broadcast_drop10'; token: string; items: ProductBrief[] }
-  | { type: 'broadcast_drop20'; token: string; items: ProductBrief[] };
+  | { type: 'broadcast_drop10'; token: string; items: ProductBrief[] } // legacy, 미사용
+  | { type: 'broadcast_drop20'; token: string; items: ProductBrief[] } // legacy, 미사용
+  // G v2 (2026-05-04): 카테고리 베스트 10% 이상 급락 → 추적자 외 활성 사용자 전체 발송
+  | {
+      type: 'category_broadcast';
+      token: string;
+      item: ProductBrief;
+      dropRate: number;
+    };
 
 const MESSAGES = {
   morning: [
@@ -29,22 +36,27 @@ const MESSAGES = {
     { title: '기다렸다, 지금이야!', body: '오늘의 가격을 확인해보세요' },
     { title: '좋은 아침이에요!', body: '관심 상품 가격을 확인해볼까요?' },
   ],
+  // 복수형(n>1) 전용 — body에 반드시 {N} 포함. 단일(n===1)은 buildMessage에서 별도 형식 사용.
   priceDropSummary: [
     {
       title: '가격이 내려갔어요 📉',
-      body: '관심 상품 {N}개 가격이 내려갔어요. 지금 확인해보세요!',
+      body: '관심 상품 {N}개 가격이 내려갔어요. 확인해보세요',
     },
     {
       title: '기다렸다, 지금이야!',
-      body: '관심 상품 {N}개 가격이 떨어졌어요',
+      body: '관심 상품 {N}개 가격이 떨어졌어요. 지금 확인해보세요',
     },
-    { title: '가격이 내려갔어요!', body: '구매 타이밍을 놓치지 마세요 🛒' },
+    {
+      title: '가격이 내려갔어요!',
+      body: '{N}개 상품 가격 하락! 놓치지 마세요 🛒',
+    },
   ],
   targetReached: [
     { title: '🎯 목표가 도달!', body: '지금이 바로 그 순간이에요' },
     { title: '기다리던 가격이 됐어요!', body: '지금 확인해보세요 ✨' },
     { title: '드디어!', body: '관심 상품이 목표가에 도달했어요 🎉' },
   ],
+  // 복수형(n>1) 전용 — body에 반드시 {N} 포함.
   priceUpSummary: [
     {
       title: '가격이 올랐어요 📈',
@@ -52,9 +64,12 @@ const MESSAGES = {
     },
     {
       title: '가격이 올랐어요',
-      body: '관심 상품 {N}개 — 구매 계획이 있다면 서두르세요!',
+      body: '{N}개 상품 가격 상승! 구매 계획이 있다면 서두르세요',
     },
-    { title: '더 오르기 전에', body: '확인해보는 건 어떨까요? 💭' },
+    {
+      title: '더 오르기 전에',
+      body: '관심 상품 {N}개 — 확인해보는 건 어떨까요? 💭',
+    },
   ],
   eveningNoChange: [
     { title: '오늘은 변동이 없었어요 🌙', body: '내일을 기대해봐요' },
@@ -83,6 +98,21 @@ const MESSAGES = {
       body: '베스트 상품 {N}개 가격이 20% 이상 내려갔어요 💥',
     },
   ],
+  // G v2 (2026-05-04): placeholder — {name} 상품명, {rate} 할인율(절댓값 정수), {prev}/{curr} 가격
+  categoryBroadcast: [
+    {
+      title: '⚡ 급락 알림',
+      body: '{name} {rate}% 급락! 지금 확인해보세요',
+    },
+    {
+      title: '🔥 특가 알림',
+      body: '{name} 특가! {prev}원 → {curr}원',
+    },
+    {
+      title: '📉 가격 하락',
+      body: '{name} {rate}% 내려갔어요',
+    },
+  ],
 } as const;
 
 function pickRandom<T>(arr: readonly T[]): T {
@@ -94,7 +124,8 @@ function fillN(template: string, n: number): string {
 }
 
 interface MessageData extends Record<string, unknown> {
-  screen: 'home' | 'detail' | 'price-drops';
+  // 'price_change' = 가격변동 탭 (category_broadcast 전용, G v2). 클라이언트는 'price-drops'와 동일 처리.
+  screen: 'home' | 'detail' | 'price-drops' | 'price_change';
   itemId?: string;
   alertType: PushPayload['type'];
 }
@@ -123,11 +154,12 @@ function buildMessage(p: PushPayload): {
     }
     case 'target_reached': {
       const m = pickRandom(MESSAGES.targetReached);
-      const cur = p.item.currentPrice.toLocaleString();
       const name = p.item.productName.slice(0, 20);
+      const prev = p.item.previousPrice.toLocaleString();
+      const cur = p.item.currentPrice.toLocaleString();
       return {
         title: m.title,
-        body: `${name} ${cur}원 — ${m.body}`,
+        body: `${name} ${prev}원 → ${cur}원 🎯`,
         data: {
           screen: 'detail',
           itemId: p.item.productId,
@@ -138,28 +170,42 @@ function buildMessage(p: PushPayload): {
     case 'price_drop_summary': {
       const m = pickRandom(MESSAGES.priceDropSummary);
       const n = p.items.length;
-      const data: MessageData =
-        n === 1
-          ? {
-              screen: 'detail',
-              itemId: p.items[0].productId,
-              alertType: p.type,
-            }
-          : { screen: 'home', alertType: p.type };
-      return { title: m.title, body: fillN(m.body, n), data };
+      if (n === 1) {
+        const it = p.items[0];
+        const name = it.productName.slice(0, 20);
+        const prev = it.previousPrice.toLocaleString();
+        const cur = it.currentPrice.toLocaleString();
+        return {
+          title: m.title,
+          body: `${name} ${prev}원 → ${cur}원 ↓`,
+          data: { screen: 'detail', itemId: it.productId, alertType: p.type },
+        };
+      }
+      return {
+        title: m.title,
+        body: fillN(m.body, n),
+        data: { screen: 'home', alertType: p.type },
+      };
     }
     case 'price_up_summary': {
       const m = pickRandom(MESSAGES.priceUpSummary);
       const n = p.items.length;
-      const data: MessageData =
-        n === 1
-          ? {
-              screen: 'detail',
-              itemId: p.items[0].productId,
-              alertType: p.type,
-            }
-          : { screen: 'home', alertType: p.type };
-      return { title: m.title, body: fillN(m.body, n), data };
+      if (n === 1) {
+        const it = p.items[0];
+        const name = it.productName.slice(0, 20);
+        const prev = it.previousPrice.toLocaleString();
+        const cur = it.currentPrice.toLocaleString();
+        return {
+          title: m.title,
+          body: `${name} ${prev}원 → ${cur}원 ↑`,
+          data: { screen: 'detail', itemId: it.productId, alertType: p.type },
+        };
+      }
+      return {
+        title: m.title,
+        body: fillN(m.body, n),
+        data: { screen: 'home', alertType: p.type },
+      };
     }
     case 'broadcast_drop10': {
       const m = pickRandom(MESSAGES.broadcast10);
@@ -177,6 +223,27 @@ function buildMessage(p: PushPayload): {
         title: m.title,
         body: fillN(m.body, n),
         data: { screen: 'price-drops', alertType: p.type },
+      };
+    }
+    case 'category_broadcast': {
+      const m = pickRandom(MESSAGES.categoryBroadcast);
+      const name = p.item.productName.slice(0, 20);
+      const rate = Math.abs(Math.round(p.dropRate));
+      const prev = p.item.previousPrice.toLocaleString();
+      const curr = p.item.currentPrice.toLocaleString();
+      const body = m.body
+        .replace('{name}', name)
+        .replace('{rate}', String(rate))
+        .replace('{prev}', prev)
+        .replace('{curr}', curr);
+      return {
+        title: m.title,
+        body,
+        data: {
+          screen: 'price_change',
+          itemId: p.item.productId,
+          alertType: p.type,
+        },
       };
     }
   }

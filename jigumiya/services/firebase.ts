@@ -135,7 +135,14 @@ export async function savePushToken(token: string): Promise<void> {
   try {
     await setDoc(
       doc(db, 'users', uid),
-      { expoPushToken: token, notificationEnabled: true, lastActiveAt: new Date().toISOString() },
+      {
+        expoPushToken: token,
+        notificationEnabled: true,
+        lastActiveAt: new Date().toISOString(),
+        // C (2026-05-04): 알림 발송 시 앱 식별 — 서버는 app !== 'jigumiya' 사용자 스킵.
+        // 5/3 batch 거절 사고: users 컬렉션에 다른 EAS projectId 토큰 혼재(아이고 등) → 차단.
+        app: 'jigumiya' as const,
+      },
       { merge: true },
     );
   } catch (e) {
