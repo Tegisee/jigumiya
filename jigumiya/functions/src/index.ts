@@ -238,6 +238,9 @@ export const resolveAndGenerateAffiliateUrl = onCall(
     region: 'asia-northeast3',
     secrets: [COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY],
     cors: true,
+    // 2026-05-05: 콜드 스타트 제거를 위해 인스턴스 1개 상시 유지 (월 ~$5~10).
+    // 1.0.10 응답시간 로그로 콜드 스파이크 확인 → Android 첫 호출 딜레이 + iOS 공유 무한로딩 위험 감소.
+    minInstances: 1,
   },
   async (request): Promise<ResolveResult> => {
     if (!request.auth) {
