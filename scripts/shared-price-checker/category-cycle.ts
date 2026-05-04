@@ -390,17 +390,22 @@ export async function processCategoryRoundRobin(opts: {
         }
       }
 
-      // 3) 문서 통째 갱신 (기존 updater 형식 유지) — 다음 사이클 prev 정정
-      try {
-        await db
-          .collection(cfg.name)
-          .doc(cat.docId)
-          .set(buildPayload(cfg, cat, fresh), { merge: true });
-      } catch (e) {
-        console.warn(
-          `[CategoryCycle] 문서 갱신 실패 ${cfg.name}/${cat.docId}:`,
-          e,
-        );
+      // 3) 문서 갱신 — category_best은 02:00 KST `category-best-updater` cron이 단독 갱신.
+      // G round-robin은 가격 비교 + 알림 발송만 수행, 문서 덮어쓰기 X.
+      // 이유: bestcategories API와 search API의 productPrice 출처 mismatch 방어 (5/5 사고 원인).
+      // baby/event는 별도 updater가 없으므로 G가 갱신 책임 유지 (다음 사이클 prev 정정).
+      if (cfg.name !== 'category_best') {
+        try {
+          await db
+            .collection(cfg.name)
+            .doc(cat.docId)
+            .set(buildPayload(cfg, cat, fresh), { merge: true });
+        } catch (e) {
+          console.warn(
+            `[CategoryCycle] 문서 갱신 실패 ${cfg.name}/${cat.docId}:`,
+            e,
+          );
+        }
       }
 
       // 카테고리 사이 sleep (마지막 카테고리 뒤에는 생략)

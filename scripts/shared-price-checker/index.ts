@@ -454,16 +454,18 @@ async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
   return byProductId.size;
 }
 
-/** 활성 사용자 (token 보유 + notificationEnabled !== false) — app 필드 보존
+/** 활성 사용자 (token 보유 + notificationEnabled !== false + **app === 'jigumiya' strict**)
  *
- * G v2 (2026-05-04): C(app !== 'jigumiya' 차단) 정책에서 모든 앱 사용자를 picking으로 변경.
- *   - 기존: jigumiya만 picking → category_best_baby/event_best broadcast 발송 대상 0명 문제
- *   - 신규: 모든 활성 사용자 picking + app 필드 보존 → flush 단에서 app별 분기
- *     · jigumiya 전용 알림(morning/evening/target/drop/up): user.app === 'jigumiya'만 발송
- *     · category_broadcast: 컬렉션별 app 매칭 (category_best→jigumiya, baby/event→aigo)
- *   - app 필드 매핑: 'aigo' → aigo, 그 외(미설정 포함) → jigumiya (legacy 호환)
+ * 2026-05-05 (사고 후속): strict 모드로 변경 — `app === 'jigumiya'`인 사용자만 picking.
+ *   배경:
+ *     - 5/3 batch 거절 사고 = users 컬렉션에 jigumiya/aigo 사용자 혼재
+ *     - 5/5 backfill (`users-app-backfill-20260505.mjs`)로 식별 가능한 48명 분류 완료
+ *       (aigo 30, jigumiya 18). unknown 102명은 미분류 — 1.0.11 배포 후 자연 회복 대기
+ *     - 이전 정책(`app !== 'aigo' → jigumiya 가정`)은 unknown 토큰 보유자(42명)에 잘못 발송 위험
+ *   변경: `app === 'jigumiya'`만 발송. unknown/null/aigo/그 외는 모두 제외.
+ *   회복: 기존 jigumiya 사용자가 1.0.11 실행 시 `savePushToken`이 자동 `app:'jigumiya'` 박음 → 자동 picking
  *
- * 5/3 알림 0건 사고 방어 효과 유지: app 필드가 잘못된 토큰은 batch 거절 후 cleanup으로 자연 제거.
+ * UserState.app 타입은 'jigumiya' | 'aigo' 그대로 유지 — broadcast 분기 호환성 유지(현재 jigumiya만 들어옴).
  */
 async function fetchActiveUsers(
   client: Firestore,
@@ -471,26 +473,32 @@ async function fetchActiveUsers(
   const snap = await client.collection('users').get();
   const map = new Map<string, UserState>();
   let countJigumiya = 0;
-  let countAigo = 0;
+  let skipAigo = 0;
+  let skipUnknown = 0;
+  let skipOther = 0;
   for (const u of snap.docs) {
     const d = u.data() ?? {};
     const token = d.expoPushToken as string | undefined;
     if (!token) continue;
     if (d.notificationEnabled === false) continue;
     const appField = d.app as string | undefined;
-    const app: 'jigumiya' | 'aigo' = appField === 'aigo' ? 'aigo' : 'jigumiya';
-    if (app === 'aigo') countAigo++;
-    else countJigumiya++;
+    if (appField !== 'jigumiya') {
+      if (appField === 'aigo') skipAigo++;
+      else if (appField == null) skipUnknown++;
+      else skipOther++;
+      continue;
+    }
+    countJigumiya++;
     map.set(u.id, {
       uid: u.id,
       token,
-      app,
+      app: 'jigumiya',
       lastNotifications:
         (d.lastNotifications as LastNotifications | undefined) ?? {},
     });
   }
   console.log(
-    `[ActiveUsers] jigumiya=${countJigumiya} aigo=${countAigo} (총 ${map.size}명)`,
+    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther}`,
   );
   return map;
 }
