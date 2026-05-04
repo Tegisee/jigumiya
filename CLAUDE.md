@@ -235,16 +235,107 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - `shared_products` 풀 51개 (직전 47 → +4 증가, wipe 이후 신규 등록분)
 - 가격 변동 0건이라 batch try/catch 실동작 검증 미완 — 다음 가격 변동 시 `[Push] batch 거절 → 1건씩 재시도` 로그 발생으로 검증 가능
 
-## 다음 작업 순서 (2026-05-04 1.0.10 배포 검토 + 검증 + 후속 작업)
+### 2026-05-04 작업 (알림 시스템 종합 fix A~H + 카테고리 round-robin 가격체크 도입)
+
+단일 커밋 `de856a6` (6 files, +947/-146). A~H 8종 일괄 적용. 1.0.11 빌드 대기.
+
+① **A. 고정 알림 폭탄 방지 — pickRandom 강화 + 후보 풀 정리** (`notifier.ts`)
+- 진단: `pickRandom(MESSAGES.morning)` 등은 이미 후보 풀에서 1개만 pick하는 구조 (코드상 폭탄 원인 아님)
+- 조치: `priceDropSummary`/`priceUpSummary` 복수형 후보의 `{N}` placeholder 누락 항목 정리 — 단일/복수 분기 일관성. 명시적 코멘트로 의도 보존
+
+② **B. 관심상품 drop 알림 상품별 각각 발송** (`index.ts` flush)
+- 변경: drop 사용자당 1건 통합 → 상품별 각각 1건씩 push (target/up은 통합 유지)
+- 예: 관심상품 A(target) + B/C/D(drop) 동시 변동 → target 1건 + drop 3건 = 4건 도달
+- target 통과 (uid, productId)는 drop bucket 자동 제외 → 같은 상품 중복 차단
+- 단일 형식 `{name} {prev}원 → {curr}원 ↓` + detail 라우팅 (notifier.ts items.length===1 분기 자동 적용)
+- 24h productId별 가드 유지
+
+③ **C. 앱 필터링 — jigumiya/aigo 사용자 분리** (서버 + 클라이언트)
+- **클라이언트** (`services/firebase.ts:savePushToken`): `app: 'jigumiya' as const` 필드 같이 저장 — 1.0.11+ 발급 토큰부터 자동 백필
+- **서버** (`shared-price-checker/index.ts:fetchActiveUsers`): 모든 활성 사용자 picking + `app` 필드 보존 (legacy 미설정 → `'jigumiya'` 가정 / `'aigo'` → `'aigo'`)
+  - flush 단에서 `jigumiyaUsers` / `aigoUsers` 분리 맵 구성
+  - 지금이야 전용 알림(morning/evening/target/drop/up): `jigumiyaUsers`만 picking
+  - 로그: `[ActiveUsers] jigumiya=N aigo=M (총 X명)` — 누수 토큰 가시화
+- 5/3 batch 거절 사고 방어 효과 유지 (잘못된 토큰은 cleanup으로 자연 제거)
+
+④ **D. 알림 문구 상품명 + 변동 금액 포함** (`notifier.ts:buildMessage`)
+- 단일 (`n===1`): `{name} {prev}원 → {curr}원 ↓` (drop) / `↑` (up) — detail 라우팅
+- 복수 (`n>1`): `n개 상품 가격 하락! 확인해보세요` — home 라우팅
+- target_reached: `{name} {prev}원 → {cur}원 🎯` (단일 전용)
+
+⑤ **E. 고정 알림 미발송 — KST 날짜 가드로 전환** (`index.ts`)
+- 원인 추정: 24h ms 가드 + GitHub Actions schedule jitter ±10분 → 어제 20:10 발송 → 오늘 20:00 cron이 23h50m로 차단 → 다음날 evening 알림 0건
+- fix: `LastNotifications.morning/evening` (number ms) → `morningKstDate/eveningKstDate` (string `'YYYY-MM-DD'`)
+  - `formatKstDate(ms): string` 헬퍼 신설
+  - 비교: `if (user.lastNotifications.eveningKstDate === todayKstStr) continue` — 같은 KST 날짜면 스킵
+  - `markUpdate` 시그니처 `value: number` → `value: number | string`
+- legacy `morning`/`evening` 필드는 read 안 함 (자동 마이그레이션, 별도 cleanup 불필요)
+
+⑥ **F. shared_products sleep 단순화 — 10초 → 2초** (`index.ts`)
+- 원인: 폐기된 §5-2 단일 사이클 설계 잔재 (`BUDGET_MS / (N×cyclesPerDay)` 균등 분산 산식)
+- fix:
+  - `DEFAULT_SLEEP_MS = 1500` → `2000` (분당 24~30회 = 검색 한도 50/분의 48~60%)
+  - `computeCycleConfig`에서 sleep 산식 제거 → `sleepMs: DEFAULT_SLEEP_MS` 단일값
+  - `cyclesPerDay`는 로그/통계용으로만 산출 (분당 30회 가정 → `actualCount / 30`분 기준)
+- 효과:
+  - N=51 1회 실행 ~393초 → **~70초** (실 API 34회 × 2초 sleep + Firestore I/O)
+  - 호출량 동일 (sleep은 실행 시간만 영향, 호출 횟수와 무관)
+  - GitHub Actions runtime ~80% 절감
+
+⑦ **G. 카테고리 round-robin 가격체크 — 카테고리 단위 2개씩** (`category-cycle.ts` 신규)
+- shared_products 순회 끝난 후 매 사이클 1회 호출 (notify-only 모드 스킵, rate-limited 시 스킵)
+- **호출 단위**: 카테고리 1개 = 1콜 (50상품 한 번에 응답)
+  - `category_best`: `bestcategories` API (categoryId 기반)
+  - `category_best_baby`: `search` API (keyword 기반)
+  - `event_best`: `search` API (keyword + minPrice 30000 클라이언트 필터)
+- **사이클당 6콜** (3 컬렉션 × 2 카테고리, sleep 2초)
+- **포인터**: `meta/stats.categoryCyclePointers` (set-merge nested map):
+  - `{ category_best: 4, category_best_baby: 6, event_best: 2 }` — 끝까지 가면 0 자동 초기화 (round-robin)
+- **카테고리 정의 동적 read** — 별도 categories.ts 의존성 없음:
+  - `category_best/{categoryId}` → `categoryId`, `categoryName`, `displayOrder`
+  - `category_best_baby/{slug}` → `keyword`, `category`, `displayOrder`
+  - `event_best/{slug}` → `keyword`, `eventName`, `type`
+  - 컬렉션 비어있으면 즉시 스킵 (jigumiya 프로젝트에 baby/event 비어있는 현 상태 자연 대응)
+- **가격 비교 흐름**: 기존 문서 `loadPrevPrices` → 새 fetch → productId 매칭 → 변동 시 `events.drops/ups` 추가 + `price_drops` 멱등 upsert + 카테고리 문서 통째 갱신 (다음 사이클 prev 정정)
+- **추적자 매핑**: `fetchTrackersByProductId` (collectionGroup `tracked.productId`) → 추적자 있으면 `events.drops/ups`로 §B drop 상품별 발송 흐름 진입
+- **커버리지**: 950상품 / 1.5시간(10 사이클 × 19카테고리) — 이전 1.4일 대비 약 22배 빠른 갱신
+- **호출량**: 일일 109 사이클 × 6콜 = **약 654 카테고리 API 호출/일** (shared 약 3,706 + G 654 = **약 4,360/일**)
+- **새 함수** (`coupang-api.ts`): `fetchBestCategoryProducts(categoryId, limit=50)`, `searchKeywordCategoryProducts(keyword, limit=50, minPrice=0)`
+
+⑧ **H. category_best 10% 급락 broadcast — 부활 + 컬렉션별 분기** (`notifier.ts` + `index.ts` + `category-cycle.ts` + 클라이언트)
+- C 정책으로 폐기됐던 broadcast를 카테고리 베스트 출처로 부활 (shared_products 출처는 폐기 유지)
+- **범위**:
+  - `category_best` → 지금이야 사용자 전체 broadcast (추적자 제외)
+  - `category_best_baby` / `event_best` → broadcast 발송 X (아이고 앱에 가격변동 탭이 없어 클릭 후 확인할 화면이 없음 — 추적자에게만 §B 도달)
+- **새 type**: `category_broadcast` (`notifier.ts`)
+- **메시지 후보 3개 랜덤** (placeholder `{name}`/`{rate}`/`{prev}`/`{curr}`):
+  - `⚡ 급락 알림 / {name} {rate}% 급락! 지금 확인해보세요`
+  - `🔥 특가 알림 / {name} 특가! {prev}원 → {curr}원`
+  - `📉 가격 하락 / {name} {rate}% 내려갔어요`
+- **추적자 중복 방지**: `trackerUidsByProductId` 집합으로 이미 §B에서 drop 알림 받는 사용자 자동 제외
+- **24h productId별 가드**: `lastNotifications.categoryBroadcast.{productId}`
+- **클라이언트 라우팅** (`services/notifications.ts:resolveNotificationRoute`): `screen === 'price_change'` 추가 → `/price-drops` 탭 (가격변동) 동일 처리
+- 로그: `[CategoryBroadcast] items=N 발송 M건 (추적자/24h 가드 통과만)`
+
+⑨ **legacy 통계 + 방어적 코드**
+- `shared_products` 출처 broadcast 발송 폐기 유지 (events.broadcastTier10/20는 카운팅만)
+- `flush` 단의 `targetMap = item.app === 'jigumiya' ? jigumiyaUsers : aigoUsers` 분기 — 현재 categoryBroadcasts에는 jigumiya만 들어오지만 향후 아이고 가격변동 탭 추가 시 부활 대비
+
+## 다음 작업 순서 (2026-05-05 이후)
 
 **최우선** (잔여 작업):
-1. **🚨 검증**: 1.0.10 (bn45/vc45) Play Store / App Store 심사 결과 모니터링. 양 스토어 승급 시 단계적 출시 진행
-2. **🚨 검증**: 1.0.10 실기기 — ① iOS 공유 가이드 Alert 노출 + Functions 정상 시 ~10s 내 target step ② Android 모달 진입 시 `[AddItem] Functions resolve {ms}ms ok=true` 로그로 콜드/warm 분포 표본 수집 (최소 20회) ③ 가격변동 탭 + 오늘의 특가 같은 productId 1번씩만 표시 ④ 알림 클릭 시 detail 화면 정상 표시
-3. **🚨 검증**: 다음 가격 변동 발생 시 batch 거절 방어 실동작 — `[Push] batch 거절 → 1건씩 재시도` 로그 발생 시 fallback 동작 확인 + `발송 성공 M명 / 미발송 가드 스킵 K명` 분기에서 K값으로 batch 거절 영향 정량화
-4. **🚨 검증**: 5/4 07:30 / 20:00 KST notify-only cron — Fix 1+2 적용 후 첫 morning/evening 자동 트리거에서 `payloads N건` + `lastNotifications 업데이트 N명` 분기 출력 확인
-5. **갱신**: 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` Firebase Console 갱신
-6. **모니터링**: Functions 응답시간 로그 분포 — 평균 ≤1s면 현 상태 유지 / 1~3s + 5s+ 콜드 스파이크면 `minInstances: 1` 검토 (월 ~$5~10 비용 vs UX 가치)
-7. **모니터링**: Block zone(01:00~04:30 KST) 트리거 시 graceful exit 정상 작동 — 약 21회/일 즉시 종료 예상
+1. **🚨 빌드**: **1.0.11 (bn46/vc46)** — A~H 통합. 클라이언트 변경 (services/firebase.ts savePushToken `app:'jigumiya'`, services/notifications.ts `price_change` 라우팅) 적용 위해 빌드 필수
+2. **🚨 검증**: A~H 첫 cron 자동 실행 (5/5 04:30 KST 가격체크 / 07:30 morning / 20:00 evening) — 새 로그 형식 일괄 확인:
+   - `[ActiveUsers] jigumiya=N aigo=M (총 X명)` — 누수 토큰 분포 가시화
+   - `[CategoryCycle] category_best 0~1 처리 완료 api=2 drops=K` 형식 (G 동작)
+   - `[CategoryBroadcast] items=N 발송 M건` (H 발생 시)
+   - `[Flush] payloads N건` + `lastNotifications 업데이트 M명 (발송 성공 / 미발송 가드 스킵)`
+3. **🚨 검증**: 1.0.10 실기기 (이전 잔여) — ① iOS 가이드 Alert ② Android 응답시간 로그 분포 ③ price_drops 단일 표시 ④ 알림 클릭 detail 라우팅
+4. **🚨 검증**: 1.0.11 실기기 — ① drop 상품별 N건 도달 (B) ② 단일 형식 `{name} {prev}원 → {curr}원 ↓` (D) ③ category_broadcast 알림 → 가격변동 탭 (H) ④ KST 날짜 가드 — 동일 KST 날짜 cron 재발송 차단 (E)
+5. **갱신**: 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` Firebase Console 갱신. 1.0.11 양 스토어 승급 후 `"1.0.11"`로 재갱신
+6. **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 검토 근거 표본 수집 (최소 20회)
+7. **모니터링**: 카테고리 round-robin 첫 1순환 — 950상품 / 1.5시간(10 사이클) 안에 `category_best: 0` 복귀 확인. 포인터 갱신 정상 동작
+8. **모니터링**: rate-limit 안전 — 사이클당 40 API (shared 34 + G 6) → 분당 30회 = 검색 한도 50/분 60% 사용. 429 발생 시 `[CategoryCycle] rate-limited — 즉시 종료` 로그
 
 **뒤로 미뤄둔 작업** (2026-05-04 이후 일정 배정):
 - **그래프 Y축 가격 표시 버그**: 1~2일 추가 관찰 후 패턴 확인 (재현 조건 불명확 — 일별 데이터 변동 폭 영향 의심)
@@ -283,16 +374,30 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **배포 (Android)**: 1.0.10 (vc45) Play Store 프로덕션 검토 중 (단계적 출시 대기)
 - [x] **배포 (iOS)**: 1.0.10 (bn45) App Store 심사 대기 중
 
-### 2026-05-04 이후 미완
-- [ ] **🚨 검증**: 1.0.10 실기기 — iOS 가이드 Alert + Android 응답시간 로그 분포 + price_drops 단일 표시 + 알림 클릭 detail
-- [ ] **🚨 검증**: 다음 가격 변동 발생 시 `[Push] batch 거절 → 1건씩 재시도` 로그 발생으로 Fix 1 실동작 확인
-- [ ] **🚨 검증**: 5/4 morning/evening cron — Fix 1+2 적용 후 `payloads N건` + `lastNotifications 업데이트 N명 (발송 성공 M명 / 미발송 가드 스킵 K명)` 분기 출력
-- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.9"` 또는 `"1.0.10"` — 양 스토어 승급 후 즉시 갱신
-- [ ] **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 검토 근거 수집 (최소 20회 표본)
-- [ ] **조사**: users 컬렉션 다른 EAS projectId 토큰 분포 — batch 거절 근본 원인 파악
+### 2026-05-04 완료
+- [x] **신규 기능 + 버그 fix**: A~H 알림 시스템 종합 fix + 카테고리 round-robin 가격체크 (커밋 `de856a6`)
+  - A: 고정 알림 폭탄 방지 (랜덤 1개 pick 강화)
+  - B: 관심상품 drop 알림 상품별 각각 발송 (사용자당 통합 → 상품별 1건씩)
+  - C: 앱 필터링 (jigumiya/aigo 사용자 분리, fetchActiveUsers + savePushToken)
+  - D: 알림 문구 상품명 + 변동 금액 포함 (`{name} {prev}원 → {curr}원 ↓`)
+  - E: 고정 알림 미발송 KST 날짜 가드 (24h ms → KST 'YYYY-MM-DD' 비교)
+  - F: shared sleep 10초 → 2초 (cyclesPerDay 산식 잔재 제거)
+  - G: 카테고리 round-robin (`category-cycle.ts` 신규, 6콜/사이클, 포인터 round-robin)
+  - H: category_best 10% 급락 broadcast (`category_broadcast` type, 추적자 제외)
+
+### 2026-05-05 이후 미완
+- [ ] **🚨 빌드**: 1.0.11 (bn46/vc46) — A~H 통합 + 클라이언트 변경(savePushToken/notifications) 적용
+- [ ] **🚨 검증**: 1.0.11 실기기 — drop 상품별 N건(B) + 단일 형식 메시지(D) + category_broadcast 라우팅(H) + KST 날짜 가드(E)
+- [ ] **🚨 검증**: 5/5 첫 cron 자동 실행 — `[ActiveUsers]` / `[CategoryCycle]` / `[CategoryBroadcast]` 새 로그 형식 일괄 확인
+- [ ] **🚨 검증**: 1.0.10 실기기 (잔여) — iOS 가이드 Alert + Android 응답시간 로그 + price_drops 단일 표시 + 알림 클릭 detail
+- [ ] **🚨 검증**: 가격 변동 발생 시 `[Push] batch 거절 → 1건씩 재시도` 로그로 Fix 1 실동작 확인
+- [ ] **갱신**: `meta/config_jigumiya.minRequiredVersion = "1.0.10"` (1.0.10 승급 후) → `"1.0.11"` (1.0.11 승급 후)
+- [ ] **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 검토 근거 (최소 20회 표본)
+- [ ] **모니터링**: 카테고리 round-robin 첫 1순환 — 10 사이클 후 `category_best: 0` 복귀
+- [ ] **조사**: users 컬렉션 다른 EAS projectId 토큰 분포 — batch 거절 근본 원인. `[ActiveUsers] aigo=M` 카운트로 1차 가시화
 - [ ] **관찰**: 그래프 Y축 가격 표시 버그 — 1~2일 추가 데이터로 재현 조건 확인
 - [ ] **신규 기능**: 공지사항 팝업 + 전체 푸시 broadcast — 지금이야/아이고 별도 구현
-- [ ] **별도 PR**: category-best 브로드캐스트 큐 — `category-best-updater`에 10/20% 감지 로직 추가
+- [ ] **별도 PR**: category-best 브로드캐스트 큐 → 본 PR(H)이 흡수했지만 category-best-updater 갱신 시점 비교는 미구현 — 사이클 round-robin 도달 전 발송 X
 - [ ] **검토**: cron schedule 최적화 §8-D-2 — morning/evening 시간대별 yml 분리 검토
 - [ ] **검토**: shared_products 가격체크 cron dry-run 모드 — workflow_dispatch input으로 변경 검증
 
@@ -323,11 +428,21 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.10 배포 검토 + 알림 시스템 fix 완료 (2026-05-04 기준)
-- 1.0.10 (bn45/vc45) **Play Store 프로덕션 검토 중 / App Store 심사 대기 중** (2026-05-03 빌드 완료)
-- 1.0.10 주요 변경:
-  - 🚨 알림 0건 사고 fix: Expo batch 거절 방어 (chunk try/catch + 1건씩 fallback) + markUpdate 순서 교정 (발송 성공 토큰만 24h 가드 갱신)
-  - 🚨 잘못 박힌 lastNotifications.morning 55명 정리 완료 (cleanup-morning-20260503)
+## 현재 상태: A~H 알림 시스템 + 카테고리 round-robin 도입 완료, 1.0.11 빌드 대기 (2026-05-04 기준)
+- A~H 8종 일괄 적용 (커밋 `de856a6`, 6 files +947/-146) — `1.0.11 (bn46/vc46)` 빌드 + 배포 대기
+- 1.0.10 (bn45/vc45) **Play Store 프로덕션 검토 중 / App Store 심사 대기 중** (2026-05-03 빌드 완료, 양 스토어 승급 시 단계적 출시)
+- A~H 주요 변경:
+  - A: 고정 알림 폭탄 방지 (pickRandom 강화 + 후보 풀 정리)
+  - B: 관심상품 drop 알림 상품별 각각 발송 (사용자당 통합 → 상품별 1건씩)
+  - C: 앱 필터링 (jigumiya/aigo 사용자 분리) — `[ActiveUsers] jigumiya=N aigo=M` 가시화
+  - D: 알림 문구 상품명+변동 금액 (`{name} {prev}원 → {curr}원 ↓`)
+  - E: 고정 알림 미발송 KST 날짜 가드 (24h ms → KST 'YYYY-MM-DD' 비교 → GitHub Actions jitter ±10분 흡수)
+  - F: shared sleep 10초 → 2초 (실행 시간 ~393초 → ~70초, 호출량은 동일)
+  - G: 카테고리 round-robin (`category-cycle.ts` 신규, 사이클당 6콜, 950상품 1.5h 1순환)
+  - H: category_best 10% 급락 broadcast (`category_broadcast` type, 추적자 제외, 가격변동 탭 라우팅)
+- 1.0.10 주요 변경 (이전):
+  - 🚨 알림 0건 사고 fix: Expo batch 거절 방어 (chunk try/catch + 1건씩 fallback) + markUpdate 순서 교정
+  - 🚨 잘못 박힌 lastNotifications.morning 55명 정리 (cleanup-morning-20260503)
   - 🐛 price_drops 중복 표시 fix: `add()` → `doc(productId).set()` 멱등 upsert + 옛 autoId 문서 9건 wipe
   - 🐛 iOS 공유 무한로딩 fix: 가이드 Alert + useFocusEffect step 보존 + startScrape 8s timeout
   - ⚡ Android 콜드 스타트 완화: 모달 mount warmup + AppState active warmup 재발사 + 응답시간 로그
@@ -372,15 +487,20 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - **Block zone 자동 대기**: `waitIfInBlockedZone()` — 01:00 ≤ now < 04:30 KST 진입 시 04:30까지 sleep (카테고리 갱신 시간대 충돌 방지). main 진입 직후 진입 시 즉시 graceful exit (`c0d8859`). notify-only 모드는 면제
 - **동적 사이클** (`b625f07`, 폐기 예정): `computeCycleConfig(actualCount)` — 단일 사이클만 실행되는 설계 잔재. §11 외부 cron이 사이클 역할 대체 → 향후 단순화 PR 가능. 현재는 sleep 산출용으로 유지
 - **N=0 자가 치유** (`c0d8859`): `shared_products` 풀 fetch 길이를 진실 원천으로 사용. `meta/stats`는 `lastCheckedOffset`/`lastRunAt`만 read/write
-- **알림 7종 시스템** (`ee60516`): morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20
-  - 각 type 3개 후보 문구 랜덤, `{N}` placeholder
-  - 사용자당 합산 (drop/up summary), target 통과 시 drop summary 중복 제외
-  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기, evening은 19:30~21:00 KST 활성 사용자 전원 (24h evening 가드만, 2026-05-02 hadAlertToday + pricedAlertedUids 가드 제거)
-  - 24h 중복 방지: `users/{uid}.lastNotifications` (morning/evening/priceDrop[pid]/priceUp[pid]/targetReached[pid]/broadcast.tier10|tier20)
-  - flush 단계 분리: 메모리 누적 → 끝에서 일괄 발송. 24h 통과 productId 0개면 push skip
+- **알림 8종 시스템** (`ee60516` + `de856a6` 2026-05-04): morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20 (legacy 통계) / **category_broadcast** (2026-05-04 신설, H)
+  - 각 type 3개 후보 문구 랜덤. drop/up `{N}` placeholder, category_broadcast `{name}/{rate}/{prev}/{curr}` placeholder
+  - **drop은 상품별 각각 1건씩 발송** (B, 2026-05-04) — 사용자당 통합 정책에서 분리. target/up은 통합 유지. target 통과 시 drop bucket 자동 제외
+  - **앱 필터링** (C, 2026-05-04): `users/{uid}.app` 필드 (`'jigumiya'`/`'aigo'`) 보존 + flush 단에서 `jigumiyaUsers`/`aigoUsers` 분리. 지금이야 전용 알림은 `jigumiyaUsers`만, category_broadcast는 컬렉션별 app 매칭
+  - **단일 형식 메시지** (D, 2026-05-04): `n===1` 시 `{name} {prev}원 → {curr}원 ↓` 형식 + detail 라우팅. `n>1` 시 합산 형식 + home 라우팅
+  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기. **KST 날짜 가드** (E, 2026-05-04): `lastNotifications.morningKstDate/eveningKstDate` 'YYYY-MM-DD' 비교 — GitHub Actions schedule jitter ±10분 흡수
+  - 24h productId 가드: `users/{uid}.lastNotifications` (priceDrop[pid]/priceUp[pid]/targetReached[pid]/categoryBroadcast[pid]/broadcast.tier10|tier20[legacy])
+  - flush 단계 분리: 메모리 누적 → 끝에서 일괄 발송. 24h/날짜 가드 통과 0개면 push skip
+- **F sleep 단순화** (2026-05-04): `DEFAULT_SLEEP_MS = 2000` 단일값 (이전 1500 + cyclesPerDay 산식 잔재 제거). N=51 1회 ~393초 → ~70초
+- **G 카테고리 round-robin** (2026-05-04, `category-cycle.ts`): shared_products 순회 끝난 후 매 사이클 1회. 3 컬렉션(`category_best`/`category_best_baby`/`event_best`) 각 2개씩 = 6콜/사이클. 포인터 `meta/stats.categoryCyclePointers`. 카테고리 정의 Firestore 문서에서 동적 read. 950상품 1.5h 1순환
+- **H category_broadcast** (2026-05-04): category_best -10% 급락 → jigumiya 사용자 전체 broadcast (추적자 제외). category_best_baby/event_best는 발송 X (아이고 가격변동 탭 부재). 클라이언트 라우팅 `screen: 'price_change'` → `/price-drops` 탭
 - createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
 - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색
-- 시작 로그: `[Schedule] N=37 interval=10min(peak) since=12.3min — 실행 진행` 또는 `[Cycle] N=37 daily=37 cycles=144 sleep=13851ms offset=0~36 split=false`
+- 시작 로그: `[Schedule] N=37 interval=10min(peak) since=12.3min — 실행 진행` / `[Cycle] N=37 daily=37 cycles=144 sleep=2000ms offset=0~36 split=false` / `[ActiveUsers] jigumiya=N aigo=M` / `[CategoryCycle] category_best 0~1 처리 완료 api=2 drops=K` / `[CategoryBroadcast] items=N 발송 M건`
 
 ### tracked-backfill (1회 실행 보강 스크립트, 2026-05-02 적용 완료)
 - 위치: `scripts/tracked-backfill/`, 워크플로우: `.github/workflows/tracked-backfill.yml`
