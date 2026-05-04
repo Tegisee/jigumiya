@@ -5,6 +5,10 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 작업할 항목의 sub MD도 함께 읽고 시작할 것.
 2026-04-30 이전 작업 이력은 docs/작업이력_archive.md 참조.
 
+## 가장 최근 (2026-05-05): 알림 사고 → 긴급 수정 → cron 재활성화
+
+5/4 A~H 배포 후 5/5 새벽 cron에서 가짜 가격 변동 폭주 → 긴급 cron 비활성화 → 원인 분석 → 수정 → 1.0.11 빌드 + Functions minInstances:1 + cron 재활성화. 상세는 "### 2026-05-05 작업" 참조.
+
 ## 작업 리스트
 
 ### Phase 1 (MVP)
@@ -321,21 +325,102 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - `shared_products` 출처 broadcast 발송 폐기 유지 (events.broadcastTier10/20는 카운팅만)
 - `flush` 단의 `targetMap = item.app === 'jigumiya' ? jigumiyaUsers : aigoUsers` 분기 — 현재 categoryBroadcasts에는 jigumiya만 들어오지만 향후 아이고 가격변동 탭 추가 시 부활 대비
 
-## 다음 작업 순서 (2026-05-05 이후)
+### 2026-05-05 작업 (1.0.11 빌드 + Functions minInstances + 🚨 가짜 가격 변동 폭주 사고 + 긴급 수정)
+
+① **Functions `minInstances: 1` 적용 + 배포** (커밋 `44c9176`)
+- `functions/src/index.ts:resolveAndGenerateAffiliateUrl` onCall 옵션에 `minInstances: 1` 추가
+- 첫 배포 시 billing 증가 안전 가드로 거절 → `firebase deploy --only functions:resolveAndGenerateAffiliateUrl --project jigumiya --force` 재시도 성공
+- Cloud Run 검증: minScale=1 / maxScale=20 / cpu=1 / memory=256Mi
+- 효과: Android 첫 호출 딜레이 + iOS 공유 무한로딩 위험 제거 (1.0.10 응답시간 로그 분포 본 후 결정)
+- 비용: 월 ~$5~10 (asia-northeast3 인스턴스 1개 24h 상시)
+
+② **1.0.11 (bn46/vc46) 빌드** (커밋 `756bd20`)
+- `app.config.js` version 1.0.11 / ios.buildNumber 46 / android.versionCode 46
+- `android/app/build.gradle` versionCode 46 / versionName "1.0.11" 동기화 (gitignored)
+- EAS local 빌드 (production profile, asia-northeast3):
+  - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB)
+  - Android: `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
+- 1.0.11 = A~H 통합 + 클라이언트 변경(`savePushToken` `app:'jigumiya'` + `notifications.ts` `price_change` 라우팅) 적용 빌드
+
+③ **🚨 가짜 가격 변동 폭주 사고 — A~H 배포 후 새벽 cron**
+- 증상: A~H cron 첫 자동 실행 후 추적 상품에 가짜 가격 변동 알림 폭주
+- 즉시 조치: `shared-price-check.yml` schedule 주석 처리 + push (커밋 `f9e71c1`)
+- **트리거**: G round-robin이 `category_best` 문서를 매 사이클(10분)마다 set merge로 갱신
+- **원인**: `bestcategories` API와 `search` API가 **같은 productId에 대해 서로 다른 productPrice를 반환**
+  - `bestcategories`: 베스트 노출가 (대표 옵션 또는 할인가)
+  - `search`: 키워드 검색 매칭 (4단어 → 5개 fetch → productId 매칭, 다중 매칭 시 currentPrice 휴리스틱)
+- **메커니즘**: G가 bestcategories 가격으로 category_best 통째 갱신 → shared-price-checker 본 흐름이 cache hit 시 bestcategories 가격을 prev로 사용 → 다음 cycle에서 search 결과와 비교 → ±5~25% 가짜 변동 (30% 가드 통과) → 추적자에게 알림 폭탄
+
+④ **가격 비교 코드 분석 (사고 후속)**
+- 모든 코드가 단일 필드 `productPrice`만 사용 — `salePrice`/`originalPrice`/`discountPrice` 등 분기 없음
+- search API는 키워드 4단어 → 5개 fetch → productId 매칭. 다중 매칭 시 currentPrice에 가장 가까운 가격 선택 (`fetchCurrentPrice` 휴리스틱) — 사용자가 보는 옵션과 다를 위험
+- `vendorItemId` / `itemId` 추출은 raw 로그만 찍힘, 매칭 미사용
+- 30% 변동 가드만 안전장치 — bestcategories↔search 갭은 보통 30% 이내라 무력
+- API 출처별 분리 표시 X — shared_products.currentPrice가 어떤 API로 갱신됐는지 history에 안 남음
+
+⑤ **fix 1: category_best 문서 갱신 중단** (커밋 `093f7ad`)
+- `category-cycle.ts:393`: `if (cfg.name !== 'category_best')` 분기 추가
+- `category_best` → 갱신 스킵 (`02:00 KST category-best-updater` 단독 갱신, 24h 안정 baseline 유지)
+- `category_best_baby` / `event_best` → 갱신 유지 (별도 updater 없음)
+- 가격 비교 + 알림 발송 로직은 모든 컬렉션 그대로 동작
+- bestcategories↔search productPrice 출처 mismatch 가짜 변동 차단
+
+⑥ **users 컬렉션 분석 — 충격 발견** (`scripts/shared-price-checker/analyze-users.mjs`)
+- jigumiya Firebase 프로젝트가 **jigumiya/aigo 사용자 혼재 운영 중** (5/3 batch 거절 사고 진짜 원인 확정)
+- 총 150명 / token 보유 65명. `app` 필드 분포:
+  - `app === 'jigumiya'`: 1명 (1.0.11 첫 실행자)
+  - `app === 'aigo'`: 1명
+  - `app == null` (legacy): **148명**
+- 아이고 전용 필드 보유 사용자: `vaccinationRecords` 26명, `vaccinationHospitals` 26명, `children` 6명, `selectedChildId` 6명, `babyName/babyGender/babyBirthDate` 5명, `parentInfo` 1명
+- jigumiya 식별 서브컬렉션: `items` 22명, `tracked` 7명, `favorites` 6명
+- 5/3 batch 거절 사고 진짜 원인: aigo 토큰(다른 EAS projectId)이 jigumiya users 컬렉션에 박힘 + C 정책(legacy null → jigumiya 가정)이 26+ 명을 jigumiya로 잘못 분류 → batch 거절 재발 위험
+
+⑦ **fix 2-1: backfill 스크립트 + 실행** (커밋 `093f7ad`, `users-app-backfill-20260505.mjs`)
+- 분류 규칙 (우선순위, dry-run + --apply 2단계):
+  1. app 필드 이미 있음 → 스킵
+  2. AIGO 식별 필드 1개라도 보유 → `'aigo'` (8개 필드 OR)
+  3. JIGUMIYA 서브컬렉션 1개라도 보유 → `'jigumiya'` (items/tracked/favorites OR)
+  4. 둘 다 없음 → `'unknown'` (스킵, 1.0.11 자연 회복 대기)
+  - aigo + jigumiya 단서 동시 보유 → aigo 우선 (사용자 사양 순서)
+- 적용 결과: aigo 30명 / jigumiya 18명 / unknown 102명 스킵 / 실패 0
+  - aigo 토큰 보유 3명 (이전 fetchActiveUsers 통과 → batch 거절 원인 확정)
+  - jigumiya 토큰 보유 18명 (모두 정상)
+  - unknown 토큰 보유 42명 (식별 단서 없음 — 1.0.11 후 jigumiya 자동 회복 또는 영구 미발송)
+
+⑧ **fix 2-2: `fetchActiveUsers` strict 변경** (커밋 `093f7ad`)
+- 이전: `app === 'aigo' ? 'aigo' : 'jigumiya'` (legacy null도 jigumiya 가정 — 위험)
+- 변경: **`app === 'jigumiya'` strict picking**
+- `aigo` / `unknown` / `null` / 그 외 모두 발송 제외
+- 새 로그: `[ActiveUsers] jigumiya=N (발송 대상) | skip: aigo=N unknown=N other=N`
+- 1.0.11 배포 후 기존 jigumiya 사용자가 앱 실행 시 `savePushToken`이 자동 `app:'jigumiya'` 박음 → 자연 회복
+- aigo 사용자는 1.0.11 안 깔므로 영구 unknown — jigumiya cron 발송 영구 제외 (정확 동작)
+
+⑨ **cron 재활성화** (커밋 `11a83d2`)
+- `shared-price-check.yml` schedule 주석 해제 → `'*/10 * * * *'` 트리거 복귀
+- 다음 자동 트리거: 10분 단위 + `lookupBaseInterval(N=51)` 가드 → 피크 10분 / 비피크 20분
+- `notify-only.yml` (07:30/20:00 KST), `category-best-update.yml` (02:00 KST) — 변경 없이 활성 유지
+
+⑩ **사고 사후 정리 — 분석/마이그레이션 스크립트 보존**
+- `scripts/shared-price-checker/analyze-users.mjs` (1회 분석, 보존 — 향후 분포 재확인용)
+- `scripts/shared-price-checker/users-app-backfill-20260505.mjs` (1회 마이그레이션, 보존 — 적용 이력)
+- service account JSON: `~/jigumiya/builds/jigumiya-firebase-adminsdk-fbsvc-14daa5f617.json` (gitignored, 로컬 전용)
+
+## 다음 작업 순서 (2026-05-06 이후)
 
 **최우선** (잔여 작업):
-1. **🚨 빌드**: **1.0.11 (bn46/vc46)** — A~H 통합. 클라이언트 변경 (services/firebase.ts savePushToken `app:'jigumiya'`, services/notifications.ts `price_change` 라우팅) 적용 위해 빌드 필수
-2. **🚨 검증**: A~H 첫 cron 자동 실행 (5/5 04:30 KST 가격체크 / 07:30 morning / 20:00 evening) — 새 로그 형식 일괄 확인:
-   - `[ActiveUsers] jigumiya=N aigo=M (총 X명)` — 누수 토큰 분포 가시화
-   - `[CategoryCycle] category_best 0~1 처리 완료 api=2 drops=K` 형식 (G 동작)
+1. **🚨 검증**: 5/5 cron 재활성화 후 첫 자동 실행 (사고 수정 검증):
+   - `[ActiveUsers] jigumiya=18 (발송 대상) | skip: aigo=N unknown=N other=N` — strict 동작 확인
+   - `[CategoryCycle] category_best ...` 처리 시 **category_best 문서 갱신 X** (Firestore에서 updatedAt 변경 없음 확인)
    - `[CategoryBroadcast] items=N 발송 M건` (H 발생 시)
-   - `[Flush] payloads N건` + `lastNotifications 업데이트 M명 (발송 성공 / 미발송 가드 스킵)`
-3. **🚨 검증**: 1.0.10 실기기 (이전 잔여) — ① iOS 가이드 Alert ② Android 응답시간 로그 분포 ③ price_drops 단일 표시 ④ 알림 클릭 detail 라우팅
-4. **🚨 검증**: 1.0.11 실기기 — ① drop 상품별 N건 도달 (B) ② 단일 형식 `{name} {prev}원 → {curr}원 ↓` (D) ③ category_broadcast 알림 → 가격변동 탭 (H) ④ KST 날짜 가드 — 동일 KST 날짜 cron 재발송 차단 (E)
-5. **갱신**: 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` Firebase Console 갱신. 1.0.11 양 스토어 승급 후 `"1.0.11"`로 재갱신
-6. **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 검토 근거 표본 수집 (최소 20회)
-7. **모니터링**: 카테고리 round-robin 첫 1순환 — 950상품 / 1.5시간(10 사이클) 안에 `category_best: 0` 복귀 확인. 포인터 갱신 정상 동작
-8. **모니터링**: rate-limit 안전 — 사이클당 40 API (shared 34 + G 6) → 분당 30회 = 검색 한도 50/분 60% 사용. 429 발생 시 `[CategoryCycle] rate-limited — 즉시 종료` 로그
+   - 추적 상품에 가짜 변동 알림 0건 — bestcategories↔search mismatch 해소 확인
+   - batch 거절 로그 사라짐 — 모든 발송 토큰 단일 EAS projectId
+2. **배포**: 1.0.11 (bn46/vc46) Play Store / App Store 업로드 — Android 단계적 출시 + iOS Transporter 수동 업로드 + 심사 제출
+3. **갱신**: 1.0.10 양 스토어 승급 → `meta/config_jigumiya.minRequiredVersion = "1.0.10"`. 1.0.11 양 스토어 승급 → `"1.0.11"`로 재갱신
+4. **🚨 검증**: 1.0.11 실기기 — ① drop 상품별 N건 도달 (B) ② 단일 형식 `{name} {prev}원 → {curr}원 ↓` (D) ③ category_broadcast 알림 → 가격변동 탭 (H) ④ KST 날짜 가드 (E) ⑤ savePushToken `app:'jigumiya'` 자동 박힘 검증 (Firestore 직접 확인)
+5. **🚨 검증**: 1.0.10 실기기 (이전 잔여) — ① iOS 가이드 Alert ② Android 응답시간 로그 분포 ③ price_drops 단일 표시 ④ 알림 클릭 detail 라우팅
+6. **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 적용 후 콜드 스파이크 사라짐 확인 (이전 1~5s 콜드 → 0.3~0.5s 일정 분포 예상)
+7. **모니터링**: 카테고리 round-robin 첫 1순환 — `category_best: 0` 복귀 (10 사이클 ≈ 1.5시간)
+8. **모니터링**: unknown 사용자 자연 회복 — 1.0.11 배포 후 Firestore에서 `app:'jigumiya'` 추가 카운트 증가 추적 (analyze-users.mjs 재실행)
 
 **뒤로 미뤄둔 작업** (2026-05-04 이후 일정 배정):
 - **그래프 Y축 가격 표시 버그**: 1~2일 추가 관찰 후 패턴 확인 (재현 조건 불명확 — 일별 데이터 변동 폭 영향 의심)
@@ -385,7 +470,17 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
   - G: 카테고리 round-robin (`category-cycle.ts` 신규, 6콜/사이클, 포인터 round-robin)
   - H: category_best 10% 급락 broadcast (`category_broadcast` type, 추적자 제외)
 
-### 2026-05-05 이후 미완
+### 2026-05-05 완료
+- [x] **인프라**: Functions `minInstances: 1` 적용 + 배포 (커밋 `44c9176`) — Cloud Run minScale=1, 콜드 스타트 제거, 월 ~$5~10
+- [x] **빌드**: 1.0.11 (bn46/vc46) iOS IPA 16.1 MB / Android AAB 58.7 MB (커밋 `756bd20`)
+- [x] **🚨 사고 해결 1**: shared-price-check cron 긴급 비활성화 (커밋 `f9e71c1`) — 가짜 가격 변동 폭주 즉시 차단
+- [x] **분석**: 가격 비교 코드 정밀 점검 — bestcategories↔search productPrice 출처 mismatch 확정
+- [x] **분석**: users 컬렉션 분포 (`analyze-users.mjs`) — jigumiya/aigo 혼재 운영 확정
+- [x] **마이그레이션**: backfill 적용 (`users-app-backfill-20260505.mjs`) — aigo 30 / jigumiya 18 / unknown 102 스킵
+- [x] **🚨 사고 해결 2**: category_best 갱신 중단 + fetchActiveUsers strict (커밋 `093f7ad`)
+- [x] **재가동**: shared-price-check cron 재활성화 (커밋 `11a83d2`)
+
+### 2026-05-06 이후 미완
 - [ ] **🚨 빌드**: 1.0.11 (bn46/vc46) — A~H 통합 + 클라이언트 변경(savePushToken/notifications) 적용
 - [ ] **🚨 검증**: 1.0.11 실기기 — drop 상품별 N건(B) + 단일 형식 메시지(D) + category_broadcast 라우팅(H) + KST 날짜 가드(E)
 - [ ] **🚨 검증**: 5/5 첫 cron 자동 실행 — `[ActiveUsers]` / `[CategoryCycle]` / `[CategoryBroadcast]` 새 로그 형식 일괄 확인
@@ -428,10 +523,17 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: A~H 알림 시스템 + 카테고리 round-robin 도입 완료, 1.0.11 빌드 대기 (2026-05-04 기준)
-- A~H 8종 일괄 적용 (커밋 `de856a6`, 6 files +947/-146) — `1.0.11 (bn46/vc46)` 빌드 + 배포 대기
-- 1.0.10 (bn45/vc45) **Play Store 프로덕션 검토 중 / App Store 심사 대기 중** (2026-05-03 빌드 완료, 양 스토어 승급 시 단계적 출시)
-- A~H 주요 변경:
+## 현재 상태: 1.0.11 빌드 완료 + 사고 수정 완료 + cron 재활성화 (2026-05-05 기준)
+- 1.0.11 (bn46/vc46) 빌드 완료 (5/5) — Play Store / App Store 업로드 대기
+  - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB)
+  - Android: `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
+- Functions `resolveAndGenerateAffiliateUrl` `minInstances: 1` 배포 완료 — Cloud Run minScale=1, 콜드 스타트 제거 (월 ~$5~10)
+- 5/5 알림 사고 수정 완료 + cron 재활성화:
+  - category_best 매 사이클 갱신 → `02:00 KST cron 단독 갱신`으로 복귀 (출처 mismatch 차단)
+  - fetchActiveUsers strict (`app === 'jigumiya'` 단일 발송) — aigo/unknown/null 모두 제외
+  - users 컬렉션 backfill 적용 (aigo 30 / jigumiya 18 / unknown 102 스킵)
+- 1.0.10 (bn45/vc45) Play Store 프로덕션 검토 중 / App Store 심사 대기 중 (양 스토어 승급 시 1.0.11 후속 업로드)
+- A~H 8종 일괄 적용 (커밋 `de856a6`):
   - A: 고정 알림 폭탄 방지 (pickRandom 강화 + 후보 풀 정리)
   - B: 관심상품 drop 알림 상품별 각각 발송 (사용자당 통합 → 상품별 1건씩)
   - C: 앱 필터링 (jigumiya/aigo 사용자 분리) — `[ActiveUsers] jigumiya=N aigo=M` 가시화
