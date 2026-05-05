@@ -1,7 +1,7 @@
 ---
 created: 2026-04-26
-updated: 2026-05-04
-status: A~H 알림 시스템 종합 fix + 카테고리 round-robin (G) + category_broadcast 부활 (H) — 1.0.11 빌드 대기 (2026-05-04, `de856a6`) / §8-C 대기
+updated: 2026-05-05
+status: A~E 알림 시스템 재설계 + 신규 cron 2종 (goldbox/event-best-jigumiya) — shared-price-check 3차 재활성화 (2026-05-05, `48c1fed`) / §8-C 대기. 이전 H category_broadcast는 5/5 17:35 폭탄 사고로 폐기, shared_products 단일 출처로 일원화
 선행: 017_앱구조개편_Phase3.md (Phase 3-A/3-D 완료), 018_FirebaseFunctions_Resolver.md
 ---
 
@@ -42,11 +42,17 @@ status: A~H 알림 시스템 종합 fix + 카테고리 round-robin (G) + categor
 | **D 알림 문구 상품명+변동 금액** | ✅ 완료 (2026-05-04, `de856a6`) | n===1 시 `{name} {prev}원 → {curr}원 ↓/↑/🎯` + detail 라우팅 (notifier.ts) |
 | **E 고정 알림 KST 날짜 가드** | ✅ 완료 (2026-05-04, `de856a6`) | `morningKstDate`/`eveningKstDate` 'YYYY-MM-DD' 비교로 GitHub Actions jitter ±10분 흡수. legacy `morning`/`evening` (number ms) 필드는 read 안 함 |
 | **F shared sleep 단순화 (10s → 2s)** | ✅ 완료 (2026-05-04, `de856a6`) | `DEFAULT_SLEEP_MS = 2000` 단일값. cyclesPerDay 산식 잔재 제거. 1회 실행 ~393s → ~70s |
-| **G 카테고리 round-robin 가격체크** | ✅ 완료 (2026-05-04, `de856a6`) | `category-cycle.ts` 신규. 3 컬렉션 각 2개씩 = 6콜/사이클. 포인터 `meta/stats.categoryCyclePointers`. 950상품 1.5h 1순환 |
-| **H category_best 10% 급락 broadcast** | ✅ 완료 (2026-05-04, `de856a6`) | `category_broadcast` type 신설. category_best → jigumiya 전체(추적자 제외). baby/event는 발송 X(아이고 가격변동 탭 부재). 클라이언트 `price_change` 라우팅 |
-| 1.0.11 (bn46/vc46) 빌드 + 배포 | ⏳ 대기 | A~H 통합. 클라이언트 변경(savePushToken/notifications) 적용 필수 |
-| ~~category-best 브로드캐스트 큐 (category-best-updater 측)~~ | ❌ 폐기 | H가 흡수 — shared-price-checker의 G round-robin 단계에서 직접 감지 + broadcast push. category-best-updater 측 별도 큐 불필요 |
-| ~~`category-best-update.yml` 낮 2회 보조 업데이트~~ | ❌ 폐기 | rate-limited 시 당일 중단 원칙(§4-1·§5-2) |
+| **G 카테고리 round-robin 가격체크** | 🔄 재정의 (2026-05-05 후반, `48c1fed`) | `category-cycle.ts` 재작성 — 가격 비교/알림 push 전체 제거. fetch + 문서 갱신만. category_best은 02:00 cron 단독 갱신, baby/event만 set merge |
+| ~~**H category_best 10% 급락 broadcast**~~ | ❌ **폐기** (2026-05-05 후반, `48c1fed`) | 5/5 17:35 폭탄 사고 — `events.categoryBroadcasts` 같은 productId 다중 push + 24h 가드 same-cycle 동작 부재. `category_broadcast` PushPayload + `events.categoryBroadcasts` + `MessageData.screen='price_change'` 통째 제거. 가격 추적은 shared_products 단일 출처로 일원화 |
+| 1.0.11 (bn46/vc46) 빌드 + 배포 | 🔄 진행 중 (2026-05-05) | iOS 심사 요청 완료 / Android 내부 테스트 트랙 업로드 완료 |
+| **🚨 5/5 17:35 폭탄 알림 분석** | ✅ 완료 (2026-05-05) | run `25366195631`. payloads 133건 중 거의 전부 `category_broadcast` (events 7개 × 19명 = 133). 결정타 3종: ① events.categoryBroadcasts dedup 부재 ② category-cycle dropRate 가드 부재 ③ markUpdate 메모리 갱신만 → same-cycle 24h 가드 무력 |
+| **A 카테고리 베스트 알림 완전 제거** | ✅ 완료 (2026-05-05, `48c1fed`) | category-cycle.ts 재작성 + RawEvents.categoryBroadcasts 제거 + flush 블록 제거 + notifier.ts category_broadcast 제거 |
+| **B dropRate 60% 가드 + dedup** | ✅ 완료 (2026-05-05, `48c1fed`) | shared 본 흐름 `Math.abs(dropRate) > 60` 시 `[Skip-DropRateGuard]` 로그 + continue. flush 직전 dedupByProductId<T> 헬퍼로 events.drops/ups 첫 항목만 보존 |
+| **C 요일별 단일 문구** | ✅ 완료 (2026-05-05, `48c1fed`) | MESSAGES.morning / eveningNoChange 7개 단일 문구 (KST DOW lookup). title 시간대 통일, body는 사용자 사양 |
+| **D 골드박스 cron 신설** | ✅ 완료 (2026-05-05, `48c1fed`) | `scripts/goldbox-updater/` + `goldbox-update.yml` 07:30 KST. 엔드포인트 `/products/goldbox` (v1 prefix 없음). productUrl이 이미 affiliate, 1콜/일. `goldbox/{YYYY-MM-DD KST}` 저장 |
+| **E 지금이야 이벤트 cron 신설** | ✅ 완료 (2026-05-05, `48c1fed`) | `scripts/event-best-jigumiya-updater/` + `event-best-jigumiya-update.yml` 02:35 KST. 11개 이벤트 정의. D-7 윈도우 매칭 시만 갱신, search limit 10. `event_best_jigumiya/{slug}` 저장 |
+| **타임라인 02:30→02:35** | ✅ 완료 (2026-05-05, `48c1fed`) | category-best (02:00, 24분 소요)과 격차 0분 → 10분 확보 |
+| **shared-price-check 3차 재활성화** | ✅ 완료 (2026-05-05) | `*/10 * * * *` schedule 활성. A~E로 모든 가짜 변동 메커니즘 차단 |
 
 ---
 
@@ -439,33 +445,43 @@ const DEFAULT_SLEEP_MS = 1500;    // sleep 하한 (분당 40회)
 
 ---
 
-## 12. 알림 설계 (8종, 2026-04-30 초기 7종 + 2026-05-04 H category_broadcast 신설)
+## 12. 알림 설계 (7종, 2026-05-05 후반 A~E 재설계로 category_broadcast 폐기)
 
-> 2026-05-04 갱신 (커밋 `de856a6`, A~H):
-> - A: 후보 풀 `{N}` 누락 정리 (`pickRandom`은 이미 1개 pick 동작)
-> - B: drop은 사용자당 통합 → **상품별 각각 1건씩 push**. target/up은 합산 유지
-> - C: `users/{uid}.app` 필드 + jigumiyaUsers/aigoUsers 분리. 지금이야 전용 알림은 jigumiyaUsers만
-> - D: n===1 시 `{name} {prev}원 → {curr}원 ↓/↑/🎯` + detail 라우팅
-> - E: morning/evening 24h ms 가드 → KST 'YYYY-MM-DD' 가드 (GitHub Actions jitter ±10분 흡수)
-> - H: `category_broadcast` 신설 — category_best -10% 급락 시 jigumiya 전체(추적자 제외) → 가격변동 탭 (`price_change` 라우팅)
+> 2026-05-05 후반 갱신 (커밋 `48c1fed`, A~E):
+> - A: 카테고리 베스트 알림 완전 제거 — `category_broadcast` PushPayload + `events.categoryBroadcasts` + `MessageData.screen='price_change'` 통째 제거. 가격 추적은 shared_products 단일 출처
+> - B: dropRate 60% 가드 (shared 본 흐름) + flush 직전 events.drops/ups dedup 헬퍼
+> - C: morning/evening 요일별 단일 문구 (KST DOW lookup, title 시간대 통일 + body 7개)
+> - D: 골드박스 cron 신설 (07:30 KST, 1콜/일, productUrl 이미 affiliate)
+> - E: 지금이야 이벤트 cron 신설 (02:35 KST, 11개 이벤트, D-7 윈도우, search limit 10)
+>
+> 2026-05-04 갱신 (커밋 `de856a6`, 일부 유지):
+> - B (유지): drop은 사용자당 통합 → **상품별 각각 1건씩 push**. target/up은 합산 유지
+> - C (유지): `users/{uid}.app === 'jigumiya'` strict picking. aigoUsers 분리 변수 제거
+> - D (유지): n===1 시 `{name} {prev}원 → {curr}원 ↓/↑/🎯` + detail 라우팅
+> - E (유지): morning/evening 24h ms 가드 → KST 'YYYY-MM-DD' 가드 (jitter ±10분 흡수)
 
 
 ### 12-1. 결정 배경
 - 2026-04-28 1차 설계: "하루 3회 고정 시간대 누적 발송" + 시간대 미확정
 - 2026-04-30 재설계: **"즉시 발송 + morning/evening 시간대 분기"** — 가격 변동 감지 즉시 발송 (스캔 사이클 ~1분 내 일괄 flush) + 시간대 안내성 알림 분리
 - 폐기: 기존 AlertType (`lowest_ever`, `lowest_no_target`, `no_change`) — `price_drop_summary` / `evening_no_change`에 흡수
+- **2026-05-05 후반 재설계**: 17:35 폭탄 사고로 category_broadcast 메커니즘 전면 폐기. 가격 추적/알림은 shared_products 단일 출처로 일원화
 
-### 12-2. 8종 타입 + 트리거 + 대상 (2026-05-04 갱신)
+### 12-2. 7종 타입 + 트리거 + 대상 (2026-05-05 후반 갱신)
 
 | # | type 키 | 트리거 | 대상 | 합산 |
 |---|---------|--------|------|------|
-| 1 | `morning_greeting` | cron 진입 시간대가 07:00~09:00 KST | jigumiya 사용자 전체 (KST 날짜 가드) | n/a |
-| 2 | `price_drop_summary` | 가격 하락 감지 | jigumiya 추적자 | **상품별 1개씩** (B, 2026-05-04: 통합 → 분리) — n===1 시 detail 라우팅 |
+| 1 | `morning_greeting` | cron 진입 시간대가 07:00~09:00 KST | jigumiya 사용자 전체 (KST 날짜 가드) | n/a — 요일별 단일 문구 (C) |
+| 2 | `price_drop_summary` | shared_products 가격 하락 + dropRate 가드 통과 | jigumiya 추적자 | **상품별 1개씩** (n===1 시 detail 라우팅) |
 | 3 | `target_reached` | 목표가 ≤ newPrice 진입 | 해당 jigumiya 추적자 | 상품별 1개 (사용자당 첫 통과 1건) |
-| 4 | `price_up_summary` | 가격 상승 감지 | jigumiya 추적자 | 사용자당 1개, N개 합산 (변경 없음) |
-| 5 | `evening_no_change` | cron 진입 시간대 19:30~21:00 KST | jigumiya 사용자 전체 (KST 날짜 가드) | n/a |
-| 6 | ~~`broadcast_drop10/20`~~ | ~~shared 풀 -10/-20% 하락~~ | (legacy 통계 카운팅만) | (발송 폐기, §C) |
-| **7** | **`category_broadcast`** | **category_best -10% 이상 급락 (H, 2026-05-04)** | **jigumiya 전체(추적자 제외) → 가격변동 탭** | **상품별 1개 (24h productId 가드)** |
+| 4 | `price_up_summary` | shared_products 가격 상승 + dropRate 가드 통과 | jigumiya 추적자 | 사용자당 1개, N개 합산 |
+| 5 | `evening_no_change` | cron 진입 시간대 19:30~21:00 KST | jigumiya 사용자 전체 (KST 날짜 가드) | n/a — 요일별 단일 문구 (C) |
+| 6 | ~~`broadcast_drop10/20`~~ | ~~shared 풀 -10/-20% 하락~~ | (legacy 통계 카운팅만) | (발송 폐기) |
+| ~~7~~ | ~~`category_broadcast`~~ | ~~category_best -10% 급락~~ | (폐기, 5/5 17:35 사고) | (PushPayload + 메시지 풀 + flush 블록 통째 제거) |
+
+**dropRate 가드 (B, 2026-05-05 후반)**: shared_products 본 흐름에서 가격 갱신 후 알림 push 직전 `Math.abs(dropRate) > 60` 시 `[Skip-DropRateGuard] {pid} dropRate=...% — 알림 스킵` 로그 + continue. 가격 갱신 자체는 진행, 알림만 차단.
+
+**dedup (B, 2026-05-05 후반)**: flush 직전 `dedupByProductId<T extends {productId}>(arr)` 헬퍼로 events.drops/ups 첫 항목만 보존 (방어 가드 — 본 흐름은 slice 내 productId 유니크라 중복 발생 경로 없으나 안전망).
 
 ### 12-3. 중복 방지 — `users/{uid}.lastNotifications` (2026-05-04 갱신)
 

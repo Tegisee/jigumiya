@@ -5,9 +5,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 작업할 항목의 sub MD도 함께 읽고 시작할 것.
 2026-04-30 이전 작업 이력은 docs/작업이력_archive.md 참조.
 
-## 가장 최근 (2026-05-05): 알림 사고 → 긴급 수정 → cron 재활성화 → 1.0.11 양 스토어 업로드
+## 가장 최근 (2026-05-05 후반): 알림 시스템 재설계 (A~E) + 신규 cron 2종 + 타임라인 조정
 
-5/4 A~H 배포 후 5/5 새벽 cron에서 가짜 가격 변동 폭주 → 긴급 cron 비활성화 → 원인 분석 → 수정 → 1.0.11 빌드 + Functions minInstances:1 + cron 재활성화 → **1.0.11 iOS 심사 요청 + Android 내부 테스트 업로드 완료**. 1.0.10은 심사 중 상태 유지. 상세는 "### 2026-05-05 작업" 참조.
+5/5 17:35 cron에서 폭탄 알림 재발 → 분석: `events.categoryBroadcasts` 같은 productId 다중 push (다른 카테고리 동시 노출) + same-cycle dedup 부재가 결정타. 대응으로 **A~E 5종 재설계**: 카테고리 베스트 알림 완전 제거 / shared_products 단일 출처 / dropRate 60% 가드 + dedup / 요일별 단일 문구 / 골드박스+이벤트 cron 신설. shared-price-check cron 재활성화. 1.0.11 양 스토어 업로드 상태는 그대로 (iOS 심사 / Android 내부 테스트 트랙). 상세는 "### 2026-05-05 작업" 참조.
 
 ## 작업 리스트
 
@@ -411,17 +411,83 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 1.0.10 (bn45/vc45)은 **심사 중 상태 유지** — 양 스토어 승급 전까지 1.0.11이 후속 적용 대기
 - 다음 단계: ① iOS 심사 통과 → App Store 출시 ② Android 내부 테스트 → 프로덕션 승급 ③ 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion` 갱신
 
+⑫ **🚨 17:35 cron 폭탄 알림 재발 → A~E 알림 시스템 재설계** (커밋 `48c1fed`)
+
+**사고 분석** (run `25366195631`, 17:35 KST schedule):
+- payloads 133건 = `events.categoryBroadcasts` 7개 × jigumiya 19명. shared 본 흐름 drops=1 (정상)
+- 결정적 버그 1: `events.categoryBroadcasts.push`에 dedup 부재 → 같은 productId가 batch 내 다른 카테고리에서 동시 노출 시 N번 push → 사용자당 N건 발송
+- 결정적 버그 2: `category-cycle.ts` 가격 비교에 `Math.abs(dropRate) > 30%` 같은 가드 부재 → search API 매칭 휴리스틱 오류로 dropRate 75%/51%/33%/70% 같은 비정상 값 통과
+- 결정적 버그 3: `markUpdate`가 메모리 갱신만 하고 Firestore 반영은 flush 끝 → 같은 사이클 내 24h 가드 동작 X
+- 결정 1 (대응): 카테고리 베스트 가격 추적/알림 전면 폐기. 가격 추적은 shared_products 단일 출처로 일원화
+
+**A. 카테고리 베스트 알림 완전 제거** (`category-cycle.ts` 재작성):
+- 가격 비교 / `recordPriceDrop` / `fetchTrackersByProductId` / `loadPrevPrices` / `BROADCAST_TIER10/20` 전체 제거
+- `processCategoryRoundRobin`은 fetch + 문서 갱신만 (`category_best`은 02:00 cron 단독 갱신, baby/event는 set merge)
+- 반환 단순화 `{ apiCalls, rateLimited }`
+- `notifier.ts`에서 `category_broadcast` PushPayload + `categoryBroadcast` 메시지 풀 + `MessageData.screen='price_change'` 제거
+- `index.ts`: `RawEvents.categoryBroadcasts` + `CategoryBroadcastItem` 인터페이스 제거, flush의 categoryBroadcast 처리 블록(~50줄) 제거, `aigoUsers` 분리 제거 (지금이야 발송만)
+
+**B. dropRate 60% 가드 + dedup**:
+- shared_products 본 흐름 가격 갱신 후 `Math.abs(dropRate) > 60` 시 `[Skip-DropRateGuard]` 로그 + continue (가격 갱신은 진행, 알림만 차단)
+- `dedupByProductId<T extends {productId}>` 헬퍼 신설, flush 직전 `events.drops`/`events.ups` 적용
+
+**C. 요일별 단일 문구** (`notifier.ts`):
+- `MESSAGES.morning` / `MESSAGES.eveningNoChange`를 요일 인덱스 7개(0=일~6=토) 단일 문구로 교체
+- `getKstDayOfWeek()` 헬퍼 추가, `buildMessage`의 morning/evening은 `pickRandom` → 요일 lookup
+- title 통일: 아침 `🌅 좋은 아침이에요` / 저녁 `🌙 오늘도 수고했어요`. body는 사용자 사양 7개 문구 그대로
+
+**D. 골드박스 cron 신설** (`scripts/goldbox-updater/`, 커밋 `48c1fed`, schedule 활성):
+- 매일 07:30 KST (yml `30 22 * * *`)
+- 엔드포인트: `/v2/providers/affiliate_open_api/apis/openapi/products/goldbox` (v1 prefix 없음)
+- `goldbox API 응답의 productUrl이 이미 affiliate URL` → 별도 deeplink 변환 X
+- Firestore `goldbox/{YYYY-MM-DD KST}` 문서: `{ date, products: [{ productId, productName, productPrice, productImage, deepLink }], updatedAt }`
+- 호출량 1콜/일
+
+**E. 지금이야 이벤트 cron 신설** (`scripts/event-best-jigumiya-updater/`, 커밋 `48c1fed`, schedule 활성):
+- 매일 02:35 KST (yml `35 17 * * *`) — 02:00 category-best (24분 소요) 종료 후 안전 마진 10분
+- 11개 이벤트 정의 (`events-jigumiya.ts`): valentine / samgyeopsal / whiteday / childrensday / parentsday / teachersday / couplesday / roseday / halloween / pepero / christmas
+- D-7 윈도우(오늘 KST 포함 7일) 매칭 이벤트만 갱신, 그 외 graceful exit (호출 0)
+- search API limit 상한 10개 (`SEARCH_LIMIT_MAX=10` + `Math.min` 가드)
+- `PRODUCTS_PER_KEYWORD` 기본값 10 (이전 20)
+- 키워드 dedupe → 가격 desc → 상위 50개 → Firestore `event_best_jigumiya/{slug}` 저장
+- 페이로드: `{ slug, eventName, date, keywords, minPrice, products: [{..., deepLink: productUrl, isRocket }], updatedAt }`
+- 호출량: D-7 이내 이벤트 평균 1~2개 × 키워드 4개 = 4~8콜/일
+
+**타임라인 조정**:
+- `event-best-jigumiya-update.yml`: 02:30 → 02:35 KST (category-best과 격차 0분 → 10분)
+- 다른 cron 시각 유지: 01:00 event-best (아이고) / 01:15 baby1 / 01:30 baby2 / 02:00 category-best / 03:00 baby3 / 03:20 baby4 / 04:30 shared-price-check Block zone 종료
+- baby cron이 슬러그당 키워드 1→2.5개로 늘었어도 그룹당 ~2분 이내, 기존 격차(15분) 충분
+- shared-price-check Block zone 04:30 유지 (05:00 연장 불필요)
+
+**시각적 격차 매트릭스 (jitter 5분 가정)**:
+| cron A → B | 격차 | 상태 |
+|----|----|----|
+| event-best 01:06 → baby1 01:15 | 4분 | ⚠️ jitter 위험 (별도 검토 항목) |
+| baby1 01:17 → baby2 01:30 | 8분 | ✅ |
+| baby2 01:32 → category-best 02:00 | 23분 | ✅ |
+| category-best 02:25 → jigumiya event 02:35 | 10분 | ✅ |
+| jigumiya event 02:36 → baby3 03:00 | 24분 | ✅ |
+| baby3 03:01 → baby4 03:20 | 19분 | ✅ |
+| baby4 03:22 → shared-price 04:30 | 68분 | ✅ |
+
+**shared-price-check cron 재활성화** (3차):
+- `*/10 * * * *` 유지 (10분 고정 + N값 기반 §11 가드)
+- 모든 가짜 변동 메커니즘이 차단됨: ① category 출처 가격 비교 폐기 ② dropRate 60% 가드 ③ events dedup ④ category_best 문서 갱신 X (5/5 1차 fix 유지)
+
 ## 다음 작업 순서 (2026-05-06 이후)
 
 **최우선** (잔여 작업):
-1. **🚨 검증**: 5/5 cron 재활성화 후 첫 자동 실행 (사고 수정 검증):
-   - `[ActiveUsers] jigumiya=18 (발송 대상) | skip: aigo=N unknown=N other=N` — strict 동작 확인
-   - `[CategoryCycle] category_best ...` 처리 시 **category_best 문서 갱신 X** (Firestore에서 updatedAt 변경 없음 확인)
-   - `[CategoryBroadcast] items=N 발송 M건` (H 발생 시)
-   - 추적 상품에 가짜 변동 알림 0건 — bestcategories↔search mismatch 해소 확인
-   - batch 거절 로그 사라짐 — 모든 발송 토큰 단일 EAS projectId
-2. ~~**배포**: 1.0.11 (bn46/vc46) Play Store / App Store 업로드~~ → ✅ 완료 (5/5): iOS 심사 요청 / Android 내부 테스트 트랙 업로드. **다음**: Android 내부 테스트 → 프로덕션 승급 + iOS 심사 통과 대기
-3. **갱신**: 1.0.10 양 스토어 승급 → `meta/config_jigumiya.minRequiredVersion = "1.0.10"`. 1.0.11 양 스토어 승급 → `"1.0.11"`로 재갱신
+1. **🚨 검증**: shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증):
+   - `[CategoryCycle] 합계 api=N pointer 갱신 완료` — 가격 비교 / drops 카운트 사라짐 (fetch + 문서 갱신만)
+   - `[Skip-DropRateGuard] {productId} dropRate=...% — 알림 스킵` 발생 시 60% 가드 동작 확인
+   - `[Flush] payloads N건` — categoryBroadcast 발송 0건 (events.categoryBroadcasts 자체 제거)
+   - 추적 상품에 가짜 변동 알림 0건 — search API 매칭 휴리스틱 오류 차단
+   - 요일별 morning/evening 문구가 KST 요일과 일치하게 발송되는지 (07:30 / 20:00 cron)
+2. **🚨 검증**: 골드박스 cron (07:30 KST) 첫 실행 — `goldbox/{YYYY-MM-DD}` 문서 생성 / `productUrl` prefix가 affiliate(`link.coupang.com/a/...`)인지 확인
+3. **🚨 검증**: 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 빈 시 graceful exit, parentsday(05-08) 윈도우 진입 후 `event_best_jigumiya/parentsday` 생성
+4. **확인**: bestcategories productUrl 형태 — Firebase Console에서 `category_best/1001.products[0].productUrl` prefix 확인 (raw vs affiliate). raw면 클라이언트 generateDeepLink 호출 의미 있음, affiliate면 중복 변환 (코드 단순화 후보)
+5. ~~**배포**: 1.0.11 (bn46/vc46) Play Store / App Store 업로드~~ → ✅ 완료 (5/5): iOS 심사 요청 / Android 내부 테스트 트랙 업로드. **다음**: Android 내부 테스트 → 프로덕션 승급 + iOS 심사 통과 대기
+6. **갱신**: 1.0.10 양 스토어 승급 → `meta/config_jigumiya.minRequiredVersion = "1.0.10"`. 1.0.11 양 스토어 승급 → `"1.0.11"`로 재갱신
 4. **🚨 검증**: 1.0.11 실기기 — ① drop 상품별 N건 도달 (B) ② 단일 형식 `{name} {prev}원 → {curr}원 ↓` (D) ③ category_broadcast 알림 → 가격변동 탭 (H) ④ KST 날짜 가드 (E) ⑤ savePushToken `app:'jigumiya'` 자동 박힘 검증 (Firestore 직접 확인)
 5. **🚨 검증**: 1.0.10 실기기 (이전 잔여) — ① iOS 가이드 Alert ② Android 응답시간 로그 분포 ③ price_drops 단일 표시 ④ 알림 클릭 detail 라우팅
 6. **모니터링**: Functions 응답시간 로그 분포 — `minInstances: 1` 적용 후 콜드 스파이크 사라짐 확인 (이전 1~5s 콜드 → 0.3~0.5s 일정 분포 예상)
@@ -487,8 +553,21 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **재가동**: shared-price-check cron 재활성화 (커밋 `11a83d2`)
 - [x] **배포 (iOS)**: 1.0.11 (bn46) App Store **심사 요청 완료** — Transporter 업로드 + 심사 제출
 - [x] **배포 (Android)**: 1.0.11 (vc46) Play Store **내부 테스트 트랙 업로드 완료**
+- [x] **🚨 17:35 폭탄 재발 분석**: events.categoryBroadcasts dedup 부재 + 60% 가드 부재 + markUpdate 메모리 가드 한계 확정
+- [x] **🚨 사고 해결 3 (A)**: 카테고리 베스트 알림 완전 제거 — category-cycle.ts 재작성 + RawEvents.categoryBroadcasts 제거 + flush 블록 제거 (커밋 `48c1fed`)
+- [x] **🚨 사고 해결 3 (B)**: dropRate 60% 가드 + events.drops/ups dedup (커밋 `48c1fed`)
+- [x] **개선 (C)**: morning/evening 요일별 단일 문구 (KST DOW lookup, 커밋 `48c1fed`)
+- [x] **신설 (D)**: 골드박스 cron `scripts/goldbox-updater/` + 워크플로 07:30 KST (커밋 `48c1fed`)
+- [x] **신설 (E)**: 이벤트 cron `scripts/event-best-jigumiya-updater/` + 워크플로 02:35 KST + 11개 이벤트 정의 (커밋 `48c1fed`)
+- [x] **타임라인**: event-best-jigumiya 02:30→02:35 KST (category-best과 격차 10분 확보)
+- [x] **재가동 (3차)**: shared-price-check cron `*/10 * * * *` 활성화
 
 ### 2026-05-06 이후 미완
+- [ ] **🚨 검증**: shared-price-check cron 3차 재활성화 후 첫 자동 실행 — `[CategoryCycle]` drops 카운트 사라짐 / `[Skip-DropRateGuard]` 로그 / payloads에 categoryBroadcast 0건
+- [ ] **🚨 검증**: 골드박스 cron 첫 실행 (07:30 KST) — `goldbox/{date}` 문서 생성 + productUrl이 affiliate URL prefix인지 확인 (raw이면 deeplink 호출 추가 검토)
+- [ ] **🚨 검증**: 이벤트 cron 첫 실행 (02:35 KST) — D-7 윈도우 동작 (parentsday 05-08 윈도우 진입 시 갱신)
+- [ ] **확인**: `category_best/{categoryId}.products[0].productUrl` prefix — raw vs affiliate (Firebase Console 직접 확인)
+- [ ] **검증**: 요일별 morning/evening 문구 — 07:30/20:00 KST notify-only cron에서 해당 요일 body 매칭 확인
 - [ ] **🚨 승급 대기**: 1.0.11 iOS 심사 통과 → App Store 출시 / Android 내부 테스트 → 프로덕션 승급
 - [ ] **🚨 검증**: 1.0.11 실기기 — drop 상품별 N건(B) + 단일 형식 메시지(D) + category_broadcast 라우팅(H) + KST 날짜 가드(E)
 - [ ] **🚨 검증**: 5/5 첫 cron 자동 실행 — `[ActiveUsers]` / `[CategoryCycle]` / `[CategoryBroadcast]` 새 로그 형식 일괄 확인
@@ -531,15 +610,25 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.11 양 스토어 업로드 완료 + 사고 수정 완료 + cron 재활성화 (2026-05-05 기준)
-- **1.0.11 (bn46/vc46) 양 스토어 업로드 완료 (5/5)**:
+## 현재 상태: A~E 알림 시스템 재설계 완료 + 신규 cron 2종 + 재활성화 (2026-05-05 후반 기준)
+- **알림 시스템 재설계 완료** (커밋 `48c1fed`, schedule 활성화):
+  - A: 카테고리 베스트 알림 완전 제거 — `events.categoryBroadcasts` + `category_broadcast` PushPayload 통째 제거. 가격 추적은 shared_products 단일 출처
+  - B: dropRate 60% 가드 (shared 본 흐름) + flush 직전 events.drops/ups dedup 헬퍼
+  - C: morning/evening 요일별 단일 문구 (KST DOW lookup, title 시간대 통일)
+  - D: 골드박스 cron 신설 — 07:30 KST, `goldbox/{YYYY-MM-DD}` 1콜/일
+  - E: 지금이야 이벤트 cron 신설 — 02:35 KST, 11개 이벤트, D-7 윈도우 매칭, search limit 10
+- **shared-price-check cron 3차 재활성화** — A~E 모든 가짜 변동 메커니즘 차단 (category 출처 가격 비교 폐기, dropRate 가드, dedup, category_best 문서 갱신 X)
+- **새벽 cron 타임라인 (KST)**:
+  - 01:00 event-best (아이고) / 01:15 baby1 / 01:30 baby2 / **02:00 category-best** / **02:35 event-best-jigumiya** / 03:00 baby3 / 03:20 baby4 / 04:30 shared-price Block zone 종료 / **07:30 goldbox**
+  - 02:30→02:35 조정으로 category-best(24분)와 격차 10분 확보
+- **1.0.11 (bn46/vc46) 양 스토어 업로드 (5/5)**:
   - **iOS App Store: 심사 요청 완료** (Transporter 업로드 + 심사 제출)
   - **Android Play Store: 내부 테스트 트랙 업로드 완료**
   - 빌드 산출물:
     - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB)
     - Android: `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
 - Functions `resolveAndGenerateAffiliateUrl` `minInstances: 1` 배포 완료 — Cloud Run minScale=1, 콜드 스타트 제거 (월 ~$5~10)
-- 5/5 알림 사고 수정 완료 + cron 재활성화:
+- 5/5 1차 사고 수정 완료 (커밋 `093f7ad`):
   - category_best 매 사이클 갱신 → `02:00 KST cron 단독 갱신`으로 복귀 (출처 mismatch 차단)
   - fetchActiveUsers strict (`app === 'jigumiya'` 단일 발송) — aigo/unknown/null 모두 제외
   - users 컬렉션 backfill 적용 (aigo 30 / jigumiya 18 / unknown 102 스킵)
@@ -563,10 +652,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - `meta/config_jigumiya.minRequiredVersion = "1.0.8"` 유지 (2026-05-02 갱신) — 1.0.10 양 스토어 승급 후 "1.0.10"으로 갱신
 - 1.0.8 (bn42/vc42) 배포 완료 (2026-05-01)
 - 1.0.8 주요 변경: 골드박스 API 제거 → **오늘의 특가**(price_drops 24h + category_best fallback 1h 캐시) + **하트 버튼 누락 fix**(productId 추출 다중 패턴 + URL 후보 다중 시도) + **backfillProductIds 자가 치유**
-- 서버 cron (2026-05-02 §11 자동화 적용 후):
-  - `shared-price-check.yml` `'*/10 * * * *'` (10분 고정) **활성** — 코드 N값 기반 간격 결정 + lastRunAt graceful exit
-  - `notify-only.yml` 07:30 + 20:00 KST **활성** — morning_greeting + evening_no_change + 누적 drop_summary
+- 서버 cron (2026-05-05 후반 — A~E 재설계 후):
+  - `shared-price-check.yml` `'*/10 * * * *'` (10분 고정) **활성 (3차 재가동)** — 코드 N값 기반 간격 결정 + lastRunAt graceful exit. A~E 적용으로 카테고리 출처 가짜 변동 차단
+  - `notify-only.yml` 07:30 + 20:00 KST **활성** — morning_greeting + evening_no_change (요일별 단일 문구) + 누적 drop_summary
   - `category-best-update.yml` 02:00 KST **활성** (Block zone 내부, 무수정)
+  - `event-best-jigumiya-update.yml` **02:35 KST 활성 (신규)** — D-7 윈도우 매칭 이벤트만 갱신, search limit 10
+  - `goldbox-update.yml` **07:30 KST 활성 (신규)** — `goldbox/{YYYY-MM-DD}` 1콜/일
   - `tracked-backfill.yml` workflow_dispatch only — productId 누락 보강 (1회 적용 완료, 2026-05-02)
   - 비활성: legacy `price-check.yml` (Phase 3-C에서 정식 폐기 예정)
 - 1.0.7 (bn41/vc41) 미배포 — 1.0.8에 통합되어 사용자에게는 1.0.8로 전달
@@ -600,20 +691,38 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - **Block zone 자동 대기**: `waitIfInBlockedZone()` — 01:00 ≤ now < 04:30 KST 진입 시 04:30까지 sleep (카테고리 갱신 시간대 충돌 방지). main 진입 직후 진입 시 즉시 graceful exit (`c0d8859`). notify-only 모드는 면제
 - **동적 사이클** (`b625f07`, 폐기 예정): `computeCycleConfig(actualCount)` — 단일 사이클만 실행되는 설계 잔재. §11 외부 cron이 사이클 역할 대체 → 향후 단순화 PR 가능. 현재는 sleep 산출용으로 유지
 - **N=0 자가 치유** (`c0d8859`): `shared_products` 풀 fetch 길이를 진실 원천으로 사용. `meta/stats`는 `lastCheckedOffset`/`lastRunAt`만 read/write
-- **알림 8종 시스템** (`ee60516` + `de856a6` 2026-05-04): morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20 (legacy 통계) / **category_broadcast** (2026-05-04 신설, H)
-  - 각 type 3개 후보 문구 랜덤. drop/up `{N}` placeholder, category_broadcast `{name}/{rate}/{prev}/{curr}` placeholder
-  - **drop은 상품별 각각 1건씩 발송** (B, 2026-05-04) — 사용자당 통합 정책에서 분리. target/up은 통합 유지. target 통과 시 drop bucket 자동 제외
-  - **앱 필터링** (C, 2026-05-04): `users/{uid}.app` 필드 (`'jigumiya'`/`'aigo'`) 보존 + flush 단에서 `jigumiyaUsers`/`aigoUsers` 분리. 지금이야 전용 알림은 `jigumiyaUsers`만, category_broadcast는 컬렉션별 app 매칭
-  - **단일 형식 메시지** (D, 2026-05-04): `n===1` 시 `{name} {prev}원 → {curr}원 ↓` 형식 + detail 라우팅. `n>1` 시 합산 형식 + home 라우팅
-  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기. **KST 날짜 가드** (E, 2026-05-04): `lastNotifications.morningKstDate/eveningKstDate` 'YYYY-MM-DD' 비교 — GitHub Actions schedule jitter ±10분 흡수
-  - 24h productId 가드: `users/{uid}.lastNotifications` (priceDrop[pid]/priceUp[pid]/targetReached[pid]/categoryBroadcast[pid]/broadcast.tier10|tier20[legacy])
-  - flush 단계 분리: 메모리 누적 → 끝에서 일괄 발송. 24h/날짜 가드 통과 0개면 push skip
+- **알림 7종 시스템** (2026-05-05 후반 A~E 재설계, 커밋 `48c1fed`):
+  - morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change / broadcast_drop10 / broadcast_drop20 (legacy 통계만, 발송 X)
+  - 폐기 (A): `category_broadcast` PushPayload + `events.categoryBroadcasts` + `MessageData.screen='price_change'` 통째 제거. 가격 추적/알림은 shared_products 단일 출처로 일원화
+  - **drop은 상품별 각각 1건씩 발송** (이전 B, 2026-05-04 유지) — 사용자당 통합 정책에서 분리. target/up은 통합 유지. target 통과 시 drop bucket 자동 제외
+  - **앱 필터링** (이전 C, 2026-05-04 유지): `users/{uid}.app === 'jigumiya'` strict picking. aigoUsers 분리 변수 제거 (지금이야 발송만)
+  - **단일 형식 메시지** (이전 D, 2026-05-04 유지): `n===1` 시 `{name} {prev}원 → {curr}원 ↓` + detail 라우팅. `n>1` 시 합산 형식 + home 라우팅
+  - **요일별 morning/evening 문구** (C 2026-05-05 후반): KST `getKstDayOfWeek()` lookup. title 시간대 통일 (`🌅 좋은 아침이에요` / `🌙 오늘도 수고했어요`), body는 7개 단일 문구
+  - morning(07-09 KST) / evening(19:30-21 KST) 시간대 분기. **KST 날짜 가드** (이전 E, 2026-05-04 유지): `lastNotifications.morningKstDate/eveningKstDate` 'YYYY-MM-DD' 비교
+  - 24h productId 가드: `users/{uid}.lastNotifications` (priceDrop[pid]/priceUp[pid]/targetReached[pid]/categoryBroadcast[legacy 보존]/broadcast.tier10|tier20[legacy])
+  - flush 단계 분리: 메모리 누적 → flush 직전 events.drops/ups dedup → 끝에서 일괄 발송. 24h/날짜 가드 통과 0개면 push skip
+  - **dropRate 60% 가드** (B 2026-05-05 후반): shared_products 본 흐름에서 가격 갱신 후 알림 push 직전 `Math.abs(dropRate) > 60` 시 `[Skip-DropRateGuard]` 로그 + continue
 - **F sleep 단순화** (2026-05-04): `DEFAULT_SLEEP_MS = 2000` 단일값 (이전 1500 + cyclesPerDay 산식 잔재 제거). N=51 1회 ~393초 → ~70초
-- **G 카테고리 round-robin** (2026-05-04, `category-cycle.ts`): shared_products 순회 끝난 후 매 사이클 1회. 3 컬렉션(`category_best`/`category_best_baby`/`event_best`) 각 2개씩 = 6콜/사이클. 포인터 `meta/stats.categoryCyclePointers`. 카테고리 정의 Firestore 문서에서 동적 read. 950상품 1.5h 1순환
-- **H category_broadcast** (2026-05-04): category_best -10% 급락 → jigumiya 사용자 전체 broadcast (추적자 제외). category_best_baby/event_best는 발송 X (아이고 가격변동 탭 부재). 클라이언트 라우팅 `screen: 'price_change'` → `/price-drops` 탭
+- **카테고리 round-robin** (`category-cycle.ts`, 2026-05-05 후반 A로 재작성): shared_products 순회 끝난 후 매 사이클 1회. **fetch + 문서 갱신만** (가격 비교/알림 push 전체 제거). 3 컬렉션 각 2개씩 = 6콜/사이클. `category_best`은 02:00 cron 단독 갱신 정책으로 `updateDoc:false`. baby/event는 set merge 갱신
 - createdAt asc, trackerCount=0/당일 추가 스킵, rate-limited 즉시 종료
 - category_best 캐시 hit 시 API 스킵 (019 §4-2), collectionGroup `tracked.productId` 인덱스로 추적자 역방향 검색
-- 시작 로그: `[Schedule] N=37 interval=10min(peak) since=12.3min — 실행 진행` / `[Cycle] N=37 daily=37 cycles=144 sleep=2000ms offset=0~36 split=false` / `[ActiveUsers] jigumiya=N aigo=M` / `[CategoryCycle] category_best 0~1 처리 완료 api=2 drops=K` / `[CategoryBroadcast] items=N 발송 M건`
+- 시작 로그: `[Schedule] N=37 interval=10min(peak) since=12.3min — 실행 진행` / `[Cycle] N=37 daily=37 cycles=144 sleep=2000ms offset=0~36 split=false` / `[ActiveUsers] jigumiya=N (발송 대상) | skip: aigo=N unknown=N other=N` / `[CategoryCycle] category_best 0~1 처리 완료 api=2 updated=0` / `[Skip-DropRateGuard] {pid} dropRate=...% — 알림 스킵`
+
+### goldbox-updater (2026-05-05 후반 신설, 매일 07:30 KST)
+- 위치: `scripts/goldbox-updater/`, 워크플로우: `.github/workflows/goldbox-update.yml` (`30 22 * * *`)
+- 엔드포인트: `/v2/providers/affiliate_open_api/apis/openapi/products/goldbox` (v1 prefix 없음 — 다른 OpenAPI와 다른 경로)
+- 동작: 1콜 fetch → goldbox 응답의 productUrl이 이미 affiliate URL이므로 별도 deeplink 변환 X → Firestore `goldbox/{YYYY-MM-DD KST}` 저장
+- 페이로드: `{ date, products: [{ productId, productName, productPrice, productImage, deepLink }], updatedAt }`
+- 호출량: 1콜/일. rate-limited 감지 시 즉시 종료 (당일 재실행 없음)
+
+### event-best-jigumiya-updater (2026-05-05 후반 신설, 매일 02:35 KST)
+- 위치: `scripts/event-best-jigumiya-updater/`, 워크플로우: `.github/workflows/event-best-jigumiya-update.yml` (`35 17 * * *`)
+- 11개 이벤트 정의 (`events-jigumiya.ts`): valentine(02-14) / samgyeopsal(03-03) / whiteday(03-14) / childrensday(05-05) / parentsday(05-08) / teachersday(05-15) / couplesday(05-21) / roseday(06-14) / halloween(10-31) / pepero(11-11) / christmas(12-25)
+- D-7 윈도우 매칭: 오늘 KST 포함 7일(`MM-DD` 집합)에 이벤트 date 포함 시만 갱신, 그 외 graceful exit (호출 0)
+- search API limit 상한 10개 (`SEARCH_LIMIT_MAX=10` + `Math.min` 가드, `PRODUCTS_PER_KEYWORD` 기본 10)
+- 키워드 dedupe → 가격 desc 정렬 → 상위 50개 → Firestore `event_best_jigumiya/{slug}` 저장
+- 페이로드: `{ slug, eventName, date, keywords, minPrice, products: [{ productId, productName, productPrice, productImage, deepLink: productUrl, isRocket }], updatedAt }`
+- 호출량: D-7 이내 이벤트 평균 1~2개 × 키워드 4개 = 4~8콜/일. 키워드 사이 sleep 2초
 
 ### tracked-backfill (1회 실행 보강 스크립트, 2026-05-02 적용 완료)
 - 위치: `scripts/tracked-backfill/`, 워크플로우: `.github/workflows/tracked-backfill.yml`
