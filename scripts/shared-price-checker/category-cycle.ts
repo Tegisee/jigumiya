@@ -1,28 +1,27 @@
 /**
- * G v2 (2026-05-04): 카테고리 단위 round-robin 가격 체크.
+ * 카테고리 베스트 round-robin — fetch + (baby/event) 문서 갱신만 수행.
  *
- * shared_products 순회 끝난 후 매 사이클 1회 호출. notify-only 모드는 호출 X.
+ * 2026-05-05 사고 후속 정리:
+ *   - 카테고리 베스트(category_best / category_best_baby / event_best) 가격 변동 감지 + 알림 발송 전체 제거.
+ *   - bestcategories ↔ search API의 productPrice 출처 mismatch가 가짜 변동을 만들어 폭탄 알림 사고 발생.
+ *   - 가격 추적/알림은 shared_products 단일 출처로 일원화. 카테고리 베스트는 데이터 갱신만 담당.
  *
- * 호출 단위 — 카테고리 1개 = 1콜 (50개 상품 한 번에 응답):
- *   - category_best         → bestcategories API (categoryId)
- *   - category_best_baby    → search API (keyword)
- *   - event_best            → search API (keyword + minPrice 30000 클라이언트 필터)
+ * 처리 단위:
+ *   - 카테고리 1개 = 1콜 (50개 상품 한 번에 응답)
+ *   - 매 사이클 batchSize(기본 2)개 카테고리씩 round-robin
+ *   - 사이클당 6콜 (3 컬렉션 × 2 카테고리)
  *
- * 각 컬렉션에서 batchSize(2)개 카테고리씩 round-robin → 사이클당 6콜.
- * 카테고리 정보는 Firestore 기존 문서에서 동적 read (별도 정의 파일 없음):
+ * 컬렉션별 fetch + 갱신 정책:
+ *   - category_best         → bestcategories API. 문서 갱신 X (02:00 KST `category-best-updater` cron 단독 갱신).
+ *                              이번 사이클에서는 사실상 fetch 의미가 없으나 향후 활용 여지 위해 호출 자체는 유지하지 않음.
+ *   - category_best_baby    → search API. set merge로 문서 갱신 (별도 updater 없음).
+ *   - event_best            → search API + minPrice 30000 클라이언트 필터. set merge 갱신.
+ *
+ * 카테고리 정의는 Firestore 문서에서 동적 read (별도 정의 파일 없음):
  *   - category_best/{categoryId} 문서:    categoryId, categoryName, displayOrder, products[]
  *   - category_best_baby/{slug} 문서:     keyword, category, displayOrder, products[]
  *   - event_best/{slug} 문서:             keyword, eventName, type, minPrice, products[]
- * 컬렉션이 비어있으면 해당 컬렉션 스킵 (jigumiya 프로젝트에 baby/event는 아이고 통합 후 채워짐).
- *
- * 가격 비교:
- *   - 기존 문서 products[*].productPrice 를 prev로 사용
- *   - 새 fetch 결과의 같은 productId 매칭 → 변동 감지
- *   - 하락: price_drops 멱등 upsert + (추적자 있으면) events.drops 추가 → §B 사용자별 통합
- *   - 상승: (추적자 있으면) events.ups 추가
- *   - 추적자 없으면 알림 X (price_drops 기록만 → 가격변동 탭 노출)
- *
- * 문서 갱신: 통째 set (기존 updater와 동일 페이로드 형식) → 다음 사이클 prev 정정.
+ * 컬렉션 비어있으면 즉시 스킵.
  *
  * 포인터: meta/stats.categoryCyclePointers (set-merge로 다른 컬렉션 키 보존).
  *   { category_best: 4, category_best_baby: 6, event_best: 2 }
@@ -31,19 +30,13 @@
  * Rate-limited 즉시 종료 — 발생한 컬렉션의 포인터는 갱신 안 함 (다음 cron에서 같은 자리부터 재개).
  */
 
-import {
-  type Firestore,
-  type DocumentData,
-} from 'firebase-admin/firestore';
+import { type Firestore } from 'firebase-admin/firestore';
 import {
   fetchBestCategoryProducts,
   searchKeywordCategoryProducts,
   type BestCategoryProduct,
   type SearchedCategoryProduct,
 } from './coupang-api.js';
-import { recordPriceDrop } from './price-drop.js';
-import type { ProductBrief } from './notifier.js';
-import type { RawEvents, TrackerInfo } from './index.js';
 
 type FetchMode = 'bestCategories' | 'search';
 
@@ -51,12 +44,14 @@ interface CollectionConfig {
   name: 'category_best' | 'category_best_baby' | 'event_best';
   mode: FetchMode;
   minPrice: number; // 클라이언트 필터 (search 모드만 의미). 0 이면 미적용.
+  /** false면 fetch 후 문서 set merge 스킵 (category_best은 02:00 cron이 단독 갱신) */
+  updateDoc: boolean;
 }
 
 const COLLECTIONS: ReadonlyArray<CollectionConfig> = [
-  { name: 'category_best', mode: 'bestCategories', minPrice: 0 },
-  { name: 'category_best_baby', mode: 'search', minPrice: 0 },
-  { name: 'event_best', mode: 'search', minPrice: 30000 },
+  { name: 'category_best', mode: 'bestCategories', minPrice: 0, updateDoc: false },
+  { name: 'category_best_baby', mode: 'search', minPrice: 0, updateDoc: true },
+  { name: 'event_best', mode: 'search', minPrice: 30000, updateDoc: true },
 ];
 
 const sleep = (ms: number) =>
@@ -145,55 +140,6 @@ async function writePointer(
   }
 }
 
-/** collectionGroup('tracked')에서 productId로 추적자 조회 */
-async function fetchTrackersByProductId(
-  db: Firestore,
-  productId: string,
-): Promise<TrackerInfo[]> {
-  const snap = await db
-    .collectionGroup('tracked')
-    .where('productId', '==', productId)
-    .get();
-  const trackers: TrackerInfo[] = [];
-  for (const doc of snap.docs) {
-    const uid = doc.ref.parent.parent?.id;
-    if (!uid) continue;
-    trackers.push({
-      uid,
-      targetPrice: doc.data().targetPrice as number | undefined,
-    });
-  }
-  return trackers;
-}
-
-/** 기존 문서의 products[productId → price] 인덱싱 */
-async function loadPrevPrices(
-  db: Firestore,
-  collectionName: string,
-  docId: string,
-): Promise<Map<string, { price: number; thumbnail: string }>> {
-  const map = new Map<string, { price: number; thumbnail: string }>();
-  try {
-    const snap = await db.collection(collectionName).doc(docId).get();
-    const products = (snap.data()?.products as DocumentData[] | undefined) ?? [];
-    for (const p of products) {
-      const pid = String(p.productId ?? '');
-      const price = Number(p.productPrice ?? 0);
-      if (!pid || price <= 0) continue;
-      map.set(pid, {
-        price,
-        thumbnail: String(p.productImage ?? p.thumbnail ?? ''),
-      });
-    }
-  } catch (e) {
-    console.warn(
-      `[CategoryCycle] prev 문서 read 실패 ${collectionName}/${docId}:`,
-      e,
-    );
-  }
-  return map;
-}
-
 /** 컬렉션별 페이로드 — 기존 updater와 동일 형식 유지 */
 function buildPayload(
   cfg: CollectionConfig,
@@ -232,30 +178,19 @@ function buildPayload(
   };
 }
 
-const BROADCAST_TIER10 = -10;
-const BROADCAST_TIER20 = -20;
-
 export interface CategoryCycleStats {
   apiCalls: number;
-  drops: number;
-  ups: number;
   rateLimited: boolean;
 }
 
 export async function processCategoryRoundRobin(opts: {
   db: Firestore;
-  events: RawEvents;
   sleepMs: number;
   batchSize?: number;
 }): Promise<CategoryCycleStats> {
-  const { db, events, sleepMs } = opts;
+  const { db, sleepMs } = opts;
   const batchSize = opts.batchSize ?? 2;
-  const stats: CategoryCycleStats = {
-    apiCalls: 0,
-    drops: 0,
-    ups: 0,
-    rateLimited: false,
-  };
+  const stats: CategoryCycleStats = { apiCalls: 0, rateLimited: false };
 
   for (const cfg of COLLECTIONS) {
     if (stats.rateLimited) break;
@@ -271,8 +206,7 @@ export async function processCategoryRoundRobin(opts: {
     const batch = defs.slice(start, end);
 
     let api = 0;
-    let drops = 0;
-    let ups = 0;
+    let updated = 0;
 
     for (let bi = 0; bi < batch.length; bi++) {
       const cat = batch[bi];
@@ -289,7 +223,6 @@ export async function processCategoryRoundRobin(opts: {
             stats.rateLimited = true;
             break;
           }
-          // 카테고리 사이 sleep (다음 카테고리 진행)
           if (bi < batch.length - 1) await sleep(sleepMs);
           continue;
         }
@@ -320,86 +253,15 @@ export async function processCategoryRoundRobin(opts: {
         continue;
       }
 
-      // 2) 가격 비교 (prev 문서 read)
-      const prevMap = await loadPrevPrices(db, cfg.name, cat.docId);
-      for (const newP of fresh) {
-        const prev = prevMap.get(newP.productId);
-        if (!prev || prev.price <= 0 || newP.productPrice <= 0) continue;
-        if (prev.price === newP.productPrice) continue;
-
-        const dropRate = ((newP.productPrice - prev.price) / prev.price) * 100;
-        const brief: ProductBrief = {
-          productId: newP.productId,
-          productName: newP.productName,
-          currentPrice: newP.productPrice,
-          previousPrice: prev.price,
-        };
-
-        if (newP.productPrice < prev.price) {
-          await recordPriceDrop(
-            db,
-            newP.productId,
-            newP.productName,
-            newP.productImage || prev.thumbnail,
-            prev.price,
-            newP.productPrice,
-            0,
-          );
-          drops++;
-
-          const trackers = await fetchTrackersByProductId(db, newP.productId);
-          if (trackers.length > 0) {
-            events.drops.push({ ...brief, dropRate, trackers });
-            for (const t of trackers) {
-              const target = t.targetPrice;
-              if (target && target > 0 && newP.productPrice <= target) {
-                events.targets.push({
-                  uid: t.uid,
-                  item: brief,
-                  targetPrice: target,
-                });
-              }
-            }
-          }
-          // H2 (2026-05-04, G v2): -10% 이상 급락 → category_broadcast 발송 후보로 누적.
-          //
-          // category_best (지금이야 베스트 카테고리) → jigumiya 사용자 전체 broadcast
-          // category_best_baby / event_best → broadcast 발송 X
-          //   이유: 아이고 앱은 가격변동 탭이 없어 broadcast 클릭 후 확인할 화면이 없음.
-          //   추적자에게는 events.drops 경유로 §2-D price_drop_summary 도달 (H1 상품별 1건).
-          //
-          // 발송 시 추적자(이미 §2-D drop 상품별 알림 받음)는 자동 제외 (flush 단에서).
-          if (dropRate <= BROADCAST_TIER10) {
-            if (cfg.name === 'category_best') {
-              events.categoryBroadcasts.push({
-                brief,
-                dropRate,
-                app: 'jigumiya',
-              });
-            }
-            // legacy 통계 — 모든 컬렉션 카운팅 유지 (모니터링용)
-            if (dropRate <= BROADCAST_TIER20) events.broadcastTier20.push(brief);
-            else events.broadcastTier10.push(brief);
-          }
-        } else {
-          const trackers = await fetchTrackersByProductId(db, newP.productId);
-          if (trackers.length > 0) {
-            ups++;
-            events.ups.push({ ...brief, dropRate, trackers });
-          }
-        }
-      }
-
-      // 3) 문서 갱신 — category_best은 02:00 KST `category-best-updater` cron이 단독 갱신.
-      // G round-robin은 가격 비교 + 알림 발송만 수행, 문서 덮어쓰기 X.
-      // 이유: bestcategories API와 search API의 productPrice 출처 mismatch 방어 (5/5 사고 원인).
-      // baby/event는 별도 updater가 없으므로 G가 갱신 책임 유지 (다음 사이클 prev 정정).
-      if (cfg.name !== 'category_best') {
+      // 2) 문서 갱신 — category_best은 02:00 KST `category-best-updater` cron이 단독 갱신.
+      //    가격 추적/알림은 shared_products 단일 출처로 일원화 (5/5 사고 후속, A 정책).
+      if (cfg.updateDoc) {
         try {
           await db
             .collection(cfg.name)
             .doc(cat.docId)
             .set(buildPayload(cfg, cat, fresh), { merge: true });
+          updated++;
         } catch (e) {
           console.warn(
             `[CategoryCycle] 문서 갱신 실패 ${cfg.name}/${cat.docId}:`,
@@ -413,21 +275,18 @@ export async function processCategoryRoundRobin(opts: {
     }
 
     stats.apiCalls += api;
-    stats.drops += drops;
-    stats.ups += ups;
 
     if (!stats.rateLimited) {
       const newPointer = end >= defs.length ? 0 : end;
       await writePointer(db, cfg.name, newPointer);
       console.log(
-        `[CategoryCycle] ${cfg.name} ${start}~${end - 1} 처리 완료 api=${api} drops=${drops}` +
-          (ups > 0 ? ` ups=${ups}` : ''),
+        `[CategoryCycle] ${cfg.name} ${start}~${end - 1} 처리 완료 api=${api} updated=${updated}`,
       );
     }
   }
 
   console.log(
-    `[CategoryCycle] 합계 api=${stats.apiCalls} drops=${stats.drops}${stats.ups > 0 ? ` ups=${stats.ups}` : ''}${stats.rateLimited ? ' (rate-limited 종료)' : ' pointer 갱신 완료'}`,
+    `[CategoryCycle] 합계 api=${stats.apiCalls}${stats.rateLimited ? ' (rate-limited 종료)' : ' pointer 갱신 완료'}`,
   );
 
   return stats;

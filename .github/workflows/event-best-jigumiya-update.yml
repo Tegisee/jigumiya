@@ -1,0 +1,41 @@
+name: Event Best Jigumiya Updater
+
+# 매일 02:35 KST = 17:35 UTC (전일)
+# 오늘 KST 기준 D-7 이내(오늘 포함 7일) 이벤트만 갱신, 그 외엔 graceful exit (호출 0)
+# 이벤트당 키워드 4개 × search API 1콜 = 4~8콜/일 (D-7 이내 이벤트 평균 1~2개)
+# rate-limited 감지 시 즉시 종료
+# 02:00 KST category-best (지금이야, ~24분 소요) 종료 후 안전 마진 10분 확보
+
+on:
+  schedule:
+    - cron: '35 17 * * *'   # 02:35 KST
+  workflow_dispatch: {}
+
+jobs:
+  update-event-best-jigumiya:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/event-best-jigumiya-updater
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/event-best-jigumiya-updater
+        run: npx tsc
+
+      - name: Run event best jigumiya updater
+        working-directory: scripts/event-best-jigumiya-updater
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+          SLEEP_BETWEEN_KEYWORDS_MS: '2000'
+        run: node dist/index.js

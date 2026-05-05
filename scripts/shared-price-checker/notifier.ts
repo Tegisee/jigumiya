@@ -21,20 +21,28 @@ export type PushPayload =
   | { type: 'price_up_summary'; token: string; items: ProductBrief[] }
   | { type: 'evening_no_change'; token: string }
   | { type: 'broadcast_drop10'; token: string; items: ProductBrief[] } // legacy, 미사용
-  | { type: 'broadcast_drop20'; token: string; items: ProductBrief[] } // legacy, 미사용
-  // G v2 (2026-05-04): 카테고리 베스트 10% 이상 급락 → 추적자 외 활성 사용자 전체 발송
-  | {
-      type: 'category_broadcast';
-      token: string;
-      item: ProductBrief;
-      dropRate: number;
-    };
+  | { type: 'broadcast_drop20'; token: string; items: ProductBrief[] }; // legacy, 미사용
 
+// KST_OFFSET — KST 요일 계산용 (2026-05-05 C: 요일별 단일 문구)
+const KST_OFFSET = 9 * 3600 * 1000;
+
+/** KST 기준 요일 — 0=일, 1=월, 2=화, 3=수, 4=목, 5=금, 6=토 */
+function getKstDayOfWeek(): number {
+  const kst = new Date(Date.now() + KST_OFFSET);
+  return kst.getUTCDay();
+}
+
+// 2026-05-05 C: 기존 랜덤 풀 → 요일별 단일 문구로 교체.
+// 인덱스 = 요일 (0=일, 1=월, ..., 6=토). title은 시간대 공통, body가 요일별 사용자 사양 그대로.
 const MESSAGES = {
   morning: [
-    { title: '좋은 아침이에요 🌅', body: '오늘도 좋은 가격을 찾아드릴게요' },
-    { title: '기다렸다, 지금이야!', body: '오늘의 가격을 확인해보세요' },
-    { title: '좋은 아침이에요!', body: '관심 상품 가격을 확인해볼까요?' },
+    { title: '🌅 좋은 아침이에요', body: '일요일 아침, 오늘도 좋은 하루 되세요 ☀️' },          // 0=일
+    { title: '🌅 좋은 아침이에요', body: '한 주 시작! 오늘의 특가 확인해보세요 ⚡' },         // 1=월
+    { title: '🌅 좋은 아침이에요', body: '오늘도 득템의 기회! 가격 체크해보세요 💪' },        // 2=화
+    { title: '🌅 좋은 아침이에요', body: '주중 최고의 날! 오늘 특가 놓치지 마세요 🔥' },      // 3=수
+    { title: '🌅 좋은 아침이에요', body: '내일이면 불금! 미리 장바구니 채워두세요 🎯' },      // 4=목
+    { title: '🌅 좋은 아침이에요', body: '불금이에요! 오늘의 특가 확인해보세요 🎉' },         // 5=금
+    { title: '🌅 좋은 아침이에요', body: '주말이에요! 여유롭게 가격 구경해보세요 😎' },       // 6=토
   ],
   // 복수형(n>1) 전용 — body에 반드시 {N} 포함. 단일(n===1)은 buildMessage에서 별도 형식 사용.
   priceDropSummary: [
@@ -72,9 +80,13 @@ const MESSAGES = {
     },
   ],
   eveningNoChange: [
-    { title: '오늘은 변동이 없었어요 🌙', body: '내일을 기대해봐요' },
-    { title: '오늘도 열심히 확인했어요', body: '조금만 더 기다려봐요!' },
-    { title: '아직은 때가 아닌가봐요', body: '계속 지켜볼게요 👀' },
+    { title: '🌙 오늘도 수고했어요', body: '내일을 위해 미리 장바구니 확인해보세요 💡' },                 // 0=일
+    { title: '🌙 오늘도 수고했어요', body: '월요일도 수고하셨어요. 오늘 가격 변동 확인해보셨나요? 🛒' },  // 1=월
+    { title: '🌙 오늘도 수고했어요', body: '화요일 저녁, 장바구니 점검 어때요? 🛍️' },                     // 2=화
+    { title: '🌙 오늘도 수고했어요', body: '벌써 수요일 저녁이에요. 오늘 하루도 수고하셨어요 😊' },        // 3=수
+    { title: '🌙 오늘도 수고했어요', body: '목요일 저녁, 주말 쇼핑 미리 준비해보세요 🛒' },               // 4=목
+    { title: '🌙 오늘도 수고했어요', body: '한 주 마무리 수고하셨어요! 주말 특가 확인해보세요 🎁' },     // 5=금
+    { title: '🌙 오늘도 수고했어요', body: '토요일 저녁, 편안한 밤 되세요 🌙' },                          // 6=토
   ],
   broadcast10: [
     { title: '🔥 지금이야!', body: '인기 상품 가격이 크게 내려갔어요' },
@@ -98,21 +110,6 @@ const MESSAGES = {
       body: '베스트 상품 {N}개 가격이 20% 이상 내려갔어요 💥',
     },
   ],
-  // G v2 (2026-05-04): placeholder — {name} 상품명, {rate} 할인율(절댓값 정수), {prev}/{curr} 가격
-  categoryBroadcast: [
-    {
-      title: '⚡ 급락 알림',
-      body: '{name} {rate}% 급락! 지금 확인해보세요',
-    },
-    {
-      title: '🔥 특가 알림',
-      body: '{name} 특가! {prev}원 → {curr}원',
-    },
-    {
-      title: '📉 가격 하락',
-      body: '{name} {rate}% 내려갔어요',
-    },
-  ],
 } as const;
 
 function pickRandom<T>(arr: readonly T[]): T {
@@ -124,8 +121,7 @@ function fillN(template: string, n: number): string {
 }
 
 interface MessageData extends Record<string, unknown> {
-  // 'price_change' = 가격변동 탭 (category_broadcast 전용, G v2). 클라이언트는 'price-drops'와 동일 처리.
-  screen: 'home' | 'detail' | 'price-drops' | 'price_change';
+  screen: 'home' | 'detail' | 'price-drops';
   itemId?: string;
   alertType: PushPayload['type'];
 }
@@ -137,7 +133,8 @@ function buildMessage(p: PushPayload): {
 } {
   switch (p.type) {
     case 'morning_greeting': {
-      const m = pickRandom(MESSAGES.morning);
+      // 2026-05-05 C: 요일별 단일 문구 (KST 기준)
+      const m = MESSAGES.morning[getKstDayOfWeek()];
       return {
         title: m.title,
         body: m.body,
@@ -145,7 +142,8 @@ function buildMessage(p: PushPayload): {
       };
     }
     case 'evening_no_change': {
-      const m = pickRandom(MESSAGES.eveningNoChange);
+      // 2026-05-05 C: 요일별 단일 문구 (KST 기준)
+      const m = MESSAGES.eveningNoChange[getKstDayOfWeek()];
       return {
         title: m.title,
         body: m.body,
@@ -223,27 +221,6 @@ function buildMessage(p: PushPayload): {
         title: m.title,
         body: fillN(m.body, n),
         data: { screen: 'price-drops', alertType: p.type },
-      };
-    }
-    case 'category_broadcast': {
-      const m = pickRandom(MESSAGES.categoryBroadcast);
-      const name = p.item.productName.slice(0, 20);
-      const rate = Math.abs(Math.round(p.dropRate));
-      const prev = p.item.previousPrice.toLocaleString();
-      const curr = p.item.currentPrice.toLocaleString();
-      const body = m.body
-        .replace('{name}', name)
-        .replace('{rate}', String(rate))
-        .replace('{prev}', prev)
-        .replace('{curr}', curr);
-      return {
-        title: m.title,
-        body,
-        data: {
-          screen: 'price_change',
-          itemId: p.item.productId,
-          alertType: p.type,
-        },
       };
     }
   }

@@ -322,8 +322,7 @@ interface LastNotifications {
   priceUp?: Record<string, number>;
   targetReached?: Record<string, number>;
   broadcast?: { tier10?: number; tier20?: number }; // legacy, 미사용
-  // G v2 (2026-05-04): 카테고리 베스트 broadcast 24h 가드 (productId별)
-  categoryBroadcast?: Record<string, number>;
+  categoryBroadcast?: Record<string, number>; // legacy (2026-05-05 A 폐기 후 read X), Firestore 보존
 }
 
 interface UserState {
@@ -339,20 +338,25 @@ export interface ProductEvent extends ProductBrief {
   trackers: TrackerInfo[];
 }
 
-export interface CategoryBroadcastItem {
-  brief: ProductBrief;
-  dropRate: number; // 음수 (예: -12.5 = 12.5% 하락)
-  app: 'jigumiya' | 'aigo'; // 발송 대상 앱 (출처 컬렉션에 따라 결정)
-}
-
 export interface RawEvents {
   drops: ProductEvent[];
   ups: ProductEvent[];
   targets: { uid: string; item: ProductBrief; targetPrice: number }[];
   broadcastTier10: ProductBrief[]; // legacy 통계
   broadcastTier20: ProductBrief[]; // legacy 통계
-  // G v2 (2026-05-04): 카테고리 베스트 -10% 이상 급락 → 추적자 외 활성 사용자 전체 발송
-  categoryBroadcasts: CategoryBroadcastItem[];
+}
+
+/** 2026-05-05 B: events.drops/ups dedup — 같은 productId 첫 항목만 보존 (방어 가드).
+ *  shared_products 본 흐름은 slice 내 productId 유니크지만, loadDropsForNotifyOnly 등 외부 push 추가 시 안전망 역할. */
+function dedupByProductId<T extends { productId: string }>(arr: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const x of arr) {
+    if (seen.has(x.productId)) continue;
+    seen.add(x.productId);
+    out.push(x);
+  }
+  return out;
 }
 
 // ─── Firestore I/O ───
@@ -582,7 +586,6 @@ async function main() {
     targets: [],
     broadcastTier10: [],
     broadcastTier20: [],
-    categoryBroadcasts: [],
   };
   let scanned = 0;
   let skipZero = 0;
@@ -731,6 +734,15 @@ async function main() {
     };
     const dropRate = ((newPrice - prevPrice) / prevPrice) * 100;
 
+    // 2026-05-05 B: dropRate 절댓값 가드 — 60%를 넘는 변동은 search API 매칭 휴리스틱 오류
+    // (옵션 mismatch / 다른 상품 매칭) 가능성이 매우 높아 알림 차단. 가격 갱신 자체는 위에서 이미 완료.
+    if (Math.abs(dropRate) > 60) {
+      console.warn(
+        `[Skip-DropRateGuard] ${productId} ${productName.slice(0, 30)} dropRate=${dropRate.toFixed(1)}% — 알림 스킵`,
+      );
+      continue;
+    }
+
     if (newPrice < prevPrice) {
       // price_drops 컬렉션 기록
       await recordPriceDrop(
@@ -768,30 +780,28 @@ async function main() {
     }
     }
 
-    // G v2 (2026-05-04): shared_products 순회 끝난 후 카테고리 단위 round-robin 끼워넣기.
-    // 3개 컬렉션(category_best / category_best_baby / event_best) 각 2개씩 = 6콜/사이클.
-    // rate-limited 발생 시 스킵 (당일 재실행 없음). 합계 로그는 모듈 내부에서 출력.
+    // 2026-05-05 A: 카테고리 베스트 round-robin은 fetch + (baby/event) 문서 갱신만 수행.
+    // 가격 변동 감지 + 알림 발송은 shared_products 단일 출처로 일원화 — events에 push X.
     if (!rateLimited) {
       const catStats = await processCategoryRoundRobin({
         db,
-        events,
         sleepMs: DEFAULT_SLEEP_MS,
         batchSize: 2,
       });
       apiCalls += catStats.apiCalls;
-      priceDrops += catStats.drops;
       if (catStats.rateLimited) rateLimited = true;
     }
   }
 
   // ─── Flush 단계 ───
+  // 2026-05-05 B: flush 직전 dedup — events.drops/ups에 같은 productId가 들어가도 사용자당 중복 발송 방지.
+  events.drops = dedupByProductId(events.drops);
+  events.ups = dedupByProductId(events.ups);
+
   const activeUsers = await fetchActiveUsers(db);
-  // jigumiya/aigo 사용자 분리 — jigumiya 전용 알림과 컬렉션별 broadcast 분기에 사용
+  // jigumiya 사용자만 picking — A 정책 후속(아이고 사용자 발송 없음)
   const jigumiyaUsers = new Map(
     [...activeUsers].filter(([, u]) => u.app === 'jigumiya'),
-  );
-  const aigoUsers = new Map(
-    [...activeUsers].filter(([, u]) => u.app === 'aigo'),
   );
 
   const payloads: PushPayload[] = [];
@@ -940,63 +950,8 @@ async function main() {
     }
   }
 
-  // 5. broadcast — shared_products 출처는 폐기(§C). 카테고리 베스트 출처는 부활(H2).
-  //
-  // H2 (2026-05-04, G v2): category-cycle.ts에서 dropRate ≤ -10% 감지 시 events.categoryBroadcasts에 push.
-  // 발송 대상: 컬렉션별 app 매칭 사용자 — 추적자(이미 §2-D drop 알림 받음) 제외 → 중복 발송 방지.
-  //   - category_best                       → jigumiya 사용자 전체
-  //   - category_best_baby / event_best     → broadcast 발송 X
-  //     (아이고 앱에 가격변동 탭이 없어 클릭 후 확인할 화면이 없음 — 추적자에게만 §2-D 도달)
-  //   targetMap의 'aigo' 분기는 방어적 코드 — 현재 events.categoryBroadcasts에는 jigumiya만 들어옴.
-  // 24h productId별 가드: lastNotifications.categoryBroadcast.{productId}.
-  if (events.categoryBroadcasts.length > 0) {
-    // 추적자 set 구성 — drops/ups에 등장한 trackers의 (productId, uid) 조합
-    const trackerUidsByProductId = new Map<string, Set<string>>();
-    for (const ev of events.drops) {
-      let s = trackerUidsByProductId.get(ev.productId);
-      if (!s) {
-        s = new Set();
-        trackerUidsByProductId.set(ev.productId, s);
-      }
-      for (const t of ev.trackers) s.add(t.uid);
-    }
-    for (const ev of events.ups) {
-      let s = trackerUidsByProductId.get(ev.productId);
-      if (!s) {
-        s = new Set();
-        trackerUidsByProductId.set(ev.productId, s);
-      }
-      for (const t of ev.trackers) s.add(t.uid);
-    }
-
-    let bcCount = 0;
-    for (const item of events.categoryBroadcasts) {
-      const targetMap = item.app === 'jigumiya' ? jigumiyaUsers : aigoUsers;
-      const trackers =
-        trackerUidsByProductId.get(item.brief.productId) ?? new Set<string>();
-      for (const user of targetMap.values()) {
-        if (trackers.has(user.uid)) continue; // 추적자는 §2-D에서 별도 알림 → 중복 방지
-        const last =
-          user.lastNotifications.categoryBroadcast?.[item.brief.productId] ?? 0;
-        if (now - last < ONE_DAY_MS) continue;
-        payloads.push({
-          type: 'category_broadcast',
-          token: user.token,
-          item: item.brief,
-          dropRate: item.dropRate,
-        });
-        markUpdate(
-          user.uid,
-          `lastNotifications.categoryBroadcast.${item.brief.productId}`,
-          now,
-        );
-        bcCount++;
-      }
-    }
-    console.log(
-      `[CategoryBroadcast] items=${events.categoryBroadcasts.length} 발송 ${bcCount}건 (추적자/24h 가드 통과만)`,
-    );
-  }
+  // 2026-05-05 A: 카테고리 베스트 broadcast(`category_broadcast`) 발송 전체 제거.
+  // shared_products 단일 출처 정책 — events.categoryBroadcasts 자체가 사라짐.
   if (events.broadcastTier20.length > 0 || events.broadcastTier10.length > 0) {
     console.log(
       `[Broadcast-Legacy] tier20=${events.broadcastTier20.length} tier10=${events.broadcastTier10.length} — 통계만 유지 (shared_products 출처 발송 폐기)`,
