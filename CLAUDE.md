@@ -5,9 +5,9 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 작업할 항목의 sub MD도 함께 읽고 시작할 것.
 2026-04-30 이전 작업 이력은 docs/작업이력_archive.md 참조.
 
-## 가장 최근 (2026-05-05): 알림 사고 → 긴급 수정 → cron 재활성화
+## 가장 최근 (2026-05-05): 알림 사고 → 긴급 수정 → cron 재활성화 → 1.0.11 양 스토어 업로드
 
-5/4 A~H 배포 후 5/5 새벽 cron에서 가짜 가격 변동 폭주 → 긴급 cron 비활성화 → 원인 분석 → 수정 → 1.0.11 빌드 + Functions minInstances:1 + cron 재활성화. 상세는 "### 2026-05-05 작업" 참조.
+5/4 A~H 배포 후 5/5 새벽 cron에서 가짜 가격 변동 폭주 → 긴급 cron 비활성화 → 원인 분석 → 수정 → 1.0.11 빌드 + Functions minInstances:1 + cron 재활성화 → **1.0.11 iOS 심사 요청 + Android 내부 테스트 업로드 완료**. 1.0.10은 심사 중 상태 유지. 상세는 "### 2026-05-05 작업" 참조.
 
 ## 작업 리스트
 
@@ -405,6 +405,12 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - `scripts/shared-price-checker/users-app-backfill-20260505.mjs` (1회 마이그레이션, 보존 — 적용 이력)
 - service account JSON: `~/jigumiya/builds/jigumiya-firebase-adminsdk-fbsvc-14daa5f617.json` (gitignored, 로컬 전용)
 
+⑪ **1.0.11 (bn46/vc46) 양 스토어 업로드 완료** (2026-05-05)
+- **iOS App Store: 심사 요청 완료** — Transporter로 IPA 업로드 + App Store Connect 심사 제출
+- **Android Play Store: 내부 테스트 트랙 업로드 완료** — 프로덕션 승급은 내부 테스트 검증 후 진행
+- 1.0.10 (bn45/vc45)은 **심사 중 상태 유지** — 양 스토어 승급 전까지 1.0.11이 후속 적용 대기
+- 다음 단계: ① iOS 심사 통과 → App Store 출시 ② Android 내부 테스트 → 프로덕션 승급 ③ 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion` 갱신
+
 ## 다음 작업 순서 (2026-05-06 이후)
 
 **최우선** (잔여 작업):
@@ -414,7 +420,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
    - `[CategoryBroadcast] items=N 발송 M건` (H 발생 시)
    - 추적 상품에 가짜 변동 알림 0건 — bestcategories↔search mismatch 해소 확인
    - batch 거절 로그 사라짐 — 모든 발송 토큰 단일 EAS projectId
-2. **배포**: 1.0.11 (bn46/vc46) Play Store / App Store 업로드 — Android 단계적 출시 + iOS Transporter 수동 업로드 + 심사 제출
+2. ~~**배포**: 1.0.11 (bn46/vc46) Play Store / App Store 업로드~~ → ✅ 완료 (5/5): iOS 심사 요청 / Android 내부 테스트 트랙 업로드. **다음**: Android 내부 테스트 → 프로덕션 승급 + iOS 심사 통과 대기
 3. **갱신**: 1.0.10 양 스토어 승급 → `meta/config_jigumiya.minRequiredVersion = "1.0.10"`. 1.0.11 양 스토어 승급 → `"1.0.11"`로 재갱신
 4. **🚨 검증**: 1.0.11 실기기 — ① drop 상품별 N건 도달 (B) ② 단일 형식 `{name} {prev}원 → {curr}원 ↓` (D) ③ category_broadcast 알림 → 가격변동 탭 (H) ④ KST 날짜 가드 (E) ⑤ savePushToken `app:'jigumiya'` 자동 박힘 검증 (Firestore 직접 확인)
 5. **🚨 검증**: 1.0.10 실기기 (이전 잔여) — ① iOS 가이드 Alert ② Android 응답시간 로그 분포 ③ price_drops 단일 표시 ④ 알림 클릭 detail 라우팅
@@ -479,9 +485,11 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - [x] **마이그레이션**: backfill 적용 (`users-app-backfill-20260505.mjs`) — aigo 30 / jigumiya 18 / unknown 102 스킵
 - [x] **🚨 사고 해결 2**: category_best 갱신 중단 + fetchActiveUsers strict (커밋 `093f7ad`)
 - [x] **재가동**: shared-price-check cron 재활성화 (커밋 `11a83d2`)
+- [x] **배포 (iOS)**: 1.0.11 (bn46) App Store **심사 요청 완료** — Transporter 업로드 + 심사 제출
+- [x] **배포 (Android)**: 1.0.11 (vc46) Play Store **내부 테스트 트랙 업로드 완료**
 
 ### 2026-05-06 이후 미완
-- [ ] **🚨 빌드**: 1.0.11 (bn46/vc46) — A~H 통합 + 클라이언트 변경(savePushToken/notifications) 적용
+- [ ] **🚨 승급 대기**: 1.0.11 iOS 심사 통과 → App Store 출시 / Android 내부 테스트 → 프로덕션 승급
 - [ ] **🚨 검증**: 1.0.11 실기기 — drop 상품별 N건(B) + 단일 형식 메시지(D) + category_broadcast 라우팅(H) + KST 날짜 가드(E)
 - [ ] **🚨 검증**: 5/5 첫 cron 자동 실행 — `[ActiveUsers]` / `[CategoryCycle]` / `[CategoryBroadcast]` 새 로그 형식 일괄 확인
 - [ ] **🚨 검증**: 1.0.10 실기기 (잔여) — iOS 가이드 Alert + Android 응답시간 로그 + price_drops 단일 표시 + 알림 클릭 detail
@@ -523,16 +531,19 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 파트너스 deeplink API는 `https://link.coupang.com/a/XXXXX` 형태로 shortenUrl 반환 (입력 공유 URL과 동일 prefix라 slug 비교로만 원본/제휴 구분 가능)
 - 코드: services/coupangApi.ts (클라이언트 HMAC — fallback용), functions/src/index.ts (서버 HMAC + HTML `redirectWebUrl` 파싱 + 딥링크)
 
-## 현재 상태: 1.0.11 빌드 완료 + 사고 수정 완료 + cron 재활성화 (2026-05-05 기준)
-- 1.0.11 (bn46/vc46) 빌드 완료 (5/5) — Play Store / App Store 업로드 대기
-  - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB)
-  - Android: `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
+## 현재 상태: 1.0.11 양 스토어 업로드 완료 + 사고 수정 완료 + cron 재활성화 (2026-05-05 기준)
+- **1.0.11 (bn46/vc46) 양 스토어 업로드 완료 (5/5)**:
+  - **iOS App Store: 심사 요청 완료** (Transporter 업로드 + 심사 제출)
+  - **Android Play Store: 내부 테스트 트랙 업로드 완료**
+  - 빌드 산출물:
+    - iOS: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB)
+    - Android: `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
 - Functions `resolveAndGenerateAffiliateUrl` `minInstances: 1` 배포 완료 — Cloud Run minScale=1, 콜드 스타트 제거 (월 ~$5~10)
 - 5/5 알림 사고 수정 완료 + cron 재활성화:
   - category_best 매 사이클 갱신 → `02:00 KST cron 단독 갱신`으로 복귀 (출처 mismatch 차단)
   - fetchActiveUsers strict (`app === 'jigumiya'` 단일 발송) — aigo/unknown/null 모두 제외
   - users 컬렉션 backfill 적용 (aigo 30 / jigumiya 18 / unknown 102 스킵)
-- 1.0.10 (bn45/vc45) Play Store 프로덕션 검토 중 / App Store 심사 대기 중 (양 스토어 승급 시 1.0.11 후속 업로드)
+- **1.0.10 (bn45/vc45) Play Store 프로덕션 검토 중 / App Store 심사 대기 중 (상태 유지)** — 양 스토어 승급 시 1.0.11이 후속 적용
 - A~H 8종 일괄 적용 (커밋 `de856a6`):
   - A: 고정 알림 폭탄 방지 (pickRandom 강화 + 후보 풀 정리)
   - B: 관심상품 drop 알림 상품별 각각 발송 (사용자당 통합 → 상품별 1건씩)
