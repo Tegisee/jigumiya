@@ -19,12 +19,13 @@ name: Shared Products Price Check (019 §5-2)
 #   - 2026-04-27: 신설 (workflow_dispatch만 활성, schedule 주석 처리)
 
 on:
+  # 🚨 2026-05-05 긴급 재비활성화 — 사고 재발 또는 추가 이슈 확인. workflow_dispatch만 유지.
   # 2026-05-05 재활성화 — 사고 수정 후 (category_best 갱신 중단 + app 필터링 strict, `093f7ad`).
-  schedule:
-    # 10분 고정 트리거 — 코드(§11)가 N값 기반 간격 결정 + lastRunAt 가드로 실제 실행 여부 판정
-    # 10분은 §3 매트릭스 최단 간격(N≤400 시 10분)의 공약수.
-    # 간격 미달 시 graceful exit (~2~5초). Block zone(01:00~04:30 KST)은 별도 가드로 회피.
-    - cron: '*/10 * * * *'
+  # schedule:
+  #   # 10분 고정 트리거 — 코드(§11)가 N값 기반 간격 결정 + lastRunAt 가드로 실제 실행 여부 판정
+  #   # 10분은 §3 매트릭스 최단 간격(N≤400 시 10분)의 공약수.
+  #   # 간격 미달 시 graceful exit (~2~5초). Block zone(01:00~04:30 KST)은 별도 가드로 회피.
+  #   - cron: '*/10 * * * *'
   workflow_dispatch: {}
 
 jobs:
