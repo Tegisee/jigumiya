@@ -178,6 +178,9 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const doneRef = useRef(false);
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 단계적 재시도: 2초, 4초, 6초 (sourceKey reset 블록에서 참조하므로 위로 이동)
+  const retryDelays = [2000, 4000, 6000];
+  const retryIndexRef = useRef(0);
 
   // iOS/Android 공통: URL 직접 로드
   const activeHtml = html || null;
@@ -202,10 +205,6 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
       }
     }, 20000);
   }
-
-  // 단계적 재시도: 2초, 4초, 6초
-  const retryDelays = [2000, 4000, 6000];
-  const retryIndexRef = useRef(0);
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
@@ -251,7 +250,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
             injectedRef.current = false;
             scheduleInject();
           } else {
-            console.warn('[Scraper] 가격X — 재시도 소진');
+            // 외부 20s timeout 의존하지 말고 즉시 onError — iOS 무한로딩 fix
+            console.warn('[Scraper] 가격X — 재시도 소진, onError 호출');
+            doneRef.current = true;
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            onError();
           }
         } else if (data.type === 'ERROR') {
           console.error('[Scraper] JS 에러:', data.message, data.stack);

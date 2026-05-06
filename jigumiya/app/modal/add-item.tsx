@@ -61,6 +61,23 @@ async function fetchWithTimeout(
 }
 
 /**
+ * Coupang 단축 링크(link.coupang.com/a/...)는 3xx가 아니라
+ * `redirectWebUrl = '...\\x3D...';` 형태의 JS 코드를 담은 200 HTML을 반환한다.
+ * hex escape(\\xNN)를 디코드해 실제 vp URL을 추출 — Functions resolver 실패 시
+ * 클라이언트 fallback에서 동일 로직으로 vp URL 확보 (functions/src/index.ts 미러).
+ */
+function extractRedirectUrlFromHtml(html: string): string | null {
+  const match = html.match(
+    /redirectWebUrl\s*=\s*['"]((?:\\x[0-9a-fA-F]{2}|[^'"\\])+)['"]/,
+  );
+  if (!match) return null;
+  const decoded = match[1].replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  );
+  return decoded.includes('coupang.com') ? decoded : null;
+}
+
+/**
  * URL 후보 여러 개에서 productId/vendorItemId 추출 (먼저 잡히는 값 채택).
  * 단축 URL(link.coupang.com)이 resolve 실패해 남은 경우라도 affiliate/원본 URL에서 잡힐 수 있어
  * 후보 다중 시도가 하트 버튼(productId 의존)의 누락을 줄여줌.
@@ -202,10 +219,10 @@ export default function AddItemModal() {
     let affiliate = parsedUrl;
 
     const t0 = Date.now();
-    // 5s timeout — 내부에서 1.5s auth 대기 + Functions 응답까지. 초과 시 client fallback으로 진입.
+    // 8s timeout — 내부 1.5s auth 대기 + Functions 응답. 5s는 너무 빡빡해서 8s로 복원.
     const functionsResult = await withTimeout(
       callResolveAffiliate(parsedUrl),
-      5000,
+      8000,
       'resolveAffiliate',
     ).catch((e) => {
       console.warn('[AddItem] callResolveAffiliate timeout/error:', e);
@@ -220,19 +237,42 @@ export default function AddItemModal() {
       console.log('[AddItem] Functions 성공:', affiliate.slice(0, 60));
     } else {
       console.warn('[AddItem] Functions 실패 → client fallback:', functionsResult.error, functionsResult.detail);
+      // link.coupang.com 단축 URL: Coupang은 3xx가 아니라 200 + JS hex-escape redirectWebUrl로 응답.
+      // (1) 30x Location 헤더 시도 → (2) HTML body에서 redirectWebUrl 파싱 → (3) redirect:'follow' 시도.
       if (parsedUrl.includes('link.coupang.com')) {
         try {
           const res = await fetchWithTimeout(parsedUrl, { redirect: 'manual' }, 5000);
           const location = res.headers.get('location');
           if (location && location.includes('coupang.com')) {
             resolved = location;
-          } else {
-            const res2 = await fetchWithTimeout(parsedUrl, { redirect: 'follow' }, 5000);
-            if (res2.url && res2.url.includes('coupang.com')) resolved = res2.url;
+            console.log('[AddItem] fallback Location:', resolved.slice(0, 80));
+          } else if (res.status === 200) {
+            const html = await res.text();
+            const extracted = extractRedirectUrlFromHtml(html);
+            if (extracted) {
+              resolved = extracted;
+              console.log('[AddItem] fallback redirectWebUrl 파싱:', resolved.slice(0, 80));
+            }
           }
-        } catch {}
+          if (resolved === parsedUrl) {
+            const res2 = await fetchWithTimeout(parsedUrl, { redirect: 'follow' }, 5000);
+            if (res2.url && res2.url.includes('coupang.com') && res2.url !== parsedUrl) {
+              resolved = res2.url;
+              console.log('[AddItem] fallback follow url:', resolved.slice(0, 80));
+            } else if (res2.status === 200) {
+              const html2 = await res2.text();
+              const extracted2 = extractRedirectUrlFromHtml(html2);
+              if (extracted2) {
+                resolved = extracted2;
+                console.log('[AddItem] fallback follow redirectWebUrl:', resolved.slice(0, 80));
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[AddItem] fallback resolve 실패:', e);
+        }
       }
-      if (hasCoupangApiKeys() && resolved.includes('coupang.com')) {
+      if (hasCoupangApiKeys() && resolved.includes('coupang.com') && resolved !== parsedUrl) {
         try {
           const deepLink = await withTimeout(
             generateDeepLink(resolved),

@@ -2,7 +2,6 @@ import { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
@@ -14,6 +13,7 @@ import {
   Share,
   Platform,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -289,7 +289,14 @@ export default function DetailScreen() {
         {/* Product Info */}
         <View style={styles.productSection}>
           {item.thumbnail ? (
-            <Image source={{ uri: item.thumbnail }} style={styles.thumbnailLargeImg} />
+            <Image
+              source={{ uri: item.thumbnail }}
+              style={styles.thumbnailLargeImg}
+              cachePolicy="memory-disk"
+              recyclingKey={item.id}
+              contentFit="cover"
+              transition={0}
+            />
           ) : (
             <View style={styles.thumbnailLarge}>
               <Ionicons name="bag-handle-outline" size={48} color={theme.subtext} />

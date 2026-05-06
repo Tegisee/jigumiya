@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Linking,
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -81,41 +81,51 @@ export default function CoupangPLScreen() {
     );
   }, [products, activeTab, brandByProductId]);
 
-  const handleBuy = (item: CoupangPLProductItem) => {
+  const handleBuy = useCallback((item: CoupangPLProductItem) => {
     if (!item.deepLink) return;
     try {
       Linking.openURL(item.deepLink);
     } catch {}
-  };
+  }, []);
 
-  const renderItem = ({ item }: { item: CoupangPLProductItem }) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => handleBuy(item)}
-      activeOpacity={0.8}
-    >
-      {item.productImage ? (
-        <Image source={{ uri: item.productImage }} style={styles.image} />
-      ) : (
-        <View style={[styles.image, styles.imagePlaceholder]}>
-          <Ionicons name="bag-outline" size={28} color={theme.subtext} />
-        </View>
-      )}
-      <View style={styles.info}>
-        <Text style={styles.name} numberOfLines={2}>
-          {item.productName}
-        </Text>
-        <View style={styles.priceRow}>
-          <Text style={styles.price}>
-            {item.productPrice.toLocaleString()}원
+  const renderItem = useCallback(
+    ({ item }: { item: CoupangPLProductItem }) => (
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => handleBuy(item)}
+        activeOpacity={0.8}
+      >
+        {item.productImage ? (
+          <Image
+            source={{ uri: item.productImage }}
+            style={styles.image}
+            cachePolicy="memory-disk"
+            recyclingKey={item.productId}
+            contentFit="cover"
+            transition={0}
+          />
+        ) : (
+          <View style={[styles.image, styles.imagePlaceholder]}>
+            <Ionicons name="bag-outline" size={28} color={theme.subtext} />
+          </View>
+        )}
+        <View style={styles.info}>
+          <Text style={styles.name} numberOfLines={2}>
+            {item.productName}
           </Text>
-          {item.isRocket && <Text style={styles.badge}>🚀</Text>}
-          {item.isFreeShipping && (
-            <Text style={styles.freeShip}>무료배송</Text>
-          )}
+          <View style={styles.priceRow}>
+            <Text style={styles.price}>
+              {item.productPrice.toLocaleString()}원
+            </Text>
+            {item.isRocket && <Text style={styles.badge}>🚀</Text>}
+            {item.isFreeShipping && (
+              <Text style={styles.freeShip}>무료배송</Text>
+            )}
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    ),
+    [handleBuy],
   );
 
   return (

@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Linking,
   ScrollView,
   ActivityIndicator,
   AppState,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -58,11 +58,11 @@ export default function TodayBestScreen() {
     });
   };
 
-  const handleBuy = (item: BestProductItem) => {
+  const handleBuy = useCallback((item: BestProductItem) => {
     try {
       Linking.openURL(item.productUrl);
     } catch {}
-  };
+  }, []);
 
   const renderHorizontalCard = (item: BestProductItem) => (
     <TouchableOpacity
@@ -73,7 +73,14 @@ export default function TodayBestScreen() {
     >
       <View style={styles.imageWrap}>
         {item.productImage ? (
-          <Image source={{ uri: item.productImage }} style={styles.hImage} />
+          <Image
+            source={{ uri: item.productImage }}
+            style={styles.hImage}
+            cachePolicy="memory-disk"
+            recyclingKey={String(item.productId)}
+            contentFit="cover"
+            transition={0}
+          />
         ) : (
           <View style={[styles.hImage, styles.imagePlaceholder]}>
             <Ionicons name="bag-outline" size={28} color={theme.subtext} />
@@ -104,7 +111,14 @@ export default function TodayBestScreen() {
     >
       <View style={styles.imageWrap}>
         {item.productImage ? (
-          <Image source={{ uri: item.productImage }} style={styles.vImage} />
+          <Image
+            source={{ uri: item.productImage }}
+            style={styles.vImage}
+            cachePolicy="memory-disk"
+            recyclingKey={String(item.productId)}
+            contentFit="cover"
+            transition={0}
+          />
         ) : (
           <View style={[styles.vImage, styles.imagePlaceholder]}>
             <Ionicons name="bag-outline" size={24} color={theme.subtext} />
@@ -128,44 +142,82 @@ export default function TodayBestScreen() {
     </TouchableOpacity>
   );
 
-  const renderCategory = ({ item: cat }: { item: CategoryBest }) => {
-    const isExpanded = expanded.has(cat.categoryId);
-    const products = cat.products ?? [];
-    const preview = products.slice(0, PREVIEW_COUNT);
+  // 평탄화 — 펼친 카테고리의 상품을 개별 FlatList row로 노출 (가상화 활용).
+  // 비펼침 카테고리는 'preview' row 하나에 가로 스크롤 묶음.
+  type Row =
+    | { type: 'header'; categoryId: number; categoryName: string; isExpanded: boolean; total: number }
+    | { type: 'preview'; categoryId: number; products: BestProductItem[]; total: number }
+    | { type: 'product'; categoryId: number; product: BestProductItem };
 
-    return (
-      <View style={styles.catBlock}>
-        <View style={styles.catHeader}>
-          <Text style={styles.catTitle}>{cat.categoryName}</Text>
-          <TouchableOpacity
-            onPress={() => toggleExpand(cat.categoryId)}
-            hitSlop={6}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.moreText}>
-              {isExpanded ? '접기' : '더보기'}
-              <Text style={styles.moreArrow}>
-                {isExpanded ? ' ▲' : ' ▼'}
-              </Text>
-            </Text>
-          </TouchableOpacity>
-        </View>
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    for (const cat of categories) {
+      const products = cat.products ?? [];
+      const isExpanded = expanded.has(cat.categoryId);
+      out.push({
+        type: 'header',
+        categoryId: cat.categoryId,
+        categoryName: cat.categoryName,
+        isExpanded,
+        total: products.length,
+      });
+      if (isExpanded) {
+        for (const p of products) {
+          out.push({ type: 'product', categoryId: cat.categoryId, product: p });
+        }
+      } else {
+        out.push({
+          type: 'preview',
+          categoryId: cat.categoryId,
+          products: products.slice(0, PREVIEW_COUNT),
+          total: products.length,
+        });
+      }
+    }
+    return out;
+  }, [categories, expanded]);
 
-        {isExpanded ? (
-          <View style={styles.expandedList}>
-            {products.map(renderExpandedRow)}
+  const keyExtractor = useCallback((row: Row, idx: number): string => {
+    if (row.type === 'header') return `h-${row.categoryId}`;
+    if (row.type === 'preview') return `p-${row.categoryId}`;
+    return `pr-${row.categoryId}-${row.product.productId}-${idx}`;
+  }, []);
+
+  const renderRow = useCallback(
+    ({ item }: { item: Row }) => {
+      if (item.type === 'header') {
+        return (
+          <View style={styles.catHeader}>
+            <Text style={styles.catTitle}>{item.categoryName}</Text>
+            {item.total > PREVIEW_COUNT && (
+              <TouchableOpacity
+                onPress={() => toggleExpand(item.categoryId)}
+                hitSlop={6}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.moreText}>
+                  {item.isExpanded ? '접기' : '더보기'}
+                  <Text style={styles.moreArrow}>
+                    {item.isExpanded ? ' ▲' : ' ▼'}
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
-        ) : (
+        );
+      }
+      if (item.type === 'preview') {
+        return (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.hScroll}
           >
-            {preview.map(renderHorizontalCard)}
-            {products.length > PREVIEW_COUNT && (
+            {item.products.map(renderHorizontalCard)}
+            {item.total > PREVIEW_COUNT && (
               <TouchableOpacity
                 style={styles.hMoreCard}
-                onPress={() => toggleExpand(cat.categoryId)}
+                onPress={() => toggleExpand(item.categoryId)}
                 activeOpacity={0.8}
               >
                 <Ionicons
@@ -174,15 +226,17 @@ export default function TodayBestScreen() {
                   color={theme.primary}
                 />
                 <Text style={styles.hMoreText}>
-                  더보기{'\n'}({products.length}개)
+                  더보기{'\n'}({item.total}개)
                 </Text>
               </TouchableOpacity>
             )}
           </ScrollView>
-        )}
-      </View>
-    );
-  };
+        );
+      }
+      return renderExpandedRow(item.product);
+    },
+    [],
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -208,14 +262,14 @@ export default function TodayBestScreen() {
         </View>
       ) : (
         <FlatList
-          data={categories}
-          keyExtractor={(c) => String(c.categoryId)}
-          renderItem={renderCategory}
+          data={rows}
+          keyExtractor={keyExtractor}
+          renderItem={renderRow}
           contentContainerStyle={styles.listContent}
           removeClippedSubviews
-          initialNumToRender={4}
-          maxToRenderPerBatch={3}
-          windowSize={5}
+          initialNumToRender={8}
+          maxToRenderPerBatch={6}
+          windowSize={7}
           updateCellsBatchingPeriod={50}
           ListFooterComponent={
             <Text style={styles.affiliateText}>
@@ -250,6 +304,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
+    paddingTop: 18,
     marginBottom: 10,
   },
   catTitle: {
@@ -363,6 +418,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     padding: 8,
+    marginHorizontal: 16,
+    marginBottom: 8,
   },
   vImage: {
     width: 56,

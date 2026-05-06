@@ -4,13 +4,13 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Alert,
   Linking,
   Animated,
   PanResponder,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -142,7 +142,14 @@ export default function FavoritesScreen() {
             activeOpacity={0.8}
           >
             {product.thumbnail ? (
-              <Image source={{ uri: product.thumbnail }} style={styles.image} />
+              <Image
+                source={{ uri: product.thumbnail }}
+                style={styles.image}
+                cachePolicy="memory-disk"
+                recyclingKey={product.productId}
+                contentFit="cover"
+                transition={0}
+              />
             ) : (
               <View style={[styles.image, styles.imagePlaceholder]}>
                 <Ionicons name="bag-outline" size={28} color={theme.subtext} />

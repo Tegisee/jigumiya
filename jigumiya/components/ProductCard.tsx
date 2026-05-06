@@ -2,13 +2,13 @@ import { memo, useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   Animated,
   PanResponder,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../constants/theme';
@@ -142,7 +142,14 @@ function ProductCardImpl({ item }: Props) {
 
           <View style={styles.row}>
             {item.thumbnail ? (
-              <Image source={{ uri: item.thumbnail }} style={styles.thumbnailImg} />
+              <Image
+                source={{ uri: item.thumbnail }}
+                style={styles.thumbnailImg}
+                cachePolicy="memory-disk"
+                recyclingKey={item.id}
+                contentFit="cover"
+                transition={0}
+              />
             ) : (
               <View style={styles.thumbnail}>
                 <Ionicons name="bag-handle-outline" size={28} color={theme.subtext} />
@@ -173,7 +180,8 @@ function ProductCardImpl({ item }: Props) {
             </View>
           </View>
 
-          {item.priceHistory.length > 1 && (
+          {/* SparklineChart 내부가 5개 미만이면 null 반환 — chartWrap도 같이 회피 */}
+          {item.priceHistory.length >= 5 && (
             <View style={styles.chartWrap}>
               <SparklineChart priceHistory={item.priceHistory} />
             </View>

@@ -4,12 +4,12 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
-  Image,
   StyleSheet,
   Linking,
   ActivityIndicator,
   AppState,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -96,7 +96,14 @@ export default function PriceDropsScreen() {
         activeOpacity={0.8}
       >
         {item.thumbnail ? (
-          <Image source={{ uri: item.thumbnail }} style={styles.image} />
+          <Image
+            source={{ uri: item.thumbnail }}
+            style={styles.image}
+            cachePolicy="memory-disk"
+            recyclingKey={item.productId}
+            contentFit="cover"
+            transition={0}
+          />
         ) : (
           <View style={[styles.image, styles.imagePlaceholder]}>
             <Ionicons name="bag-outline" size={28} color={theme.subtext} />

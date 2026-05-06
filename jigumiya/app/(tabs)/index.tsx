@@ -7,10 +7,10 @@ import {
   StyleSheet,
   AppState,
   Share,
-  Image,
   ScrollView,
   Linking,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -98,7 +98,14 @@ export default function HomeScreen() {
       activeOpacity={0.8}
     >
       {item.productImage ? (
-        <Image source={{ uri: item.productImage }} style={styles.goldboxImage} />
+        <Image
+          source={{ uri: item.productImage }}
+          style={styles.goldboxImage}
+          cachePolicy="memory-disk"
+          recyclingKey={item.productId}
+          contentFit="cover"
+          transition={0}
+        />
       ) : (
         <View style={[styles.goldboxImage, styles.goldboxImagePlaceholder]}>
           <Ionicons name="bag-outline" size={16} color={theme.subtext} />
