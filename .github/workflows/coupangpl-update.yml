@@ -1,0 +1,38 @@
+name: CoupangPL Updater
+
+# 매일 07:30 KST = 22:30 UTC (전일)
+# /v2/.../products/coupangPL 1콜 (limit 100). productUrl이 이미 affiliate라 deeplink 변환 없음 — 1콜/일.
+# rate-limited 감지 시 즉시 종료 (당일 재실행 없음).
+
+on:
+  schedule:
+    - cron: '30 22 * * *'   # 07:30 KST
+  workflow_dispatch: {}
+
+jobs:
+  update-coupangpl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: scripts/coupangpl-updater
+        run: npm install
+
+      - name: Build TypeScript
+        working-directory: scripts/coupangpl-updater
+        run: npx tsc
+
+      - name: Run coupangPL updater
+        working-directory: scripts/coupangpl-updater
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          COUPANG_ACCESS_KEY: ${{ secrets.COUPANG_ACCESS_KEY }}
+          COUPANG_SECRET_KEY: ${{ secrets.COUPANG_SECRET_KEY }}
+        run: node dist/index.js
