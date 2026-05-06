@@ -202,9 +202,10 @@ export default function AddItemModal() {
     let affiliate = parsedUrl;
 
     const t0 = Date.now();
+    // 5s timeout — 내부에서 1.5s auth 대기 + Functions 응답까지. 초과 시 client fallback으로 진입.
     const functionsResult = await withTimeout(
       callResolveAffiliate(parsedUrl),
-      8000,
+      5000,
       'resolveAffiliate',
     ).catch((e) => {
       console.warn('[AddItem] callResolveAffiliate timeout/error:', e);

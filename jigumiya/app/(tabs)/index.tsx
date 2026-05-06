@@ -135,7 +135,12 @@ export default function HomeScreen() {
         {activeEvent && (
           <TouchableOpacity
             style={styles.eventBanner}
-            onPress={() => router.push('/today-best')}
+            onPress={() =>
+              router.push({
+                pathname: '/event-best',
+                params: { slug: activeEvent.event.slug },
+              })
+            }
             activeOpacity={0.85}
           >
             <Text style={styles.eventEmoji}>🌸</Text>
@@ -237,6 +242,11 @@ export default function HomeScreen() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => <ProductCard item={item} />}
         contentContainerStyle={styles.list}
+        removeClippedSubviews
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        windowSize={5}
+        updateCellsBatchingPeriod={50}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyText}>

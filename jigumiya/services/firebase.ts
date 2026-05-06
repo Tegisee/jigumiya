@@ -73,13 +73,45 @@ const resolveAffiliateCallable = httpsCallable<
 >(functions, 'resolveAndGenerateAffiliateUrl');
 
 /**
+ * Auth 복원 대기 — currentUser가 있거나 maxMs 경과까지.
+ *
+ * iOS 첫 실행 직후 add-item 모달 진입 시 AsyncStorage 복원이 아직이면
+ * Functions 호출이 인증 없이 즉시 실패 → 8s timeout 후 fallback이 발동되어
+ * 사용자에겐 "무한로딩"처럼 느껴짐. 짧게 기다려서 인증 정상화 시 Functions 정상 경로 사용.
+ */
+async function waitForAuthReady(maxMs: number): Promise<boolean> {
+  if (auth.currentUser) return true;
+  return new Promise<boolean>((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) finish(true);
+    });
+    const timer = setTimeout(() => finish(false), maxMs);
+  });
+}
+
+/**
  * Cloud Functions `resolveAndGenerateAffiliateUrl` 호출.
  * 서버가 link.coupang.com → vp URL resolve + /deeplink API 호출까지 일괄 처리.
  * 네트워크/배포 오류 시 { ok: false, error: 'callable_error' } 반환 — 예외는 내부 흡수.
+ *
+ * iOS 첫 1~2번째 상품 추가 무한로딩 fix: 인증 미준비 시 1.5s 대기 후 그래도 미준비면
+ * 즉시 fallback 신호 반환 (8s Functions timeout을 기다리지 않음).
  */
 export async function callResolveAffiliate(
   sharedUrl: string,
 ): Promise<ResolveAffiliateResult> {
+  const ready = await waitForAuthReady(1500);
+  if (!ready) {
+    return { ok: false, error: 'auth_not_ready' };
+  }
   try {
     const { data } = await resolveAffiliateCallable({ sharedUrl });
     return data;
@@ -96,6 +128,8 @@ export async function callResolveAffiliate(
 // sentinel은 functions/src/index.ts:256에서 coupang.com 미포함 시 즉시 early return →
 // 쿠팡 API 미호출(Rate Limit 0), 컨테이너 init만 트리거.
 export async function warmupResolveAffiliate(): Promise<void> {
+  const ready = await waitForAuthReady(1500);
+  if (!ready) return; // 인증 없으면 Functions가 거부 → cold-start 트리거 안 됨
   try {
     await resolveAffiliateCallable({ sharedUrl: 'https://__warmup__.local/' });
   } catch {
@@ -649,6 +683,22 @@ export async function fetchActiveJigumiyaEvent(): Promise<{
     return best;
   } catch (e) {
     console.warn('[event_best_jigumiya] 활성 이벤트 조회 실패:', e);
+    return null;
+  }
+}
+
+/**
+ * event_best_jigumiya/{slug} 단건 조회 (event-best 화면용).
+ */
+export async function fetchEventBySlug(
+  slug: string,
+): Promise<EventBestJigumiya | null> {
+  try {
+    const snap = await getDoc(doc(db, 'event_best_jigumiya', slug));
+    if (!snap.exists()) return null;
+    return snap.data() as EventBestJigumiya;
+  } catch (e) {
+    console.warn('[event_best_jigumiya] slug 조회 실패:', slug, e);
     return null;
   }
 }

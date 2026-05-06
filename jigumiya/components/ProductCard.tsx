@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -24,7 +24,7 @@ interface Props {
 const SWIPE_THRESHOLD = -80;
 const DELETE_BTN_WIDTH = 80;
 
-export function ProductCard({ item }: Props) {
+function ProductCardImpl({ item }: Props) {
   const router = useRouter();
   const removeItem = useAppStore((s) => s.removeItem);
   const [showDeleteOverlay, setShowDeleteOverlay] = useState(false);
@@ -307,3 +307,6 @@ const styles = StyleSheet.create({
     zIndex: 5,
   },
 });
+
+// 불필요한 리렌더 회피 — item 참조가 같으면 스킵 (홈 FlatList 부모 재렌더 시 이득)
+export const ProductCard = memo(ProductCardImpl, (prev, next) => prev.item === next.item);

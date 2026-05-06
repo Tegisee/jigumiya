@@ -12,6 +12,7 @@ import {
   Modal,
   ActivityIndicator,
   Share,
+  Platform,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,14 +26,12 @@ import { useFavoriteToggle } from '../../hooks/useFavoriteToggle';
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { trackedItems, removeItem, updateTargetPrice, updateItemPrice } = useAppStore();
+  const { trackedItems, removeItem, updateItemPrice } = useAppStore();
 
   // 알림 라우팅은 itemId=productId로 보내므로(notifier.ts) productId fallback 매칭 필수.
   // i.id(클라이언트 UUID) 또는 i.productId(쿠팡 상품 ID) 둘 다 허용.
   const item = trackedItems.find((i) => i.id === id || i.productId === id);
 
-  const [showPriceModal, setShowPriceModal] = useState(false);
-  const [newPrice, setNewPrice] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const [showAskModal, setShowAskModal] = useState(false);
@@ -93,7 +92,6 @@ export default function DetailScreen() {
   const prices = item.priceHistory.map((p) => p.price);
   const maxPrice = Math.max(...prices);
   const minPrice = Math.min(...prices);
-  const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
   const hasChartData = item.priceHistory.length > 1;
   const isAllSamePrice = hasChartData && new Set(prices).size === 1;
   const firstPrice = prices[0] ?? 0;
@@ -111,6 +109,14 @@ export default function DetailScreen() {
   const CHART_GREEN = '#22C55E';
   const chartColor =
     trend === 'drop' ? CHART_RED : trend === 'up' ? CHART_BLUE : theme.subtext;
+
+  // 상단 hero용 상태 라벨 + 색
+  const statusText =
+    trend === 'drop'
+      ? '📉 가격 하락 감지'
+      : trend === 'up'
+        ? '📈 가격 상승 감지'
+        : '➡️ 가격 변동 없음';
 
   // 추적 기간 계산 (일)
   const trackingDays = item.priceHistory.length >= 2
@@ -156,18 +162,6 @@ export default function DetailScreen() {
 
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
-
-  // 다음 가격 확인 시간 계산 (KST 08/14/21시)
-  const getNextCheckTime = () => {
-    const now = new Date();
-    const kstOffset = 9 * 60;
-    const kstMinutes = now.getUTCHours() * 60 + now.getUTCMinutes() + kstOffset;
-    const kstHour = Math.floor((kstMinutes % 1440) / 60);
-    const checkHours = [8, 14, 21];
-    const next = checkHours.find((h) => h > kstHour);
-    if (next !== undefined) return `오늘 ${next}:00`;
-    return '내일 08:00';
-  };
 
   // 가격 하락 여부 (이전 가격 대비)
   const hasPriceDrop = item.priceHistory.length >= 2 &&
@@ -232,15 +226,19 @@ export default function DetailScreen() {
     } catch {}
   };
 
-  const handleSendAsk = async (line: string) => {
+  const handleSendAsk = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
+    // 입력텍스트\n\n상품명\n링크 (iOS Share UI는 링크 미리보기 카드를 별도 렌더)
     const message = `${trimmed}\n\n${item.productName}\n${item.url}`;
     setShowAskModal(false);
     setCustomAsk('');
-    try {
-      await Share.share({ message });
-    } catch {}
+    // iOS: Share 시트는 root view를 점유 — 모달 dismiss 애니메이션 끝나기 전 호출 시 시트가 안 뜸.
+    // 안드로이드는 즉시 호출해도 무관.
+    const delay = Platform.OS === 'ios' ? 350 : 0;
+    setTimeout(() => {
+      Share.share({ message }).catch(() => {});
+    }, delay);
   };
 
   const handleDelete = () => {
@@ -255,17 +253,6 @@ export default function DetailScreen() {
         },
       },
     ]);
-  };
-
-  const handleUpdatePrice = () => {
-    const price = parseInt(newPrice, 10);
-    if (!price || price <= 0) {
-      Alert.alert('오류', '올바른 가격을 입력해주세요');
-      return;
-    }
-    updateTargetPrice(item.id, price);
-    setShowPriceModal(false);
-    setNewPrice('');
   };
 
   return (
@@ -316,60 +303,16 @@ export default function DetailScreen() {
           </View>
         </View>
 
-        {/* 목표가 */}
-        <TouchableOpacity
-          style={styles.targetRow}
-          onPress={() => {
-            setNewPrice(hasTarget ? String(item.targetPrice) : '');
-            setShowPriceModal(true);
-          }}
-          activeOpacity={0.7}
-        >
-          <View style={styles.gridLabelRow}>
-            <Text style={styles.gridLabel}>목표가</Text>
-            <Ionicons name="pencil" size={12} color={theme.subtext} />
-          </View>
-          {hasTarget ? (
-            <Text style={[styles.gridValue, { color: theme.primary }]}>
-              {item.targetPrice!.toLocaleString()}원
-            </Text>
-          ) : (
-            <Text style={[styles.gridValue, { color: theme.subtext }]}>
-              설정하기
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        {/* Price Stats */}
-        <View style={styles.gridSection}>
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>현재가</Text>
-              <Text style={styles.gridValue}>
-                {item.currentPrice.toLocaleString()}원
-              </Text>
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>최저가</Text>
-              <Text style={[styles.gridValue, { color: '#4CAF50' }]}>
-                {minPrice.toLocaleString()}원
-              </Text>
-            </View>
-          </View>
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>최고가</Text>
-              <Text style={[styles.gridValue, { color: '#FF4444' }]}>
-                {maxPrice.toLocaleString()}원
-              </Text>
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.gridLabel}>평균가</Text>
-              <Text style={styles.gridValue}>
-                {avgPrice.toLocaleString()}원
-              </Text>
-            </View>
-          </View>
+        {/* 현재가 + 상태 hero */}
+        <View style={styles.priceHero}>
+          <Text style={styles.priceHeroValue}>
+            {item.currentPrice > 0
+              ? `${item.currentPrice.toLocaleString()}원`
+              : '가격 정보 없음'}
+          </Text>
+          <Text style={[styles.priceHeroStatus, { color: chartColor }]}>
+            {statusText}
+          </Text>
         </View>
 
         {/* Chart */}
@@ -491,43 +434,11 @@ export default function DetailScreen() {
             </View>
           ) : (
             <View style={styles.chartEmpty}>
-              <View style={styles.emptyPriceRow}>
-                <Text style={styles.chartSinglePrice}>
-                  {item.currentPrice > 0
-                    ? `${item.currentPrice.toLocaleString()}원`
-                    : '가격 정보 없음'}
-                </Text>
-                {item.currentPrice > 0 && hasTarget && item.currentPrice > item.targetPrice! && (
-                  <Text style={styles.emptyTargetDiff}>
-                    목표가까지 -{(item.currentPrice - item.targetPrice!).toLocaleString()}원
-                  </Text>
-                )}
-                {item.currentPrice > 0 && hasTarget && item.currentPrice <= item.targetPrice! && (
-                  <Text style={[styles.emptyTargetDiff, { color: '#4CAF50' }]}>
-                    목표가 이하
-                  </Text>
-                )}
-                {item.currentPrice > 0 && !hasTarget && (
-                  <Text style={styles.emptyTargetDiff}>
-                    최저가 갱신 시 알림을 보내드려요
-                  </Text>
-                )}
-              </View>
-              <View style={styles.emptyDivider} />
-              <View style={styles.emptyInfoList}>
-                <View style={styles.emptyInfoRow}>
-                  <Ionicons name="calendar-outline" size={14} color={theme.subtext} />
-                  <Text style={styles.emptyInfoText}>추적 시작: {dateStr}</Text>
-                </View>
-                <View style={styles.emptyInfoRow}>
-                  <Ionicons name="time-outline" size={14} color={theme.subtext} />
-                  <Text style={styles.emptyInfoText}>다음 확인: {getNextCheckTime()}</Text>
-                </View>
-                <View style={styles.emptyInfoRow}>
-                  <Ionicons name="bar-chart-outline" size={14} color={theme.subtext} />
-                  <Text style={styles.emptyInfoText}>데이터 축적 중 — 내일부터 그래프가 표시됩니다</Text>
-                </View>
-              </View>
+              <Ionicons name="bar-chart-outline" size={32} color={theme.subtext} />
+              <Text style={styles.chartEmptyTitle}>데이터 축적 중</Text>
+              <Text style={styles.chartEmptyDesc}>
+                내일부터 가격 변동 그래프가 표시됩니다
+              </Text>
             </View>
           )}
         </View>
@@ -544,14 +455,13 @@ export default function DetailScreen() {
           </View>
         )}
 
-        {/* 친구에게 사주세요 */}
+        {/* 사달라고 조르기 */}
         <TouchableOpacity
           style={styles.askButton}
           onPress={() => setShowAskModal(true)}
           activeOpacity={0.85}
         >
-          <Text style={styles.askButtonEmoji}>🎁</Text>
-          <Text style={styles.askButtonText}>친구에게 사주세요</Text>
+          <Text style={styles.askButtonText}>사달라고 조르기 🥺</Text>
           <Ionicons name="chevron-forward" size={16} color={theme.text} />
         </TouchableOpacity>
 
@@ -594,42 +504,7 @@ export default function DetailScreen() {
         </View>
       </View>
 
-      {/* Target Price Edit Modal */}
-      <Modal visible={showPriceModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>목표가 수정</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={newPrice}
-              onChangeText={setNewPrice}
-              keyboardType="number-pad"
-              placeholder="목표 가격 입력"
-              placeholderTextColor={theme.subtext}
-              autoFocus
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => {
-                  setShowPriceModal(false);
-                  setNewPrice('');
-                }}
-              >
-                <Text style={styles.modalCancelText}>취소</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalConfirmBtn}
-                onPress={handleUpdatePrice}
-              >
-                <Text style={styles.modalConfirmText}>확인</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* 친구에게 사주세요 — 멘트 선택 모달 */}
+      {/* 사달라고 조르기 — 멘트 선택 모달 */}
       <Modal visible={showAskModal} transparent animationType="slide">
         <View style={styles.askOverlay}>
           <TouchableOpacity
@@ -639,7 +514,7 @@ export default function DetailScreen() {
           />
           <View style={styles.askSheet}>
             <View style={styles.askHandle} />
-            <Text style={styles.askTitle}>친구에게 보낼 메시지</Text>
+            <Text style={styles.askTitle}>사달라고 조르기 🥺</Text>
             {ASK_MESSAGES.map((msg) => (
               <TouchableOpacity
                 key={msg}
@@ -775,44 +650,26 @@ const styles = StyleSheet.create({
     borderRadius: 1.5,
     backgroundColor: theme.subtext,
   },
-  targetRow: {
-    backgroundColor: theme.card,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-    marginTop: 8,
-  },
-  gridSection: {
-    gap: 10,
-    marginTop: 10,
-  },
-  gridRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  gridItem: {
-    flex: 1,
-    backgroundColor: theme.card,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  gridLabelRow: {
-    flexDirection: 'row',
+  priceHero: {
     alignItems: 'center',
-    gap: 4,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    marginTop: 8,
+    backgroundColor: theme.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 6,
   },
-  gridLabel: {
-    fontSize: 12,
-    color: theme.subtext,
-    marginBottom: 6,
-  },
-  gridValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
+  priceHeroValue: {
     color: theme.text,
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  priceHeroStatus: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   chartSection: {
     marginTop: 24,
@@ -883,43 +740,23 @@ const styles = StyleSheet.create({
   chartEmpty: {
     backgroundColor: theme.card,
     borderRadius: 12,
-    padding: 20,
+    paddingVertical: 32,
+    paddingHorizontal: 20,
     borderWidth: 1,
     borderColor: theme.border,
+    alignItems: 'center',
     gap: 8,
   },
-  emptyPriceRow: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  chartSinglePrice: {
+  chartEmptyTitle: {
     color: theme.text,
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '600',
   },
-  emptyTargetDiff: {
-    color: theme.subtext,
-    fontSize: 12,
-    marginTop: 4,
-  },
-  emptyDivider: {
-    height: 1,
-    backgroundColor: theme.border,
-    marginVertical: 4,
-  },
-  emptyInfoList: {
-    gap: 10,
-    paddingVertical: 4,
-  },
-  emptyInfoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  emptyInfoText: {
+  chartEmptyDesc: {
     color: theme.subtext,
     fontSize: 13,
-    flex: 1,
+    textAlign: 'center',
+    lineHeight: 18,
   },
   insightSection: {
     marginTop: 12,
@@ -986,65 +823,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: theme.card,
-    borderRadius: 16,
-    padding: 24,
-    width: '80%',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: theme.text,
-    marginBottom: 16,
-  },
-  modalInput: {
-    backgroundColor: theme.background,
-    borderRadius: 10,
-    padding: 14,
-    fontSize: 16,
-    color: theme.text,
-    borderWidth: 1,
-    borderColor: theme.border,
-    marginBottom: 16,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  modalCancelBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  modalCancelText: {
-    color: theme.subtext,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  modalConfirmBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: theme.primary,
-    alignItems: 'center',
-  },
-  modalConfirmText: {
-    color: '#000000',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-
-  // ── 친구에게 사주세요 ──
+  // ── 사달라고 조르기 ──
   askButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1056,9 +835,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 105, 180, 0.35)',
-  },
-  askButtonEmoji: {
-    fontSize: 18,
   },
   askButtonText: {
     flex: 1,

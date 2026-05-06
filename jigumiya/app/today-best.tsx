@@ -212,6 +212,11 @@ export default function TodayBestScreen() {
           keyExtractor={(c) => String(c.categoryId)}
           renderItem={renderCategory}
           contentContainerStyle={styles.listContent}
+          removeClippedSubviews
+          initialNumToRender={4}
+          maxToRenderPerBatch={3}
+          windowSize={5}
+          updateCellsBatchingPeriod={50}
           ListFooterComponent={
             <Text style={styles.affiliateText}>
               이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의

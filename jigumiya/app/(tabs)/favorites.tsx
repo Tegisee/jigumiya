@@ -182,6 +182,11 @@ export default function FavoritesScreen() {
         keyExtractor={(item) => item.productId}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
+        removeClippedSubviews
+        initialNumToRender={8}
+        maxToRenderPerBatch={6}
+        windowSize={5}
+        updateCellsBatchingPeriod={50}
         ListEmptyComponent={
           loading ? null : (
             <View style={styles.empty}>

@@ -157,6 +157,10 @@ export default function RootLayout() {
           options={{ animation: 'slide_from_right' }}
         />
         <Stack.Screen
+          name="event-best"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
           name="coupang-pl"
           options={{ animation: 'slide_from_right' }}
         />

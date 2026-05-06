@@ -20,6 +20,25 @@ import type { CoupangPLDoc, CoupangPLProductItem } from '../types';
 const ALL_TAB = '전체';
 const FALLBACK_TAB = '기타';
 
+// 쿠팡 PB 브랜드 — productName에서 우선순위 순서대로 감지 (긴 이름 먼저 매칭).
+// API 응답에 categoryName이 비어있는 경우가 많아 productName 기반 자동 분류로 대체.
+const BRANDS = [
+  '베이스알파에센셜',
+  '꼬리별',
+  '곰곰',
+  '코멧',
+  '탐사',
+  '줌',
+] as const;
+
+function detectBrand(productName: string): string {
+  if (!productName) return FALLBACK_TAB;
+  for (const b of BRANDS) {
+    if (productName.includes(b)) return b;
+  }
+  return FALLBACK_TAB;
+}
+
 export default function CoupangPLScreen() {
   const router = useRouter();
   const [doc, setDoc] = useState<CoupangPLDoc | null | undefined>(undefined);
@@ -38,26 +57,29 @@ export default function CoupangPLScreen() {
 
   const products = doc?.products ?? [];
 
-  // categoryName 으로 자동 탭 생성. 응답에 categoryName 없을 시 '기타'로 묶임.
-  const tabs = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of products) {
-      set.add(p.categoryName?.trim() || FALLBACK_TAB);
-    }
-    const sorted = Array.from(set).sort((a, b) => {
-      if (a === FALLBACK_TAB) return 1;
-      if (b === FALLBACK_TAB) return -1;
-      return a.localeCompare(b, 'ko');
-    });
-    return [ALL_TAB, ...sorted];
+  // 브랜드 매핑은 한 번만 계산 (동일 product 재계산 방지)
+  const brandByProductId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products) map.set(p.productId, detectBrand(p.productName));
+    return map;
   }, [products]);
+
+  // 자동 탭: BRANDS 정의 순서로 노출 + 매칭된 항목만 + 마지막에 '기타'
+  const tabs = useMemo(() => {
+    const seen = new Set<string>();
+    for (const p of products) seen.add(brandByProductId.get(p.productId) || FALLBACK_TAB);
+    const ordered: string[] = [];
+    for (const b of BRANDS) if (seen.has(b)) ordered.push(b);
+    if (seen.has(FALLBACK_TAB)) ordered.push(FALLBACK_TAB);
+    return [ALL_TAB, ...ordered];
+  }, [products, brandByProductId]);
 
   const filtered = useMemo(() => {
     if (activeTab === ALL_TAB) return products;
     return products.filter(
-      (p) => (p.categoryName?.trim() || FALLBACK_TAB) === activeTab,
+      (p) => (brandByProductId.get(p.productId) || FALLBACK_TAB) === activeTab,
     );
-  }, [products, activeTab]);
+  }, [products, activeTab, brandByProductId]);
 
   const handleBuy = (item: CoupangPLProductItem) => {
     if (!item.deepLink) return;
@@ -92,11 +114,6 @@ export default function CoupangPLScreen() {
             <Text style={styles.freeShip}>무료배송</Text>
           )}
         </View>
-        {item.categoryName && (
-          <Text style={styles.catLabel} numberOfLines={1}>
-            {item.categoryName}
-          </Text>
-        )}
       </View>
     </TouchableOpacity>
   );
@@ -154,6 +171,11 @@ export default function CoupangPLScreen() {
             keyExtractor={(p) => p.productId}
             renderItem={renderItem}
             contentContainerStyle={styles.list}
+            removeClippedSubviews
+            initialNumToRender={10}
+            maxToRenderPerBatch={8}
+            windowSize={7}
+            updateCellsBatchingPeriod={50}
             ListEmptyComponent={
               <View style={styles.center}>
                 <Text style={styles.emptyDesc}>
@@ -253,10 +275,6 @@ const styles = StyleSheet.create({
   },
   badge: { fontSize: 13 },
   freeShip: {
-    color: theme.subtext,
-    fontSize: 11,
-  },
-  catLabel: {
     color: theme.subtext,
     fontSize: 11,
   },
