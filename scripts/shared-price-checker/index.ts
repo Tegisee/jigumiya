@@ -476,7 +476,14 @@ async function fetchActiveUsers(
 ): Promise<Map<string, UserState>> {
   const snap = await client.collection('users').get();
   const map = new Map<string, UserState>();
+  // 동일 expoPushToken을 공유하는 uid 중복 제거 — 재설치/익명 재로그인으로 같은 device token이
+  // 여러 user doc에 등록된 경우 한 사이클에 같은 token으로 N번 push 되는 사고 차단
+  // (5/6 morning_greeting 4건 발송 사고 원인). 첫 등장 uid만 보존
+  // (Firestore default ordering = doc id asc → 안정적). orphan uid의 trackers는
+  // 동기적으로 수령 불가 (regression) — 별도 cleanup으로 정리 예정.
+  const seenTokens = new Map<string, string>();
   let countJigumiya = 0;
+  let dupTokens = 0;
   let skipAigo = 0;
   let skipUnknown = 0;
   let skipOther = 0;
@@ -492,6 +499,15 @@ async function fetchActiveUsers(
       else skipOther++;
       continue;
     }
+    const firstUid = seenTokens.get(token);
+    if (firstUid) {
+      dupTokens++;
+      console.log(
+        `  [ActiveUsers] dup-token uid=${u.id} kept-first=${firstUid} token=${token.slice(0, 30)}…`,
+      );
+      continue;
+    }
+    seenTokens.set(token, u.id);
     countJigumiya++;
     map.set(u.id, {
       uid: u.id,
@@ -502,7 +518,7 @@ async function fetchActiveUsers(
     });
   }
   console.log(
-    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther}`,
+    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상, token-dedup ${dupTokens}건 제외) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther}`,
   );
   return map;
 }

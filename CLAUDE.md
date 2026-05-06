@@ -5,14 +5,27 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 작업할 항목의 sub MD도 함께 읽고 시작할 것.
 2026-04-30 이전 작업 이력은 docs/작업이력_archive.md 참조.
 
-## 가장 최근 (2026-05-06): 쿠팡 PL cron 신설 (07:30 KST)
+## 가장 최근 (2026-05-06): 쿠팡 PL cron + token dedup + 갤럭시S21+ 알림 0건 진단
 
-쿠팡 PL cron 추가 (커밋 `b4a4e16`):
+**1) 쿠팡 PL cron 신설** (커밋 `b4a4e16`, 검증 완료):
 - 위치: `scripts/coupangpl-updater/`, 워크플로 `.github/workflows/coupangpl-update.yml`
 - 엔드포인트 `/v2/.../products/coupangPL?limit=100` (v1 prefix 없음, goldbox와 동일 패턴)
 - 골드박스와 동시 실행 (07:30 KST, `30 22 * * *`), 1콜/일
-- productUrl이 이미 affiliate URL → deeplink 변환 없음
+- productUrl 이미 affiliate → deeplink 변환 없음
 - Firestore `coupang_pl/{YYYY-MM-DD KST}` 저장: `{ productId, productName, productPrice, productImage, deepLink, isRocket, isFreeShipping }`
+- 첫 수동 실행: 87개 저장 완료 (`coupang_pl/2026-05-06`)
+
+**2) fetchActiveUsers token dedup fix** (수정 완료, 미커밋):
+- 사고: 5/6 morning_greeting 4건 발송 — 동일 expoPushToken 공유 jigumiya uid 4개 (아이폰 1대 → 4 push)
+- 원인: `fetchActiveUsers`가 uid별 1엔트리, token 중복 dedup 없음 → 4개 uid 모두 payload 생성 → Expo가 같은 token으로 4번 발송
+- fix: `scripts/shared-price-checker/index.ts:474-516` `seenTokens: Map<token, firstUid>` 추가, 첫 등장 uid만 보존, dup uid 스킵 + 로그 (`[ActiveUsers] dup-token uid=… kept-first=…`). 모든 payload 빌드(morning/evening/drops/ups/targets) 자동 dedup
+- 알려진 trade-off: orphan uid에만 등록된 trackers는 알림 미수령 — 별도 cleanup 후속
+
+**3) 갤럭시S21+ 알림 0건 진단** (1회성 인스펙션):
+- 갤럭시 본체 doc 강력 후보: `QBsAA6mAJshIHjWi55qPhMRrtAo2` — Auth는 4/30 13:20 GMT 가입, **users/{uid} doc 자체 없음**, tracked 6개 보유 (productIds 정확 매칭 가능)
+- 근본 버그: `users/{uid}` doc 생성은 `services/firebase.ts:131 savePushToken` 단 1곳에서만 일어남 → 알림 권한 거부/`getExpoPushTokenAsync` 실패 시 user doc 절대 안 만들어짐 → fetchActiveUsers에서 unknown으로 분류 → 발송 제외. 그러나 tracked subcollection은 부모 doc 부재해도 작성 가능 → orphan 패턴 발생
+- 동일 패턴 추정: unknown 110개 다수 (특히 5/2~5/5 토큰 없는 신규 가입자)
+- 1회 응급 처리: `QBsAA6mAJ…` user doc 수동 생성 (`{ app:'jigumiya', notificationEnabled:true, expoPushToken:null, createdAt:serverTimestamp() }`). expoPushToken 채우려면 앱 재실행 → `savePushToken` 호출되어 merge 필요
 
 ## 직전 (2026-05-05 후반): A~E 알림 시스템 재설계 + 신규 cron 2종
 
@@ -95,7 +108,14 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 2. **🚨 검증** 골드박스 cron (07:30 KST) — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix 확인 (raw면 deeplink 추가)
 3. **🚨 검증** 이벤트 cron (02:35 KST) — D-7 윈도우 graceful exit / parentsday(05-08) 진입 시 갱신
 4. **🚨 검증** 쿠팡 PL cron (07:30 KST, 5/6 신설) — `coupang_pl/{YYYY-MM-DD}` 생성 + 100개 + productUrl affiliate 확인
-5. **빌드** 1.0.12 — 홈화면 UI 개선 + vendorItemId 저장 보강 + 가격그래프 버그 fix + iOS 무한로딩 fix(feed.tsx AppState 핸들러, fetch timeout, price-drops 재구독)
+5. **빌드** 1.0.12 — 다음 항목 통합:
+   - `ensureUserDoc()` 추가 — `signInAnonymously()` 직후 user doc 무조건 생성 (권한/토큰 무관, `app:'jigumiya'` + `createdAt` 박힘). 갤럭시 알림 0건 사고 근본 fix
+   - `registerForPushNotifications` 실패 시 재시도 로직 (네트워크/일시 실패 흡수)
+   - iOS 쿠팡 복귀 시 무한로딩 fix — `feed.tsx` AppState 핸들러 + fetch timeout + price-drops 재구독
+   - feed.tsx `generateDeepLink` 불필요 호출 제거 (이미 deepLink 보유 시 재변환 X)
+   - vendorItemId 저장 보강 (고정값 누락 케이스)
+   - 홈화면 UI 수정
+   - 가격그래프 Y축 버그 fix
 6. **확인** `category_best/{categoryId}.products[0].productUrl` prefix raw vs affiliate (Firebase Console 직접)
 7. **승급 대기** 1.0.11 iOS 심사 통과 → App Store 출시 / Android 내부 테스트 → 프로덕션 승급
 8. **갱신** 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` → 1.0.11 승급 후 "1.0.11"
@@ -120,13 +140,18 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 
 ### 2026-05-06 완료
 - [x] **신규** 쿠팡 PL cron 추가 (07:30 KST, 골드박스와 함께) — 커밋 `b4a4e16`
+- [x] **검증** 쿠팡 PL cron 첫 수동 실행 — `coupang_pl/2026-05-06` 87개 저장
+- [x] **fix** fetchActiveUsers token dedup — 갤럭시/아이폰 1대당 1 push 보장 (`seenTokens` Map)
+- [x] **진단** 갤럭시S21+ 알림 0건 원인 — `users/{uid}` doc 없음 + `savePushToken`이 유일한 doc 생성처라는 설계 결함
+- [x] **응급** `QBsAA6mAJshIHjWi55qPhMRrtAo2` user doc 수동 생성 (`app/notificationEnabled/expoPushToken:null/createdAt`)
 
 ### 2026-05-06 이후 미완
 - [ ] **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
 - [ ] **🚨 검증** 골드박스 cron (07:30 KST) 첫 실행 — 문서 생성 + productUrl affiliate
 - [ ] **🚨 검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
-- [ ] **🚨 검증** 쿠팡 PL cron (07:30 KST) 첫 실행 — `coupang_pl/{YYYY-MM-DD}` 생성 + 100개
-- [ ] **빌드** 1.0.12 — 홈화면 UI / vendorItemId / 가격그래프 / iOS 무한로딩 fix 통합
+- [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거
+- [ ] **검증** 다음 cron 사이클에 `[ActiveUsers] token-dedup N건 제외` 로그 표시 + 갤럭시/아이폰 사용자가 morning push 1건씩 수령
+- [ ] **빌드** 1.0.12 — `ensureUserDoc` + 토큰 재시도 + iOS 쿠팡 복귀 fix + feed.tsx generateDeepLink 정리 + vendorItemId 고정 + 홈화면 UI + 가격그래프 버그 (위 5번 항목)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 - [ ] **검증** 요일별 morning/evening 문구 매칭 (07:30/20:00 cron)
 - [ ] **승급 대기** 1.0.11 iOS 심사 / Android 내부 테스트 → 프로덕션
@@ -196,6 +221,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
   - 24h productId 가드: `users/{uid}.lastNotifications` (priceDrop[pid]/priceUp[pid]/targetReached[pid]/categoryBroadcast[legacy 보존]/broadcast.tier10|tier20[legacy])
   - flush 끝에서 successfulTokens 기반 dotted-path update — 발송 실패 시 가드 박히지 않음 (5/3 사고 fix `096c69a`)
 - **앱 필터링** (5/5 strict): `users/{uid}.app === 'jigumiya'` 단일 발송. aigo/unknown/null 모두 제외. aigoUsers 분리 변수 제거
+- **token dedup** (5/6, 갤럭시 4 push 사고 fix): `fetchActiveUsers`에서 `seenTokens: Map<token, firstUid>` — 동일 expoPushToken을 공유하는 uid 다수일 때 첫 등장 uid만 보존. dup uid는 `[ActiveUsers] dup-token uid=… kept-first=…` 로그 + 스킵. 모든 payload 빌드 자동 적용
 - **카테고리 round-robin** (`category-cycle.ts`, A로 재작성): shared_products 순회 끝난 후 매 사이클 1회. **fetch + 문서 갱신만** (가격 비교/알림 push 전체 제거). 3 컬렉션 각 2개씩 = 6콜/사이클. `category_best`은 `updateDoc:false`(02:00 cron 단독 갱신), baby/event는 set merge
 - **F sleep**: `DEFAULT_SLEEP_MS = 2000` 단일값. N=51 1회 ~70초
 - 시작 로그: `[Schedule] N=N interval=Nmin(peak/offPeak) since=N — 실행 진행` / `[Cycle] N=N daily=N cycles=N sleep=2000ms` / `[ActiveUsers] jigumiya=N (발송 대상) | skip: aigo=N unknown=N other=N` / `[CategoryCycle] {col} 처리 완료 api=N updated=N` / `[Skip-DropRateGuard] {pid} dropRate=...% — 알림 스킵`
@@ -214,6 +240,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - 페이로드: `{ date, products: [{ productId, productName, productPrice, productImage, deepLink, isRocket, isFreeShipping }], updatedAt }`
 - 호출량: 1콜/일. rate-limited 감지 시 즉시 종료 (당일 재실행 없음)
 - 골드박스 cron과 동시 실행 (07:30 KST 동일 슬롯)
+- 첫 수동 실행 (5/6): 87개 저장 (`coupang_pl/2026-05-06`, run `25421238308`, 16초)
 
 ### event-best-jigumiya-updater (2026-05-05 후반 신설, 매일 02:35 KST)
 - 위치: `scripts/event-best-jigumiya-updater/`, 워크플로우: `.github/workflows/event-best-jigumiya-update.yml` (`35 17 * * *`)
