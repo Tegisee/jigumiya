@@ -35,6 +35,8 @@ export interface CoupangProduct {
   productPrice: number;
   productImage: string;
   productUrl: string;
+  vendorItemId?: string; // 옵션(SKU) 고정 매칭용 — search 응답에 포함될 때만
+  itemId?: string;
 }
 
 export type SearchResult =
@@ -121,6 +123,8 @@ export async function searchProducts(
         productPrice: p.productPrice,
         productImage: p.productImage,
         productUrl: p.productUrl,
+        vendorItemId: p.vendorItemId != null ? String(p.vendorItemId) : undefined,
+        itemId: p.itemId != null ? String(p.itemId) : undefined,
       })),
     };
   }
@@ -145,12 +149,14 @@ export type FetchPriceResult =
 
 /**
  * productId 정확 매칭으로 가격 조회 — 재시도 루프 없음 (2026-04-24 정책).
+ * vendorItemId 제공 시 옵션(SKU) 고정 매칭 — 같은 productId 내 다중 옵션의 가격 mismatch 방지.
  * rate-limited 시 명시 분기 → 호출자가 즉시 break 가능.
  */
 export async function fetchCurrentPrice(
   productName: string,
   productId: string | null,
   currentPrice: number = 0,
+  vendorItemId: string | null = null,
 ): Promise<FetchPriceResult> {
   if (!productName || !productId) {
     console.log(`  [API] productId 없음 → 스킵`);
@@ -167,7 +173,9 @@ export async function fetchCurrentPrice(
     return { ok: false, rateLimited: false };
   }
 
-  console.log(`  [API] 검색: "${keyword}" (productId=${productId})`);
+  console.log(
+    `  [API] 검색: "${keyword}" (productId=${productId}${vendorItemId ? `, vendorItemId=${vendorItemId}` : ''})`,
+  );
   const r = await searchProducts(keyword, 5);
   if (!r.ok) {
     return { ok: false, rateLimited: r.rateLimited };
@@ -188,6 +196,27 @@ export async function fetchCurrentPrice(
   }
 
   let best = matches[0];
+
+  // vendorItemId 고정 매칭 — 옵션 mismatch 방지. 검색 결과에 일치 옵션이 있으면 그 가격으로 고정.
+  // 일치 옵션 없으면 옵션 단종/검색 미반영 가능 → productId+price 휴리스틱으로 fallback.
+  if (vendorItemId) {
+    const exact = matches.find((p) => p.vendorItemId === vendorItemId);
+    if (exact) {
+      console.log(
+        `  [API] vendorItemId=${vendorItemId} 정확 매칭 → ${exact.productPrice}원 (옵션 고정)`,
+      );
+      return {
+        ok: true,
+        price: exact.productPrice,
+        image: exact.productImage,
+        name: exact.productName,
+      };
+    }
+    console.log(
+      `  [API] vendorItemId=${vendorItemId} 일치 옵션 없음 (matches=${matches.length}) → productId fallback`,
+    );
+  }
+
   if (matches.length > 1 && currentPrice > 0) {
     best = matches.reduce((a, b) =>
       Math.abs(a.productPrice - currentPrice) <=

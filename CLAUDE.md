@@ -14,29 +14,73 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-06): 쿠팡 PL cron + token dedup + 갤럭시S21+ 알림 0건 진단
+## 가장 최근 (2026-05-06 후반): 1.0.12 통합 작업 — UI 재구성 + 그래프 + 신규 화면 + Firestore rules
 
-**1) 쿠팡 PL cron 신설** (커밋 `b4a4e16`, 검증 완료):
+**0) Firestore rules 배포** (event_best_jigumiya / goldbox / coupang_pl read 허용)
+
+**1) `ensureUserDoc` 추가 + `platform` 필드** — 갤럭시S21+ 알림 0건 사고 근본 fix
+- `services/firebase.ts:ensureUserDoc(uid)` 신설 — `signInAnonymously` 직후 무조건 호출
+- `users/{uid}`에 `{ app:'jigumiya', platform:Platform.OS, createdAt }` merge (신규 시만 createdAt 박힘)
+- 알림 권한 거부 / 토큰 발급 실패 시에도 user doc 보장 → cron `fetchActiveUsers`에서 발송 대상 보장
+- `app/_layout.tsx`에 wiring (signInAnonymously 반환 uid → ensureUserDoc 호출)
+
+**2) iOS 쿠팡 복귀 무한로딩 fix**
+- `feed.tsx`(이후 삭제) / `price-drops.tsx`: AppState `active` 전환 시 재로드/재구독 (이미 데이터 있으면 spinner 안 띄움)
+- `services/firebase.ts:fetchAllCategoryBest` 8초 timeout (Promise.race) — Firestore stall 흡수
+
+**3) vendorItemId 옵션 고정 매칭** (가격 체크 mismatch 방지)
+- `scripts/shared-price-checker/coupang-api.ts`: `CoupangProduct`에 `vendorItemId/itemId` 추가 + 응답 매퍼 보존
+- `fetchCurrentPrice(productName, productId, currentPrice, vendorItemId?)` — vendorItemId 정확 매칭 우선, 일치 없으면 productId+가격근접 fallback
+- `index.ts`: `data.vendorItemId` 전달 + `vendorItemId` 있으면 `bestCache` 우회 (category_best는 productId 단위)
+
+**4) 가격 그래프 대대적 개선** (`app/detail/[id].tsx`)
+- 트렌드 색상 자동 (drop=red `#FF4444` / up=blue `#3B82F6` / flat=gray)
+- 직선 그래프 + 모든 변곡점 dot
+- 참조선 3개: 최고가(파란 점선) / 최저가(빨간 점선) / 목표가(초록 점선 `#22C55E`)
+- `yAxisOffset` + `maxValue`로 y 범위 보정 (max/min/target 모두 차트 안)
+- X축 라벨: 첫/끝 + 중간 2~3개 균등 (총 N≥8→5개, ≥4→4개, ≥3→3개)
+- 트렌드 인사이트 텍스트 자동 연동 (priceInsights 첫 항목 trend 분기)
+- pointerConfig tooltip — 터치 시 `YYYY.MM.DD` + `N원` 말풍선 (`activatePointersInstantlyOnTouch`)
+
+**5) 친구에게 사주세요 모달** (`detail/[id].tsx`)
+- "🎁 친구에게 사주세요" 버튼 + slide-up 시트 모달
+- 6개 프리셋 멘트 + 직접 입력 TextInput
+- 포맷: `{멘트}\n\n{productName}\n{item.url}` → `Share.share`
+
+**6) UI 재구성 — 탭 4개 + 신규 화면 2개 + 헤더 변경**
+- 신규 화면: `app/today-best.tsx` (카테고리별 가로 스크롤 + 더보기 펼치기), `app/coupang-pl.tsx` (categoryName 자동 탭 + 전체 + 필터)
+- 홈 상단 버튼: 활성 이벤트(D-7) 풀-width 배너 + `[⚡ 오늘의 BEST]` + `[🏷️ 쿠팡 PL]`
+- 홈 헤더 우측: 설정 버튼 제거 → 공유 버튼만 (Platform별 STORE_LINKS 분기)
+- 골드박스 섹션: 기존 "오늘의 특가"(price_drops + bestPool fallback) 완전 제거 → `goldbox/{오늘 KST}` 가로 스크롤 (이미지+이름+가격, 할인 배지 없음)
+- 탭 4개: 홈 / 자주사는 / 가격변동 / 설정 (feed `app/(tabs)/feed.tsx` 완전 삭제)
+- `app/settings.tsx` (루트) → `app/(tabs)/settings.tsx`로 이동, back 버튼 제거 (탭 UX)
+- 루트 Stack에 today-best / coupang-pl 등록, settings Stack 제거
+
+**7) STORE_LINKS 채움**
+- `services/config.ts`: ios `apps.apple.com/app/id6760587430`, android `play.google.com/store/apps/details?id=com.jigumiya.app`
+- `getStoreLinkForPlatform()` 헬퍼 — `Platform.OS` 분기 → `getAppShareMessage()` 단일 링크
+
+**8) coupangpl-updater 보강** — `categoryName` 필드 응답 매퍼 + Firestore 저장 pass-through (PL 자동 탭 분류용)
+
+**9) Firestore rules 추가** — `event_best_jigumiya/{slug}`, `goldbox/{date}`, `coupang_pl/{date}` 모두 read auth, write false
+
+**10) feed.tsx generateDeepLink 정리** — category_best.products[].productUrl이 이미 affiliate URL → 재변환 제거 (이후 feed.tsx 자체 삭제)
+
+## 직전 (2026-05-06 전반): 쿠팡 PL cron + token dedup + 갤럭시S21+ 알림 0건 진단
+
+**1) 쿠팡 PL cron 신설** (커밋 `b4a4e16`):
 - 위치: `scripts/coupangpl-updater/`, 워크플로 `.github/workflows/coupangpl-update.yml`
 - 엔드포인트 `/v2/.../products/coupangPL?limit=100` (v1 prefix 없음, goldbox와 동일 패턴)
 - 골드박스와 동시 실행 (07:30 KST, `30 22 * * *`), 1콜/일
-- productUrl 이미 affiliate → deeplink 변환 없음
-- Firestore `coupang_pl/{YYYY-MM-DD KST}` 저장: `{ productId, productName, productPrice, productImage, deepLink, isRocket, isFreeShipping }`
 - 첫 수동 실행: 87개 저장 완료 (`coupang_pl/2026-05-06`)
 
-**2) fetchActiveUsers token dedup fix** (수정 완료, 미커밋):
-- 사고: 5/6 morning_greeting 4건 발송 — 동일 expoPushToken 공유 jigumiya uid 4개 (아이폰 1대 → 4 push)
-- 원인: `fetchActiveUsers`가 uid별 1엔트리, token 중복 dedup 없음 → 4개 uid 모두 payload 생성 → Expo가 같은 token으로 4번 발송
-- fix: `scripts/shared-price-checker/index.ts:474-516` `seenTokens: Map<token, firstUid>` 추가, 첫 등장 uid만 보존, dup uid 스킵 + 로그 (`[ActiveUsers] dup-token uid=… kept-first=…`). 모든 payload 빌드(morning/evening/drops/ups/targets) 자동 dedup
-- 알려진 trade-off: orphan uid에만 등록된 trackers는 알림 미수령 — 별도 cleanup 후속
+**2) fetchActiveUsers token dedup fix** (커밋 `51d5dac`):
+- 사고: 5/6 morning_greeting 4건 발송 — 동일 expoPushToken 공유 jigumiya uid 4개
+- fix: `seenTokens: Map<token, firstUid>` — 첫 등장 uid만 보존, dup uid 스킵
 
-**3) 갤럭시S21+ 알림 0건 진단** (1회성 인스펙션):
-- 갤럭시 본체 doc 강력 후보: `QBsAA6mAJshIHjWi55qPhMRrtAo2` — Auth는 4/30 13:20 GMT 가입, **users/{uid} doc 자체 없음**, tracked 6개 보유 (productIds 정확 매칭 가능)
-- 근본 버그: `users/{uid}` doc 생성은 `services/firebase.ts:131 savePushToken` 단 1곳에서만 일어남 → 알림 권한 거부/`getExpoPushTokenAsync` 실패 시 user doc 절대 안 만들어짐 → fetchActiveUsers에서 unknown으로 분류 → 발송 제외. 그러나 tracked subcollection은 부모 doc 부재해도 작성 가능 → orphan 패턴 발생
-- 동일 패턴 추정: unknown 110개 다수 (특히 5/2~5/5 토큰 없는 신규 가입자)
-- 1회 응급 처리: `QBsAA6mAJ…` user doc 수동 생성 (`{ app:'jigumiya', notificationEnabled:true, expoPushToken:null, createdAt:serverTimestamp() }`). expoPushToken 채우려면 앱 재실행 → `savePushToken` 호출되어 merge 필요
+**3) 갤럭시S21+ 알림 0건 진단** — `users/{uid}` doc 부재가 근본 원인. `savePushToken`이 유일한 doc 생성처라는 설계 결함. 응급으로 `QBsAA6mAJ…` user doc 수동 생성. 근본 fix는 위 §1 `ensureUserDoc`로 해결됨
 
-## 직전 (2026-05-05 후반): A~E 알림 시스템 재설계 + 신규 cron 2종
+## 5/5 후반: A~E 알림 시스템 재설계 + 신규 cron 2종
 
 5/5 17:35 폭탄 사고(`events.categoryBroadcasts` 다중 push) → A~E 재설계 (커밋 `48c1fed`):
 - A: 카테고리 베스트 알림 완전 제거 → shared_products 단일 출처 일원화
@@ -154,17 +198,32 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **진단** 갤럭시S21+ 알림 0건 원인 — `users/{uid}` doc 없음 + `savePushToken`이 유일한 doc 생성처라는 설계 결함
 - [x] **응급** `QBsAA6mAJshIHjWi55qPhMRrtAo2` user doc 수동 생성 (`app/notificationEnabled/expoPushToken:null/createdAt`)
 
+### 2026-05-06 후반 완료 (1.0.12 통합)
+- [x] **fix** ensureUserDoc + platform 필드 — 갤럭시 알림 0건 근본 fix
+- [x] **fix** iOS 쿠팡 복귀 무한로딩 — feed.tsx/price-drops.tsx AppState 핸들러 + 8초 timeout
+- [x] **fix** vendorItemId 옵션 고정 매칭 (`shared-price-checker/coupang-api.ts`) + bestCache 우회
+- [x] **feat** 가격 그래프 — 트렌드 색상 + 최고/최저/목표 참조선 + 직선 + 점 + tooltip + 사주세요 모달
+- [x] **feat** 신규 화면 today-best.tsx + coupang-pl.tsx (categoryName 자동 탭)
+- [x] **feat** 홈 상단 버튼 + 골드박스 섹션 (기존 오늘의특가 fallback 제거)
+- [x] **refactor** 탭 4개 — 홈/자주사는/가격변동/설정 (feed 삭제, settings 탭 이동)
+- [x] **fix** STORE_LINKS 채움 + Platform별 분기
+- [x] **chore** coupangpl-updater categoryName 필드 보존
+- [x] **feat** Firestore rules 추가 — event_best_jigumiya / goldbox / coupang_pl
+- [x] **chore** feed.tsx generateDeepLink 정리 (이후 feed 자체 삭제)
+- [x] **deploy** Firestore rules 배포 (5/6)
+- [x] **build** 1.0.12 EAS preview 빌드 (iOS + Android)
+
 ### 2026-05-06 이후 미완
 - [ ] **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
 - [ ] **🚨 검증** 골드박스 cron (07:30 KST) 첫 실행 — 문서 생성 + productUrl affiliate
 - [ ] **🚨 검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
-- [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거
+- [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거 + categoryName 응답 포함 여부
 - [ ] **검증** 다음 cron 사이클에 `[ActiveUsers] token-dedup N건 제외` 로그 표시 + 갤럭시/아이폰 사용자가 morning push 1건씩 수령
-- [ ] **빌드** 1.0.12 — `ensureUserDoc` + 토큰 재시도 + iOS 쿠팡 복귀 fix + feed.tsx generateDeepLink 정리 + vendorItemId 고정 + 홈화면 UI + 가격그래프 버그 (위 5번 항목)
+- [ ] **검증** 1.0.12 실기기 (preview 빌드) — ensureUserDoc / 그래프 / 사주세요 / 신규 화면 / 골드박스 / 탭 4개
+- [ ] **검증** vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭 → ...원 (옵션 고정)`)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 - [ ] **검증** 요일별 morning/evening 문구 매칭 (07:30/20:00 cron)
 - [ ] **승급 대기** 1.0.11 iOS 심사 / Android 내부 테스트 → 프로덕션
-- [ ] **검증** 1.0.11 실기기 — drop 상품별 N건 + 단일 형식 메시지 + KST 날짜 가드
 - [ ] **갱신** `meta/config_jigumiya.minRequiredVersion` 1.0.10 → 1.0.11 (양 스토어 승급 후)
 - [ ] **모니터링** Functions 응답시간 로그 (`minInstances:1` 후 콜드 스파이크 사라짐 확인, 최소 20회 표본)
 

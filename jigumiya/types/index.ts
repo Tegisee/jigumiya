@@ -88,6 +88,65 @@ export interface PriceDrop {
   createdAt: number;
 }
 
+/** event_best_jigumiya/{slug} 의 products 배열 항목 */
+export interface EventBestJigumiyaProduct {
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  /** affiliate URL (`link.coupang.com/...`) — search API의 productUrl 그대로 */
+  deepLink: string;
+  isRocket: boolean;
+}
+
+/** event_best_jigumiya/{slug} — 11개 기념일 D-7 윈도우 베스트 (cron 02:35 KST) */
+export interface EventBestJigumiya {
+  slug: string;
+  eventName: string;
+  date: string;          // 'MM-DD' (KST)
+  keywords: string[];
+  minPrice: number;
+  products: EventBestJigumiyaProduct[];
+  updatedAt: number;
+}
+
+/** coupang_pl/{YYYY-MM-DD KST} 의 products 배열 항목 */
+export interface CoupangPLProductItem {
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  deepLink: string;     // 이미 affiliate URL
+  isRocket: boolean;
+  isFreeShipping: boolean;
+  /** 카테고리명 — 자동 탭 생성용. 응답에 없으면 미존재 가능 (UI는 '기타'로 분류) */
+  categoryName?: string;
+}
+
+/** coupang_pl/{YYYY-MM-DD KST} — 일자별 PL 100개 스냅샷 */
+export interface CoupangPLDoc {
+  date: string;
+  products: CoupangPLProductItem[];
+  updatedAt: number;
+}
+
+/** goldbox/{YYYY-MM-DD KST} 의 products 배열 항목 */
+export interface GoldboxProductItem {
+  productId: string;
+  productName: string;
+  productPrice: number;
+  productImage: string;
+  /** affiliate URL (이미 변환된 상태로 응답) */
+  deepLink: string;
+}
+
+/** goldbox/{YYYY-MM-DD KST} — 일자별 골드박스 1콜 스냅샷 (cron 07:30 KST) */
+export interface GoldboxDoc {
+  date: string;
+  products: GoldboxProductItem[];
+  updatedAt: number;
+}
+
 /** meta/config_jigumiya — 앱 업데이트 알림 설정 (운영자 콘솔에서 갱신) */
 export interface MetaConfig {
   minRequiredVersion: string;  // semver, 예: "1.0.7"

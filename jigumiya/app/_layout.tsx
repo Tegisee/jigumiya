@@ -6,7 +6,11 @@ import * as Notifications from 'expo-notifications';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { theme } from '../constants/theme';
 import { initCoupangApi } from '../services/config';
-import { signInAnonymously, warmupResolveAffiliate } from '../services/firebase';
+import {
+  signInAnonymously,
+  warmupResolveAffiliate,
+  ensureUserDoc,
+} from '../services/firebase';
 import {
   registerForPushNotifications,
   resolveNotificationRoute,
@@ -76,7 +80,9 @@ export default function RootLayout() {
     checkForUpdate();
 
     (async () => {
-      await signInAnonymously();
+      const uid = await signInAnonymously();
+      // 권한/토큰 발급 결과와 무관하게 user doc 보장 (5/6 갤럭시 알림 0건 사고 fix)
+      if (uid) await ensureUserDoc(uid);
       // Functions 컨테이너 워밍업 — fire-and-forget, 쿠팡 공유 첫 호출 cold start 제거
       warmupResolveAffiliate();
       await registerForPushNotifications();
@@ -143,11 +149,15 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="shareintent" options={{ headerShown: false }} />
         <Stack.Screen
-          name="settings"
+          name="detail/[id]"
           options={{ animation: 'slide_from_right' }}
         />
         <Stack.Screen
-          name="detail/[id]"
+          name="today-best"
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
+          name="coupang-pl"
           options={{ animation: 'slide_from_right' }}
         />
         <Stack.Screen

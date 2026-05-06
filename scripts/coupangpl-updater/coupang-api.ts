@@ -36,6 +36,8 @@ export interface CoupangPLProduct {
   productUrl: string;
   isRocket: boolean;
   isFreeShipping: boolean;
+  /** 응답에 categoryName이 포함될 때만 채움 — 클라이언트 자동 탭 분류용 */
+  categoryName?: string;
 }
 
 export interface FetchCoupangPLResult {
@@ -117,6 +119,7 @@ export async function fetchCoupangPL(
       productUrl: String(p.productUrl ?? ''),
       isRocket: !!p.isRocket,
       isFreeShipping: !!p.isFreeShipping,
+      ...(p.categoryName ? { categoryName: String(p.categoryName) } : {}),
     }));
     return { ok: true, rateLimited: false, products };
   }

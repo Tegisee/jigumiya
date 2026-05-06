@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { setCoupangApiKeys, hasCoupangApiKeys } from './coupangApi';
 
 /** 앱 시작 시 호출 — EAS Secrets에서 쿠팡 파트너스 API 키 초기화 */
@@ -20,12 +21,17 @@ export const MAX_TRACKED_ITEMS = 10;
 
 // 스토어 링크 (출시 후 업데이트)
 export const STORE_LINKS = {
-  ios: '', // App Store URL
-  android: '', // Google Play URL
+  ios: 'https://apps.apple.com/app/id6760587430',
+  android: 'https://play.google.com/store/apps/details?id=com.jigumiya.app',
 };
 
+/** 플랫폼별 단일 스토어 링크 — 공유 메시지에서 한 줄만 노출 */
+export function getStoreLinkForPlatform(): string {
+  return Platform.OS === 'ios' ? STORE_LINKS.ios : STORE_LINKS.android;
+}
+
 export function getAppShareMessage(): string {
-  const links = [STORE_LINKS.ios, STORE_LINKS.android].filter(Boolean);
-  const linkText = links.length > 0 ? `\n\n${links.join('\n')}` : '';
+  const link = getStoreLinkForPlatform();
+  const linkText = link ? `\n\n${link}` : '';
   return `쿠팡 가격 추적 앱 '지금이야'를 써보세요!\n원하는 가격에 알려주는 스마트 알림 📉${linkText}`;
 }

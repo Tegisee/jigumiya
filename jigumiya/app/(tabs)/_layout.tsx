@@ -43,12 +43,12 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="feed"
+        name="price-drops"
         options={{
-          title: '카테고리 베스트',
+          title: '가격변동',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'flame' : 'flame-outline'}
+              name={focused ? 'trending-down' : 'trending-down-outline'}
               size={size}
               color={color}
             />
@@ -56,12 +56,12 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="price-drops"
+        name="settings"
         options={{
-          title: '가격변동',
+          title: '설정',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'trending-down' : 'trending-down-outline'}
+              name={focused ? 'settings' : 'settings-outline'}
               size={size}
               color={color}
             />

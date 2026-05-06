@@ -42,6 +42,8 @@ interface CoupangPLDocProduct {
   deepLink: string;
   isRocket: boolean;
   isFreeShipping: boolean;
+  /** 응답에 categoryName 포함 시 보존 — 클라이언트 자동 탭 분류용 */
+  categoryName?: string;
 }
 
 async function main() {
@@ -84,6 +86,7 @@ async function main() {
     deepLink: p.productUrl,
     isRocket: p.isRocket,
     isFreeShipping: p.isFreeShipping,
+    ...(p.categoryName ? { categoryName: p.categoryName } : {}),
   }));
 
   // 3) Firestore 저장 — coupang_pl/{YYYY-MM-DD}

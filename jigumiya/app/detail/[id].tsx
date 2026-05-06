@@ -35,7 +35,18 @@ export default function DetailScreen() {
   const [newPrice, setNewPrice] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
+  const [showAskModal, setShowAskModal] = useState(false);
+  const [customAsk, setCustomAsk] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const ASK_MESSAGES = [
+    '이거 사줘 🙏',
+    '나 이거 갖고 싶어 😊',
+    '생일선물로 이거 어때요? 🎁',
+    '이거 같이 쓰면 좋을 것 같아요! 💕',
+    '특가일 때 사주세요! ⚡',
+    '이번 기념일 선물로 부탁해 🥺',
+  ];
 
   const {
     isFavorite,
@@ -85,6 +96,21 @@ export default function DetailScreen() {
   const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
   const hasChartData = item.priceHistory.length > 1;
   const isAllSamePrice = hasChartData && new Set(prices).size === 1;
+  const firstPrice = prices[0] ?? 0;
+  const lastPrice = prices[prices.length - 1] ?? 0;
+
+  // 트렌드: 첫값-끝값 비교. 모두 동일하거나 시작=끝이면 flat.
+  const trend: 'drop' | 'up' | 'flat' =
+    !hasChartData || isAllSamePrice || lastPrice === firstPrice
+      ? 'flat'
+      : lastPrice < firstPrice
+        ? 'drop'
+        : 'up';
+  const CHART_RED = '#FF4444';
+  const CHART_BLUE = '#3B82F6';
+  const CHART_GREEN = '#22C55E';
+  const chartColor =
+    trend === 'drop' ? CHART_RED : trend === 'up' ? CHART_BLUE : theme.subtext;
 
   // 추적 기간 계산 (일)
   const trackingDays = item.priceHistory.length >= 2
@@ -94,24 +120,39 @@ export default function DetailScreen() {
       ))
     : 0;
 
+  // X축 라벨: 첫날/마지막날 + 중간 2~3개 균등 배치 (priceHistory 길이에 따라 가감)
+  const totalPoints = item.priceHistory.length;
+  const labelIndices = new Set<number>();
+  if (totalPoints > 0) labelIndices.add(0);
+  if (totalPoints > 1) labelIndices.add(totalPoints - 1);
+  const desiredMidLabels =
+    totalPoints >= 8 ? 3 : totalPoints >= 4 ? 2 : totalPoints >= 3 ? 1 : 0;
+  for (let k = 1; k <= desiredMidLabels; k++) {
+    labelIndices.add(
+      Math.round((k * (totalPoints - 1)) / (desiredMidLabels + 1)),
+    );
+  }
+
   const chartData = item.priceHistory.map((entry, i) => {
-    const total = item.priceHistory.length;
-    const showLabel = i === 0 || i === total - 1 ||
-      (total > 4 && i === Math.floor(total / 2));
-    const dateLabel = showLabel
+    const dateLabel = labelIndices.has(i)
       ? `${entry.date.slice(5, 7)}/${entry.date.slice(8, 10)}`
       : '';
     return {
       value: entry.price,
       label: dateLabel,
       labelTextStyle: { color: theme.subtext, fontSize: 10 },
+      date: entry.date, // pointerLabelComponent tooltip 표기용
     };
   });
 
   const hasTarget = item.targetPrice != null && item.targetPrice > 0;
-  const targetLineData = hasTarget
-    ? item.priceHistory.map(() => ({ value: item.targetPrice! }))
-    : [];
+  // 최고/최저/목표 참조선이 모두 차트 범위 안에 들어가도록 yAxisOffset/maxValue 보정
+  const showMaxMinLines = hasChartData && maxPrice !== minPrice;
+  const yMin = hasTarget ? Math.min(minPrice, item.targetPrice!) : minPrice;
+  const yMax = hasTarget ? Math.max(maxPrice, item.targetPrice!) : maxPrice;
+  const yPad = Math.max(1, Math.round((yMax - yMin) * 0.15));
+  const yAxisOffset = Math.max(0, yMin - yPad);
+  const maxValue = yMax + yPad - yAxisOffset;
 
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
@@ -135,8 +176,33 @@ export default function DetailScreen() {
   // 가격 인사이트 메시지 생성
   const priceInsights: { icon: string; text: string; color: string }[] = [];
   if (item.priceHistory.length >= 2) {
+    // 트렌드 요약 — 그래프 색상과 자동 연동 (drop=red / up=blue / flat=gray)
+    if (trend === 'drop') {
+      const diff = firstPrice - lastPrice;
+      const pct = Math.round((diff / firstPrice) * 100);
+      priceInsights.push({
+        icon: '📉',
+        text: `${trackingDays}일간 ${diff.toLocaleString()}원 하락 (-${pct}%)`,
+        color: CHART_RED,
+      });
+    } else if (trend === 'up') {
+      const diff = lastPrice - firstPrice;
+      const pct = Math.round((diff / firstPrice) * 100);
+      priceInsights.push({
+        icon: '📈',
+        text: `${trackingDays}일간 ${diff.toLocaleString()}원 상승 (+${pct}%)`,
+        color: CHART_BLUE,
+      });
+    } else {
+      // 추적 2일째부터 표시 (priceHistory.length >= 2 + 모두 동일 OR 첫·끝 동일)
+      priceInsights.push({
+        icon: '➡️',
+        text: `최근 ${trackingDays}일간 가격변동 없음`,
+        color: theme.subtext,
+      });
+    }
     // 현재가 = 최저가
-    if (item.currentPrice <= minPrice) {
+    if (item.currentPrice <= minPrice && minPrice !== maxPrice) {
       priceInsights.push({ icon: '🔥', text: `현재가가 ${trackingDays}일간 최저가입니다`, color: '#4CAF50' });
     }
     // 목표가 도달 (목표가 설정된 경우만)
@@ -147,18 +213,7 @@ export default function DetailScreen() {
     if (hasTarget && item.currentPrice > item.targetPrice!) {
       const diff = item.currentPrice - item.targetPrice!;
       const pct = Math.round((diff / item.currentPrice) * 100);
-      priceInsights.push({ icon: '📉', text: `목표가까지 ${diff.toLocaleString()}원 (${pct}%) 남음`, color: theme.subtext });
-    }
-    // N일간 가격 변동 없음 (동일가가 아닌 경우에도, 최근 3일 이상 동일 시)
-    if (!isAllSamePrice && prices.length >= 3) {
-      let noChangeDays = 1;
-      for (let i = prices.length - 2; i >= 0; i--) {
-        if (prices[i] === prices[prices.length - 1]) noChangeDays++;
-        else break;
-      }
-      if (noChangeDays >= 3) {
-        priceInsights.push({ icon: '➡️', text: `최근 ${noChangeDays}일간 가격변동 없음`, color: theme.subtext });
-      }
+      priceInsights.push({ icon: '🎯', text: `목표가까지 ${diff.toLocaleString()}원 (${pct}%) 남음`, color: theme.subtext });
     }
     // 최저가 대비 현재가
     if (item.currentPrice > minPrice) {
@@ -172,6 +227,17 @@ export default function DetailScreen() {
       ? `${item.priceHistory[item.priceHistory.length - 2].price.toLocaleString()}원 → ${item.currentPrice.toLocaleString()}원으로 하락!`
       : `현재 ${item.currentPrice.toLocaleString()}원`;
     const message = `${item.productName}\n${drop}\n\n${item.url}\n\n이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.`;
+    try {
+      await Share.share({ message });
+    } catch {}
+  };
+
+  const handleSendAsk = async (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const message = `${trimmed}\n\n${item.productName}\n${item.url}`;
+    setShowAskModal(false);
+    setCustomAsk('');
     try {
       await Share.share({ message });
     } catch {}
@@ -313,49 +379,115 @@ export default function DetailScreen() {
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}
-                {...(hasTarget ? { data2: targetLineData } : {})}
                 width={300}
-                height={140}
-                color={theme.primary}
-                {...(hasTarget ? { color2: theme.primary, thickness2: 1, strokeDashArray2: [6, 4], hideDataPoints2: true } : {})}
+                height={160}
+                color={chartColor}
                 thickness={2}
                 hideDataPoints={false}
-                dataPointsColor={theme.primary}
+                dataPointsColor={chartColor}
                 dataPointsRadius={3}
                 hideYAxisText
                 hideRules
                 yAxisColor="transparent"
                 xAxisColor={theme.border}
                 xAxisThickness={1}
-                curved
                 isAnimated={false}
                 initialSpacing={10}
                 endSpacing={10}
                 spacing={45}
                 adjustToWidth
-                startFillColor={theme.primary}
+                yAxisOffset={yAxisOffset}
+                maxValue={maxValue}
+                startFillColor={chartColor}
                 endFillColor="transparent"
                 startOpacity={0.15}
                 endOpacity={0}
                 areaChart
+                showReferenceLine1={showMaxMinLines}
+                referenceLine1Position={maxPrice}
+                referenceLine1Config={{
+                  color: CHART_BLUE,
+                  dashWidth: 4,
+                  dashGap: 4,
+                  thickness: 1,
+                  labelText: `최고 ${maxPrice.toLocaleString()}원`,
+                  labelTextStyle: { color: CHART_BLUE, fontSize: 10, marginTop: -12 },
+                }}
+                showReferenceLine2={showMaxMinLines}
+                referenceLine2Position={minPrice}
+                referenceLine2Config={{
+                  color: CHART_RED,
+                  dashWidth: 4,
+                  dashGap: 4,
+                  thickness: 1,
+                  labelText: `최저 ${minPrice.toLocaleString()}원`,
+                  labelTextStyle: { color: CHART_RED, fontSize: 10, marginTop: 4 },
+                }}
+                showReferenceLine3={hasTarget}
+                referenceLine3Position={hasTarget ? item.targetPrice! : 0}
+                referenceLine3Config={{
+                  color: CHART_GREEN,
+                  dashWidth: 4,
+                  dashGap: 4,
+                  thickness: 1,
+                  labelText: hasTarget ? `목표 ${item.targetPrice!.toLocaleString()}원` : '',
+                  labelTextStyle: { color: CHART_GREEN, fontSize: 10, marginTop: -12 },
+                }}
+                pointerConfig={{
+                  pointerStripUptoDataPoint: true,
+                  pointerStripColor: theme.subtext,
+                  pointerStripWidth: 1,
+                  showPointerStrip: true,
+                  pointerColor: chartColor,
+                  radius: 5,
+                  pointerLabelWidth: 110,
+                  pointerLabelHeight: 44,
+                  activatePointersInstantlyOnTouch: true,
+                  autoAdjustPointerLabelPosition: true,
+                  pointerLabelComponent: (items: any[]) => {
+                    const it = items?.[0];
+                    if (!it) return null;
+                    const d: string = it.date ?? '';
+                    const dateText = d.length === 10
+                      ? `${d.slice(0, 4)}.${d.slice(5, 7)}.${d.slice(8, 10)}`
+                      : d;
+                    return (
+                      <View style={styles.tooltip}>
+                        <Text style={styles.tooltipDate}>{dateText}</Text>
+                        <Text style={styles.tooltipPrice}>
+                          {Number(it.value).toLocaleString()}원
+                        </Text>
+                      </View>
+                    );
+                  },
+                }}
               />
               <View style={styles.chartLegend}>
                 <View style={styles.legendItem}>
-                  <View style={[styles.legendLine, { backgroundColor: theme.primary }]} />
-                  <Text style={styles.legendText}>가격</Text>
+                  <View style={[styles.legendLine, { backgroundColor: chartColor }]} />
+                  <Text style={styles.legendText}>
+                    {trend === 'drop' ? '하락 추세' : trend === 'up' ? '상승 추세' : '변동 없음'}
+                  </Text>
                 </View>
+                {showMaxMinLines && (
+                  <>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDash, { borderColor: CHART_BLUE }]} />
+                      <Text style={styles.legendText}>최고가</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDash, { borderColor: CHART_RED }]} />
+                      <Text style={styles.legendText}>최저가</Text>
+                    </View>
+                  </>
+                )}
                 {hasTarget && (
                   <View style={styles.legendItem}>
-                    <View style={[styles.legendDash, { borderColor: theme.primary }]} />
-                    <Text style={styles.legendText}>목표가 {item.targetPrice!.toLocaleString()}원</Text>
+                    <View style={[styles.legendDash, { borderColor: CHART_GREEN }]} />
+                    <Text style={styles.legendText}>목표가</Text>
                   </View>
                 )}
               </View>
-              {isAllSamePrice && (
-                <Text style={styles.noChangeText}>
-                  최근 {trackingDays}일간 가격변동이 없었습니다
-                </Text>
-              )}
             </View>
           ) : (
             <View style={styles.chartEmpty}>
@@ -411,6 +543,17 @@ export default function DetailScreen() {
             ))}
           </View>
         )}
+
+        {/* 친구에게 사주세요 */}
+        <TouchableOpacity
+          style={styles.askButton}
+          onPress={() => setShowAskModal(true)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.askButtonEmoji}>🎁</Text>
+          <Text style={styles.askButtonText}>친구에게 사주세요</Text>
+          <Ionicons name="chevron-forward" size={16} color={theme.text} />
+        </TouchableOpacity>
 
         <Text style={styles.affiliateText}>
           이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
@@ -482,6 +625,60 @@ export default function DetailScreen() {
                 <Text style={styles.modalConfirmText}>확인</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 친구에게 사주세요 — 멘트 선택 모달 */}
+      <Modal visible={showAskModal} transparent animationType="slide">
+        <View style={styles.askOverlay}>
+          <TouchableOpacity
+            style={styles.askBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowAskModal(false)}
+          />
+          <View style={styles.askSheet}>
+            <View style={styles.askHandle} />
+            <Text style={styles.askTitle}>친구에게 보낼 메시지</Text>
+            {ASK_MESSAGES.map((msg) => (
+              <TouchableOpacity
+                key={msg}
+                style={styles.askOption}
+                onPress={() => handleSendAsk(msg)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.askOptionText}>{msg}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.askCustomRow}>
+              <TextInput
+                style={styles.askCustomInput}
+                placeholder="직접 입력 ✏️"
+                placeholderTextColor={theme.subtext}
+                value={customAsk}
+                onChangeText={setCustomAsk}
+                returnKeyType="send"
+                onSubmitEditing={() => handleSendAsk(customAsk)}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.askCustomSend,
+                  !customAsk.trim() && styles.askCustomSendDisabled,
+                ]}
+                onPress={() => handleSendAsk(customAsk)}
+                disabled={!customAsk.trim()}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.askCustomSendText}>공유</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.askCancel}
+              onPress={() => setShowAskModal(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.askCancelText}>취소</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -637,8 +834,31 @@ const styles = StyleSheet.create({
   },
   chartLegend: {
     flexDirection: 'row',
-    gap: 16,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    columnGap: 14,
+    rowGap: 6,
     marginTop: 12,
+  },
+  tooltip: {
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+    width: 110,
+  },
+  tooltipDate: {
+    color: theme.subtext,
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  tooltipPrice: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: '700',
   },
   legendItem: {
     flexDirection: 'row',
@@ -700,11 +920,6 @@ const styles = StyleSheet.create({
     color: theme.subtext,
     fontSize: 13,
     flex: 1,
-  },
-  noChangeText: {
-    color: theme.subtext,
-    fontSize: 12,
-    marginTop: 10,
   },
   insightSection: {
     marginTop: 12,
@@ -826,6 +1041,113 @@ const styles = StyleSheet.create({
   modalConfirmText: {
     color: '#000000',
     fontSize: 15,
+    fontWeight: '600',
+  },
+
+  // ── 친구에게 사주세요 ──
+  askButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 105, 180, 0.10)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 105, 180, 0.35)',
+  },
+  askButtonEmoji: {
+    fontSize: 18,
+  },
+  askButtonText: {
+    flex: 1,
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  askOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  askBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  askSheet: {
+    backgroundColor: theme.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 28,
+    gap: 8,
+  },
+  askHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: theme.border,
+    marginBottom: 8,
+  },
+  askTitle: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  askOption: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: theme.background,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  askOptionText: {
+    color: theme.text,
+    fontSize: 15,
+  },
+  askCustomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  askCustomInput: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: theme.background,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    fontSize: 15,
+  },
+  askCustomSend: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: theme.primary,
+    borderRadius: 10,
+  },
+  askCustomSendDisabled: {
+    opacity: 0.4,
+  },
+  askCustomSendText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  askCancel: {
+    marginTop: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  askCancelText: {
+    color: theme.subtext,
+    fontSize: 14,
     fontWeight: '600',
   },
 });

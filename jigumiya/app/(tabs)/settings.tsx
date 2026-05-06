@@ -3,8 +3,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
-import { theme } from '../constants/theme';
-import { useAppStore } from '../store/useAppStore';
+import { theme } from '../../constants/theme';
+import { useAppStore } from '../../store/useAppStore';
 
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -37,15 +37,7 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-          activeOpacity={0.6}
-        >
-          <Ionicons name="chevron-back" size={26} color={theme.text} />
-        </TouchableOpacity>
         <Text style={styles.title}>설정</Text>
-        <View style={styles.headerRight} />
       </View>
 
       <Text style={styles.sectionTitle}>알림</Text>
@@ -124,20 +116,12 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingTop: 16,
-    marginBottom: 24,
-  },
-  backBtn: {
-    padding: 4,
-  },
-  headerRight: {
-    width: 34,
+    paddingBottom: 8,
+    marginBottom: 16,
   },
   title: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: '700',
     color: theme.text,
   },

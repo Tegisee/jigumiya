@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Linking,
   ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,10 +30,26 @@ export default function PriceDropsScreen() {
   const router = useRouter();
   const [drops, setDrops] = useState<PriceDrop[] | null>(null); // null = 미로드
   const [filter, setFilter] = useState<FilterKey>('all');
+  const unsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    const unsub = subscribePriceDrops((next) => setDrops(next));
-    return unsub;
+    const subscribe = () => {
+      unsubRef.current = subscribePriceDrops((next) => setDrops(next));
+    };
+    subscribe();
+
+    // iOS 쿠팡 앱 복귀 시 Firestore 스트림 stall → active 전환마다 unsub + 재구독.
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        unsubRef.current?.();
+        subscribe();
+      }
+    });
+
+    return () => {
+      unsubRef.current?.();
+      sub.remove();
+    };
   }, []);
 
   // 클라이언트 측 보강: 하락률 큰 순 정렬 (인덱스 부담 회피)

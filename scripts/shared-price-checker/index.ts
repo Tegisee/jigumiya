@@ -655,6 +655,7 @@ async function main() {
     const data = item.data;
     const productId = data.productId as string | undefined;
     const productName = data.productName as string | undefined;
+    const vendorItemId = (data.vendorItemId as string | undefined) ?? null;
     if (!productId || !productName) continue;
 
     const trackerCount = Number(data.trackerCount || 0);
@@ -674,7 +675,8 @@ async function main() {
     let newPrice = 0;
     let usedCache = false;
 
-    const cached = bestCache.get(productId);
+    // vendorItemId 추적 상품은 cache 스킵 — category_best는 productId 단위라 옵션 mismatch 가능.
+    const cached = vendorItemId ? null : bestCache.get(productId);
     if (cached && isCacheStablePrice(cached.price, prevPrice)) {
       console.log(
         `[${scanned}] ${productId} ${productName.slice(0, 30)} → cache hit ${cached.price}`,
@@ -690,6 +692,7 @@ async function main() {
         productName,
         productId,
         prevPrice,
+        vendorItemId,
       );
       apiCalls++;
       if (!r.ok) {

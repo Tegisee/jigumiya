@@ -25,6 +25,7 @@ import {
   writeBatch,
   increment,
   onSnapshot,
+  serverTimestamp,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -35,6 +36,9 @@ import type {
   FavoriteRef,
   PriceDrop,
   CategoryBest,
+  EventBestJigumiya,
+  CoupangPLDoc,
+  GoldboxDoc,
   MetaConfig,
 } from '../types';
 
@@ -123,6 +127,36 @@ export async function signInAnonymously(): Promise<string | null> {
 /** 현재 로그인된 uid 반환 */
 export function getCurrentUid(): string | null {
   return auth.currentUser?.uid ?? null;
+}
+
+/**
+ * users/{uid} doc 무조건 생성 보장 — signInAnonymously 직후 호출.
+ *
+ * 5/6 갤럭시S21+ 알림 0건 사고 fix:
+ * 기존엔 savePushToken만이 user doc 생성처라 알림 권한 거부 / getExpoPushTokenAsync 실패 시
+ * doc 자체가 만들어지지 않음 → cron fetchActiveUsers에서 unknown으로 분류 → 발송 제외.
+ * 권한/토큰 발급 결과와 무관하게 app 필드 + createdAt 박아 발송 대상 보장.
+ *
+ * createdAt은 신규 생성 시에만 기록 (기존 doc 보존).
+ */
+export async function ensureUserDoc(uid: string): Promise<void> {
+  try {
+    const ref = doc(db, 'users', uid);
+    const snap = await getDoc(ref);
+    const isNew = !snap.exists();
+    await setDoc(
+      ref,
+      {
+        app: 'jigumiya' as const,
+        platform: Platform.OS,
+        ...(isNew ? { createdAt: serverTimestamp() } : {}),
+      },
+      { merge: true },
+    );
+    if (isNew) console.log('[Firebase] ensureUserDoc 신규 생성:', uid);
+  } catch (e) {
+    console.warn('[Firebase] ensureUserDoc 실패:', e);
+  }
 }
 
 // ─── Push Token / 알림 설정 ───
@@ -522,15 +556,22 @@ export async function getCategoryBest(
 /**
  * category_best 전체 1회 조회 (피드 탭용).
  * displayOrder 오름차순 정렬. 카테고리 19개 × ~50KB = ~950KB 페이로드.
+ *
+ * 8초 타임아웃: iOS 쿠팡 복귀 시 Firestore 채널이 idle stall 걸려도 무한로딩 방지.
+ * 타임아웃 시 빈 배열 반환 (호출 측에서 재시도 트리거).
  */
 export async function fetchAllCategoryBest(): Promise<CategoryBest[]> {
   try {
-    const snap = await getDocs(
+    const fetchPromise = getDocs(
       query(
         collection(db, 'category_best'),
         orderBy('displayOrder', 'asc'),
       ),
     );
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('fetchAllCategoryBest timeout 8s')), 8000),
+    );
+    const snap = await Promise.race([fetchPromise, timeoutPromise]);
     return snap.docs.map((d) => d.data() as CategoryBest);
   } catch (e) {
     console.warn('[category_best] 전체 조회 실패:', e);
@@ -556,6 +597,101 @@ export function subscribeCategoryBest(
       callback(null);
     },
   );
+}
+
+// ──────────────────────────────────────────────────────────
+// 이벤트 베스트 (event_best_jigumiya) + 쿠팡 PL (coupang_pl)
+// ──────────────────────────────────────────────────────────
+
+/** KST 기준 오늘 'YYYY-MM-DD' */
+function todayKstDateString(): string {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, '0')}-${String(kst.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 오늘 KST 기준 D-7 이내(오늘 포함) 가장 가까운 이벤트 1건 반환.
+ * cron(02:35 KST)이 D-7 윈도우에서만 갱신하므로 products 비어있는 stale 문서 가능 → 빈 products 제외.
+ */
+export async function fetchActiveJigumiyaEvent(): Promise<{
+  event: EventBestJigumiya;
+  daysUntil: number;
+} | null> {
+  try {
+    const snap = await getDocs(collection(db, 'event_best_jigumiya'));
+    const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const todayY = kst.getUTCFullYear();
+    const todayMidnight = Date.UTC(
+      todayY,
+      kst.getUTCMonth(),
+      kst.getUTCDate(),
+    );
+
+    let best: { event: EventBestJigumiya; daysUntil: number } | null = null;
+    for (const d of snap.docs) {
+      const ev = d.data() as EventBestJigumiya;
+      if (!ev?.date || !ev?.products?.length) continue;
+      const [mm, dd] = ev.date.split('-').map(Number);
+      if (!mm || !dd) continue;
+
+      let evMidnight = Date.UTC(todayY, mm - 1, dd);
+      let diffDays = Math.round((evMidnight - todayMidnight) / 86400000);
+      // 이미 지났으면 내년 동일일 기준 (D-7 안 들어옴 — best 후보 제외)
+      if (diffDays < 0) {
+        evMidnight = Date.UTC(todayY + 1, mm - 1, dd);
+        diffDays = Math.round((evMidnight - todayMidnight) / 86400000);
+      }
+      if (diffDays > 7) continue;
+      if (!best || diffDays < best.daysUntil) {
+        best = { event: ev, daysUntil: diffDays };
+      }
+    }
+    return best;
+  } catch (e) {
+    console.warn('[event_best_jigumiya] 활성 이벤트 조회 실패:', e);
+    return null;
+  }
+}
+
+/**
+ * 오늘 KST 'YYYY-MM-DD' 골드박스 문서 조회.
+ * 미존재 시 어제 문서 fallback (cron 지연/실패 흡수).
+ */
+export async function fetchGoldboxToday(): Promise<GoldboxDoc | null> {
+  const todayStr = todayKstDateString();
+  try {
+    const todaySnap = await getDoc(doc(db, 'goldbox', todayStr));
+    if (todaySnap.exists()) return todaySnap.data() as GoldboxDoc;
+    const yest = new Date(Date.now() + 9 * 60 * 60 * 1000 - 86400000);
+    const yestStr = `${yest.getUTCFullYear()}-${String(yest.getUTCMonth() + 1).padStart(2, '0')}-${String(yest.getUTCDate()).padStart(2, '0')}`;
+    const yestSnap = await getDoc(doc(db, 'goldbox', yestStr));
+    if (yestSnap.exists()) return yestSnap.data() as GoldboxDoc;
+    return null;
+  } catch (e) {
+    console.warn('[goldbox] 조회 실패:', e);
+    return null;
+  }
+}
+
+/**
+ * 오늘 KST 'YYYY-MM-DD' 쿠팡 PL 문서 조회.
+ * 미존재 시 어제 문서 fallback (cron 지연/실패 흡수).
+ */
+export async function fetchCoupangPLToday(): Promise<CoupangPLDoc | null> {
+  const todayStr = todayKstDateString();
+  try {
+    const todaySnap = await getDoc(doc(db, 'coupang_pl', todayStr));
+    if (todaySnap.exists()) return todaySnap.data() as CoupangPLDoc;
+    // fallback: 어제
+    const yest = new Date(Date.now() + 9 * 60 * 60 * 1000 - 86400000);
+    const yestStr = `${yest.getUTCFullYear()}-${String(yest.getUTCMonth() + 1).padStart(2, '0')}-${String(yest.getUTCDate()).padStart(2, '0')}`;
+    const yestSnap = await getDoc(doc(db, 'coupang_pl', yestStr));
+    if (yestSnap.exists()) return yestSnap.data() as CoupangPLDoc;
+    return null;
+  } catch (e) {
+    console.warn('[coupang_pl] 조회 실패:', e);
+    return null;
+  }
 }
 
 // ──────────────────────────────────────────────────────────
