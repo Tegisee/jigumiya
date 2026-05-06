@@ -14,7 +14,48 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-06 야간): 1.0.13 — 실기기 테스트 버그 수정 8건
+## 가장 최근 (2026-05-06 심야): 1.0.14 — iOS 무한로딩 fix + Android 성능 개선
+
+1.0.13 실기기 테스트 → iOS 상품 추가 무한로딩 잔존 + Android 스크롤 여전히 느림 → 근본 원인 재조사 후 1.0.14 (bn49/vc49) 재빌드 + 양 스토어 출시 완료 (커밋 `75d97f4`).
+
+**1) iOS 무한로딩 fix — CoupangScraper 재시도 소진 시 즉시 `onError()` 호출** (`components/CoupangScraper.tsx:253-262`)
+- 1.0.13까지: 가격=0 + 3회 재시도(2/4/6s) 소진 시 `console.warn('가격X — 재시도 소진')`만 찍고 콜백 미발사 → 외부 20s timeout만 의존 → 사용자 체감 50s+ 무한로딩
+- fix: `재시도 소진` 시 `doneRef=true` + `clearTimeout(timeoutRef)` + `onError()` 즉시 호출
+
+**2) CoupangScraper TDZ 잠재 버그 제거** (`components/CoupangScraper.tsx:177-183`)
+- `retryIndexRef`/`retryDelays` 선언을 `sourceKey` if 블록 위로 이동 — TS2448 (Block-scoped variable used before declaration) 해소
+
+**3) add-item.tsx fallback 강화 — `link.coupang.com` 단축 URL HTML body 파싱** (`app/modal/add-item.tsx:63-79, 222-273`)
+- 1.0.13까지: Functions 실패 시 fallback이 30x Location 헤더만 시도 → Coupang 단축 URL은 `200 OK + JS hex-escape redirectWebUrl` 응답이라 Location null → resolve 실패 → vp URL 미확보 → WebView 빈 페이지 스크래핑 무한 실패
+- fix: `extractRedirectUrlFromHtml()` 헬퍼 신설 (functions/src/index.ts 로직 클라이언트 미러). fallback 순서: (1) Location 헤더 → (2) HTML body `redirectWebUrl` 파싱 → (3) `redirect:'follow'` 본문에서도 파싱 시도
+
+**4) Functions timeout 5s → 8s 복원** (`add-item.tsx:208`)
+- 5s는 빡빡 (1.5s auth 대기 + Functions cold tail 흡수 부족) → 8s로 복원
+
+**5) Android 성능 — `expo-image` 도입 (8개 사용처 일괄 마이그레이션)**
+- `package.json`/`app.config.js` 플러그인 등록
+- 교체: ProductCard / (tabs)/index 골드박스 / event-best / today-best (h/v 둘 다) / coupang-pl / favorites / price-drops / detail
+- 모든 `<Image>`에 `cachePolicy="memory-disk"` + `recyclingKey` + `contentFit="cover"` + `transition={0}` 적용
+- 효과: 스크롤 중 같은 이미지 재로드 회피 + Native 측 캐시 + FlatList 셀 재활용 시 이미지 즉시 표시
+
+**6) SparklineChart `MIN_POINTS=5` 가드** (`components/SparklineChart.tsx`)
+- 1.0.13까지: priceHistory.length≥2면 LineChart 렌더 — gifted-charts SVG가 Android 스크롤에 부담 (홈 10개 카드 × SVG = GPU 압박)
+- fix: 5개 미만은 표시 X (의미도 없음). ProductCard `length >= 5` 가드도 같이 추가 (불필요 mount 회피)
+
+**7) today-best 펼침 모드 가상화** (`app/today-best.tsx`)
+- 1.0.13까지: `products.map(renderExpandedRow)` — 단일 FlatList row 안에 50개 동시 렌더 (가상화 X)
+- fix: 데이터 평탄화 — `Row = 'header' | 'preview' | 'product'` 타입. `useMemo`로 rows 빌드. 펼친 카테고리는 각 product가 개별 FlatList row → 가상화 활용
+- `keyExtractor`/`renderRow`/`handleBuy` 모두 `useCallback`. `initialNumToRender 4→8`, `maxToRenderPerBatch 3→6`, `windowSize 5→7`
+
+**8) coupang-pl renderItem `useCallback` 적용**
+- `handleBuy` + `renderItem` 모두 `useCallback`로 감싸 부모 리렌더 시 새 함수 reference 회피
+
+**9) 빌드 + 출시**
+- 1.0.14 (bn49/vc49) iOS + Android production 로컬 빌드 완료
+- 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.14-49.ipa` (16.1 MB) / `~/jigumiya/builds/android/jigumiya-1.0.14-49.aab` (58.8 MB)
+- iOS App Store + Android Play Store 출시 완료
+
+## 직전 (2026-05-06 야간): 1.0.13 — 실기기 테스트 버그 수정 8건
 
 1.0.12 (bn47/vc47) 빌드 → 실기기 검증 → 8건 버그 발견 → 수정 → 1.0.13 (bn48/vc48) 재빌드 (커밋 `489339e` + `f8c059d`).
 
@@ -63,7 +104,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 - 1.0.13 (bn48/vc48) iOS + Android production 로컬 빌드 (5/6 야간)
 - 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.13-48.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.13-48.aab`
 
-## 직전 (2026-05-06 후반): 1.0.12 통합 작업 — UI 재구성 + 그래프 + 신규 화면 + Firestore rules
+## 그 직전 (2026-05-06 후반): 1.0.12 통합 작업 — UI 재구성 + 그래프 + 신규 화면 + Firestore rules
 
 **0) Firestore rules 배포** (event_best_jigumiya / goldbox / coupang_pl read 허용)
 
@@ -115,7 +156,7 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 
 **10) feed.tsx generateDeepLink 정리** — category_best.products[].productUrl이 이미 affiliate URL → 재변환 제거 (이후 feed.tsx 자체 삭제)
 
-## 직전 (2026-05-06 전반): 쿠팡 PL cron + token dedup + 갤럭시S21+ 알림 0건 진단
+## 그 직전 (2026-05-06 전반): 쿠팡 PL cron + token dedup + 갤럭시S21+ 알림 0건 진단
 
 **1) 쿠팡 PL cron 신설** (커밋 `b4a4e16`):
 - 위치: `scripts/coupangpl-updater/`, 워크플로 `.github/workflows/coupangpl-update.yml`
@@ -199,30 +240,27 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 
 타임라인 조정: event-best-jigumiya 02:30→02:35 KST (category-best과 격차 10분). shared-price-check cron 3차 재활성화 (`fb324d9`)
 
-## 다음 작업 순서 (2026-05-06 이후)
+## 다음 작업 순서 (2026-05-06 심야 이후)
 
-**최우선** (검증 + 신규):
-1. **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행:
-   - `[CategoryCycle] 합계 api=N pointer 갱신 완료` (drops/ups 카운트 사라짐, fetch + 문서 갱신만)
-   - `[Skip-DropRateGuard] {pid} dropRate=...% — 알림 스킵` 발생 확인 (60% 가드 동작)
-   - 추적 상품에 가짜 변동 알림 0건
-   - 요일별 morning/evening 문구 매칭 (07:30/20:00 cron, KST 요일과 일치)
-2. **🚨 검증** 골드박스 cron (07:30 KST) — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix 확인 (raw면 deeplink 추가)
-3. **🚨 검증** 이벤트 cron (02:35 KST) — D-7 윈도우 graceful exit / parentsday(05-08) 진입 시 갱신
-4. **🚨 검증** 쿠팡 PL cron (07:30 KST, 5/6 신설) — `coupang_pl/{YYYY-MM-DD}` 생성 + 100개 + productUrl affiliate 확인
-5. **빌드** 1.0.12 — 다음 항목 통합:
-   - `ensureUserDoc()` 추가 — `signInAnonymously()` 직후 user doc 무조건 생성 (권한/토큰 무관, `app:'jigumiya'` + `createdAt` 박힘). 갤럭시 알림 0건 사고 근본 fix
-   - `registerForPushNotifications` 실패 시 재시도 로직 (네트워크/일시 실패 흡수)
-   - iOS 쿠팡 복귀 시 무한로딩 fix — `feed.tsx` AppState 핸들러 + fetch timeout + price-drops 재구독
-   - feed.tsx `generateDeepLink` 불필요 호출 제거 (이미 deepLink 보유 시 재변환 X)
-   - vendorItemId 저장 보강 (고정값 누락 케이스)
-   - 홈화면 UI 수정
-   - 가격그래프 Y축 버그 fix
-6. **확인** `category_best/{categoryId}.products[0].productUrl` prefix raw vs affiliate (Firebase Console 직접)
-7. **승급 대기** 1.0.11 iOS 심사 통과 → App Store 출시 / Android 내부 테스트 → 프로덕션 승급
-8. **갱신** 1.0.10 양 스토어 승급 후 `meta/config_jigumiya.minRequiredVersion = "1.0.10"` → 1.0.11 승급 후 "1.0.11"
+**🌅 내일 확인 (1.0.14 출시 후 검증)**:
+1. **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출 (5개 미만은 스킵 동작 확인)
+2. **검증** 아침/저녁 알림 정상 발송 (07:30 morning_greeting / 20:00 evening_no_change, 요일별 문구 매칭)
+3. **검증** 골드박스 cron 07:30 KST 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
+4. **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image 캐싱 + today-best 가상화 효과)
 
-**뒤로 미뤄둔**: 그래프 Y축 버그 / 공지사항 팝업 + 전체 푸시 / cron schedule 최적화 §8-D-2 / shared-price-check dry-run 모드
+**📦 다음 빌드 (1.0.15) 때 수정할 것**:
+- 앱 공유 시 iOS/Android 구분 없이 **앱스토어 + 구글플레이 링크 모두 발송** (현재 Platform.OS 분기 단일 링크 → 양쪽 동시)
+- Android proguard 설정 — 빌드 크기 축소 + 코드 보호
+- 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 등 지금이야 1.0.12~1.0.14 변경 이식
+
+**🔍 cron 검증 (잔여)**:
+- shared-price-check cron 3차 재활성화 후 자동 실행 (A~E 검증 — 가짜 변동 알림 0건 / dropRate 가드 / 요일 문구)
+- 이벤트 cron 02:35 KST 첫 실행 — D-7 윈도우 graceful exit / parentsday(05-08) 진입 시 갱신
+- 쿠팡 PL cron 07:30 KST 자동 실행 — workflow_dispatch 외 schedule 트리거
+- token-dedup 로그 + 갤럭시/아이폰 1대당 1 push 보장
+- vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭`)
+
+**🔧 뒤로 미뤄둔**: 공지사항 팝업 + 전체 푸시 / cron schedule 최적화 §8-D-2 / shared-price-check dry-run 모드
 
 **중기**: `meta/stats.sharedProductCount` 자동 갱신 / users EAS projectId 분포 조사 / 아이고 cron 활성화 / 하트 버튼 백필 검증 / increment 비대칭 추적 / 아이고 Firebase 통합(§8-C) / 아이고 Functions 이식 / 아이고 알림+계정삭제 버그 / 가족 계정 구매 테스트(파트너스 실적 집계)
 
@@ -268,22 +306,43 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **chore** 텍스트 변경 — "친구에게 사주세요 🎁" → "사달라고 조르기 🥺" (버튼/모달 타이틀)
 - [x] **fix** iOS Share 버그 — 모달 dismiss 후 350ms delay 후 `Share.share` 호출
 - [x] **fix** 쿠팡 PL 브랜드별 자동 탭 (BRANDS productName 매칭) — categoryName 비어있는 응답 대응
-- [x] **fix** iOS 상품 추가 무한로딩 — `waitForAuthReady(1500)` + Functions timeout 8s→5s (worst 18s→6.5s)
-- [x] **perf** Android FlatList 최적화 — `ProductCard` `memo()` + 6개 화면 표준 props
+- [x] **fix** iOS 상품 추가 무한로딩 1차 시도 — `waitForAuthReady(1500)` + Functions timeout 8s→5s (1.0.14에서 추가 보완 필요)
+- [x] **perf** Android FlatList 최적화 1차 — `ProductCard` `memo()` + 6개 화면 표준 props (1.0.14에서 expo-image + 가상화로 추가 개선)
 - [x] **build** 1.0.13 (bn48/vc48) production 로컬 빌드 (iOS + Android)
 
-### 2026-05-06 이후 미완
-- [ ] **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
-- [ ] **🚨 검증** 골드박스 cron (07:30 KST) 첫 실행 — 문서 생성 + productUrl affiliate
-- [ ] **🚨 검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
+### 2026-05-06 심야 완료 (1.0.14 — iOS 무한로딩 + Android 성능 추가 개선)
+- [x] **fix** CoupangScraper 재시도 소진 시 즉시 `onError()` 호출 (외부 20s timeout 의존 제거)
+- [x] **fix** CoupangScraper TDZ 잠재 버그 제거 (`retryIndexRef`/`retryDelays` 선언 위치 정리)
+- [x] **fix** add-item.tsx fallback에 `extractRedirectUrlFromHtml` 추가 — link.coupang.com 단축 URL HTML body `redirectWebUrl` 파싱 (functions/src 미러)
+- [x] **fix** Functions timeout 5s → 8s 복원
+- [x] **perf** expo-image 도입 — 8개 사용처 일괄 마이그레이션 (`memory-disk` cachePolicy + `recyclingKey` + `transition={0}`)
+- [x] **perf** SparklineChart `MIN_POINTS=5` 가드 — gifted-charts SVG 비용 회피 (priceHistory 5개 미만 표시 X)
+- [x] **perf** today-best 펼침 모드 평탄화 row 구조 — `Row='header'|'preview'|'product'` + 개별 FlatList row 가상화 (50개 동시 렌더 → 가상화)
+- [x] **perf** coupang-pl renderItem `useCallback` 적용
+- [x] **build** 1.0.14 (bn49/vc49) production 로컬 빌드 (iOS + Android)
+- [x] **release** 1.0.14 iOS App Store + Android Play Store 출시 완료
+
+### 2026-05-07 이후 미완
+
+#### 🌅 내일 검증 (1.0.14 출시 후)
+- [ ] **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출, 5개 미만은 스킵
+- [ ] **검증** 아침/저녁 알림 정상 발송 — 07:30 morning_greeting / 20:00 evening_no_change, 요일별 문구 매칭
+- [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
+- [ ] **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image + 가상화 효과)
+
+#### 📦 다음 빌드 (1.0.15) 때 수정
+- [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
+- [ ] **chore** Android proguard 설정 — 빌드 크기 축소 + 코드 보호
+- [ ] **port** 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 등 지금이야 1.0.12~1.0.14 이식
+
+#### 🔍 cron 검증 (잔여)
+- [ ] **검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
+- [ ] **검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
 - [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거 + categoryName 응답 포함 여부
 - [ ] **검증** 다음 cron 사이클에 `[ActiveUsers] token-dedup N건 제외` 로그 표시 + 갤럭시/아이폰 사용자가 morning push 1건씩 수령
-- [ ] **검증** 1.0.13 실기기 (production 로컬 빌드) — 이벤트 배너 / priceHero / iOS Share / 쿠팡 PL 브랜드 탭 / iOS 상품 추가 시간 / Android 스크롤
 - [ ] **검증** vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭 → ...원 (옵션 고정)`)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
-- [ ] **검증** 요일별 morning/evening 문구 매칭 (07:30/20:00 cron)
-- [ ] **승급 대기** 1.0.11 iOS 심사 / Android 내부 테스트 → 프로덕션
-- [ ] **갱신** `meta/config_jigumiya.minRequiredVersion` 1.0.10 → 1.0.11 (양 스토어 승급 후)
+- [ ] **갱신** `meta/config_jigumiya.minRequiredVersion` — 1.0.14 안정화 후 단계적 갱신
 - [ ] **모니터링** Functions 응답시간 로그 (`minInstances:1` 후 콜드 스파이크 사라짐 확인, 최소 20회 표본)
 
 ### 누적 미완 (이전부터)
@@ -311,22 +370,21 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - deeplink API: `link.coupang.com/a/XXXXX` shortenUrl 반환 (입력 공유 URL 동일 prefix → slug 비교로 원본/제휴 구분)
 - 코드: `services/coupangApi.ts` (클라이언트 HMAC fallback) / `functions/src/index.ts` (서버 HMAC + HTML `redirectWebUrl` 파싱)
 
-## 현재 상태: A~E 알림 시스템 재설계 완료 + 신규 cron 2종 + 재활성화 (2026-05-05 후반 기준)
-- **알림 시스템 재설계 완료** (커밋 `48c1fed` + `fb324d9`):
+## 현재 상태: 1.0.14 양 스토어 출시 완료 (2026-05-06 심야 기준)
+- **1.0.14 (bn49/vc49) 양 스토어 출시 완료** (커밋 `75d97f4`):
+  - iOS App Store + Android Play Store 출시 완료
+  - 빌드 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.14-49.ipa` (16.1 MB) / `~/jigumiya/builds/android/jigumiya-1.0.14-49.aab` (58.8 MB)
+- **알림 시스템 A~E 재설계 + shared-price-check 3차 재활성화** (커밋 `48c1fed` + `fb324d9`):
   - A: 카테고리 베스트 알림 완전 제거 — shared_products 단일 출처
   - B: dropRate 60% 가드 + flush 직전 events.drops/ups dedup
   - C: morning/evening 요일별 단일 문구 (KST DOW)
   - D: 골드박스 cron 신설 — 07:30 KST, `goldbox/{YYYY-MM-DD}` 1콜/일
   - E: 이벤트 cron 신설 — 02:35 KST, 11개 이벤트, D-7 윈도우, search limit 10
-- **shared-price-check cron 3차 재활성화** — A~E로 모든 가짜 변동 메커니즘 차단
 - **새벽 cron 타임라인 (KST)**:
-  - 01:00 event-best (아이고) / 01:15 baby1 / 01:30 baby2 / **02:00 category-best** / **02:35 event-best-jigumiya** / 03:00 baby3 / 03:20 baby4 / 04:30 shared-price Block zone 종료 / **07:30 goldbox**
-- **1.0.11 (bn46/vc46) 양 스토어 업로드 (5/5)**: iOS 심사 요청 완료 / Android 내부 테스트 트랙 업로드 완료
-  - 빌드 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.11-46.ipa` (16.1 MB) / `~/jigumiya/builds/android/jigumiya-1.0.11-46.aab` (58.7 MB)
+  - 01:00 event-best (아이고) / 01:15 baby1 / 01:30 baby2 / **02:00 category-best** / **02:35 event-best-jigumiya** / 03:00 baby3 / 03:20 baby4 / 04:30 shared-price Block zone 종료 / **07:30 goldbox + coupangPL + notify-only(morning)** / 20:00 notify-only(evening)
 - Functions `resolveAndGenerateAffiliateUrl` `minInstances: 1` 배포 완료 (Cloud Run minScale=1, 콜드 스타트 제거, 월 ~$5~10)
-- **1.0.10 (bn45/vc45)** Play Store 프로덕션 검토 중 / App Store 심사 대기 중 (상태 유지) — 양 스토어 승급 시 1.0.11 후속 적용
 - **GitHub 레포**: https://github.com/Tegisee/jigumiya (Public, Actions 무제한 무료)
-- **`meta/config_jigumiya.minRequiredVersion = "1.0.8"`** (2026-05-02 갱신) — 1.0.10 양 스토어 승급 후 "1.0.10" → 1.0.11 승급 후 "1.0.11"
+- **`meta/config_jigumiya.minRequiredVersion = "1.0.8"`** (2026-05-02 갱신) — 1.0.14 안정화 후 단계적 갱신
 
 ## 주요 기술 현황
 
