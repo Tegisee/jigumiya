@@ -14,7 +14,56 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-06 후반): 1.0.12 통합 작업 — UI 재구성 + 그래프 + 신규 화면 + Firestore rules
+## 가장 최근 (2026-05-06 야간): 1.0.13 — 실기기 테스트 버그 수정 8건
+
+1.0.12 (bn47/vc47) 빌드 → 실기기 검증 → 8건 버그 발견 → 수정 → 1.0.13 (bn48/vc48) 재빌드 (커밋 `489339e` + `f8c059d`).
+
+**1) 이벤트 배너 라우팅 fix**
+- 홈 활성 이벤트 배너 클릭 → `/today-best`로 잘못 이동 → `/event-best?slug=...`로 라우팅 변경
+- `app/event-best.tsx` 신규 (slug param + `fetchEventBySlug` + 헤더 D-N 배지 + 상품 리스트)
+- `services/firebase.ts:fetchEventBySlug(slug)` 신설
+- 루트 Stack에 `event-best` 등록
+
+**2) 상세페이지 UI 전면 교체** (`app/detail/[id].tsx`)
+- 제거: targetRow(목표가) 카드 + gridSection 4-card grid(현재가/최저가/최고가/평균가) + priceModal(목표가 수정 Modal) + chartEmpty 다중 행
+- 추가: priceHero (현재가 32px bold + 트렌드별 상태 텍스트 📉/📈/➡️) + 간소화된 chartEmpty (아이콘 + "데이터 축적 중" + "내일부터..." 한 줄)
+- 결과 구조: 상품 thumbnail/이름/메타 → priceHero → chartSection (그래프 OR 빈 상태) → priceInsights → 사달라고 조르기 버튼 → 파트너스 고지
+
+**3) 사달라고 조르기 텍스트 변경**
+- 버튼: "친구에게 사주세요 🎁" → "사달라고 조르기 🥺"
+- 모달 타이틀: "친구에게 보낼 메시지" → "사달라고 조르기 🥺"
+
+**4) iOS Share 버그 fix**
+- 멘트 선택 후 공유 시트 안 뜨는 문제 — 모달 dismiss 애니메이션 끝나기 전 Share.share 호출 시 root view 점유 충돌
+- `handleSendAsk`: 모달 close 후 iOS는 350ms `setTimeout` 후 Share 호출, Android는 즉시
+- 공유 텍스트 형식: `${trimmed}\n\n${productName}\n${url}` (이미 입력텍스트\n\n상품명\n링크 순서)
+
+**5) 쿠팡 PL 브랜드별 자동 탭 분류** (`app/coupang-pl.tsx`)
+- API 응답 categoryName 필드 비어있어 모두 "기타" 묶이는 문제 → productName 브랜드 감지로 대체
+- `BRANDS = ['베이스알파에센셜', '꼬리별', '곰곰', '코멧', '탐사', '줌']` 우선순위 순서 (긴 이름 먼저)
+- `detectBrand(productName)` `productName.includes(brand)` 우선순위 매칭, 미일치 시 '기타'
+- `brandByProductId` `useMemo` 캐시 + 탭 빌드는 BRANDS 정의 순서 + 매칭된 것만 + 마지막에 '기타'
+- 카드 하단 categoryName 라벨 제거 (탭이 이미 표시)
+
+**6) iOS 상품 추가 무한로딩 개선** (`services/firebase.ts` + `app/modal/add-item.tsx`)
+- 첫 1~2번째 추가 시 무한로딩 → Auth 미준비 상태에서 Functions 호출 → 8s timeout 후 fallback chain (worst 18s)
+- `waitForAuthReady(maxMs)` 신설 — `auth.currentUser` 즉시 있으면 0ms, 없으면 `onAuthStateChanged` 구독 + setTimeout 대기
+- `callResolveAffiliate`: 호출 전 1.5s auth 대기, 그래도 미준비 시 `{ ok:false, error:'auth_not_ready' }` 즉시 반환 → 빠른 fallback
+- `warmupResolveAffiliate`: 동일 1.5s 대기, 미준비 시 skip
+- add-item Functions withTimeout 8000 → 5000ms
+- worst-case latency: 18s → 6.5s
+
+**7) Android FlatList 최적화**
+- `components/ProductCard.tsx`: `memo()` + 커스텀 비교(`prev.item === next.item`)
+- 6개 화면 FlatList 표준 props: `removeClippedSubviews` + `initialNumToRender`/`maxToRenderPerBatch`/`windowSize` (각 화면 데이터 양에 맞춰 조정) + `updateCellsBatchingPeriod={50}`
+- 메모리 사용량 ↓ + 스크롤 프레임 드랍 완화 (Android 위주)
+
+**8) 빌드 + 배포**
+- Firestore rules 배포 완료 (`event_best_jigumiya/goldbox/coupang_pl` read 허용) — 5/6 진행됨
+- 1.0.13 (bn48/vc48) iOS + Android production 로컬 빌드 (5/6 야간)
+- 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.13-48.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.13-48.aab`
+
+## 직전 (2026-05-06 후반): 1.0.12 통합 작업 — UI 재구성 + 그래프 + 신규 화면 + Firestore rules
 
 **0) Firestore rules 배포** (event_best_jigumiya / goldbox / coupang_pl read 허용)
 
@@ -213,13 +262,23 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **deploy** Firestore rules 배포 (5/6)
 - [x] **build** 1.0.12 EAS preview 빌드 (iOS + Android)
 
+### 2026-05-06 야간 완료 (1.0.13 — 실기기 테스트 fix 8건)
+- [x] **fix** 이벤트 배너 라우팅 (`/today-best` → `/event-best?slug=...`) + `app/event-best.tsx` 신규 + `fetchEventBySlug` 신설
+- [x] **refactor** 상세페이지 UI 전면 교체 — priceHero(현재가+상태) + 그래프 + 인사이트 (4-card grid + targetRow + priceModal 제거)
+- [x] **chore** 텍스트 변경 — "친구에게 사주세요 🎁" → "사달라고 조르기 🥺" (버튼/모달 타이틀)
+- [x] **fix** iOS Share 버그 — 모달 dismiss 후 350ms delay 후 `Share.share` 호출
+- [x] **fix** 쿠팡 PL 브랜드별 자동 탭 (BRANDS productName 매칭) — categoryName 비어있는 응답 대응
+- [x] **fix** iOS 상품 추가 무한로딩 — `waitForAuthReady(1500)` + Functions timeout 8s→5s (worst 18s→6.5s)
+- [x] **perf** Android FlatList 최적화 — `ProductCard` `memo()` + 6개 화면 표준 props
+- [x] **build** 1.0.13 (bn48/vc48) production 로컬 빌드 (iOS + Android)
+
 ### 2026-05-06 이후 미완
 - [ ] **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
 - [ ] **🚨 검증** 골드박스 cron (07:30 KST) 첫 실행 — 문서 생성 + productUrl affiliate
 - [ ] **🚨 검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
 - [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거 + categoryName 응답 포함 여부
 - [ ] **검증** 다음 cron 사이클에 `[ActiveUsers] token-dedup N건 제외` 로그 표시 + 갤럭시/아이폰 사용자가 morning push 1건씩 수령
-- [ ] **검증** 1.0.12 실기기 (preview 빌드) — ensureUserDoc / 그래프 / 사주세요 / 신규 화면 / 골드박스 / 탭 4개
+- [ ] **검증** 1.0.13 실기기 (production 로컬 빌드) — 이벤트 배너 / priceHero / iOS Share / 쿠팡 PL 브랜드 탭 / iOS 상품 추가 시간 / Android 스크롤
 - [ ] **검증** vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭 → ...원 (옵션 고정)`)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 - [ ] **검증** 요일별 morning/evening 문구 매칭 (07:30/20:00 cron)
