@@ -5,7 +5,16 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 작업할 항목의 sub MD도 함께 읽고 시작할 것.
 2026-04-30 이전 작업 이력은 docs/작업이력_archive.md 참조.
 
-## 가장 최근 (2026-05-05 후반): A~E 알림 시스템 재설계 + 신규 cron 2종
+## 가장 최근 (2026-05-06): 쿠팡 PL cron 신설 (07:30 KST)
+
+쿠팡 PL cron 추가 (커밋 `b4a4e16`):
+- 위치: `scripts/coupangpl-updater/`, 워크플로 `.github/workflows/coupangpl-update.yml`
+- 엔드포인트 `/v2/.../products/coupangPL?limit=100` (v1 prefix 없음, goldbox와 동일 패턴)
+- 골드박스와 동시 실행 (07:30 KST, `30 22 * * *`), 1콜/일
+- productUrl이 이미 affiliate URL → deeplink 변환 없음
+- Firestore `coupang_pl/{YYYY-MM-DD KST}` 저장: `{ productId, productName, productPrice, productImage, deepLink, isRocket, isFreeShipping }`
+
+## 직전 (2026-05-05 후반): A~E 알림 시스템 재설계 + 신규 cron 2종
 
 5/5 17:35 폭탄 사고(`events.categoryBroadcasts` 다중 push) → A~E 재설계 (커밋 `48c1fed`):
 - A: 카테고리 베스트 알림 완전 제거 → shared_products 단일 출처 일원화
@@ -85,7 +94,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
    - 요일별 morning/evening 문구 매칭 (07:30/20:00 cron, KST 요일과 일치)
 2. **🚨 검증** 골드박스 cron (07:30 KST) — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix 확인 (raw면 deeplink 추가)
 3. **🚨 검증** 이벤트 cron (02:35 KST) — D-7 윈도우 graceful exit / parentsday(05-08) 진입 시 갱신
-4. **신규** 쿠팡 PL cron 추가 (07:30 KST, 골드박스와 함께 — 별도 워크플로 또는 통합)
+4. **🚨 검증** 쿠팡 PL cron (07:30 KST, 5/6 신설) — `coupang_pl/{YYYY-MM-DD}` 생성 + 100개 + productUrl affiliate 확인
 5. **빌드** 1.0.12 — 홈화면 UI 개선 + vendorItemId 저장 보강 + 가격그래프 버그 fix + iOS 무한로딩 fix(feed.tsx AppState 핸들러, fetch timeout, price-drops 재구독)
 6. **확인** `category_best/{categoryId}.products[0].productUrl` prefix raw vs affiliate (Firebase Console 직접)
 7. **승급 대기** 1.0.11 iOS 심사 통과 → App Store 출시 / Android 내부 테스트 → 프로덕션 승급
@@ -109,11 +118,14 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **타임라인** event-best-jigumiya 02:30→02:35 KST
 - [x] **재가동 (3차)** shared-price-check cron `*/10 * * * *` 활성화 (커밋 `fb324d9`)
 
+### 2026-05-06 완료
+- [x] **신규** 쿠팡 PL cron 추가 (07:30 KST, 골드박스와 함께) — 커밋 `b4a4e16`
+
 ### 2026-05-06 이후 미완
 - [ ] **🚨 검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
 - [ ] **🚨 검증** 골드박스 cron (07:30 KST) 첫 실행 — 문서 생성 + productUrl affiliate
 - [ ] **🚨 검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
-- [ ] **신규** 쿠팡 PL cron 추가 (07:30 KST, 골드박스와 함께)
+- [ ] **🚨 검증** 쿠팡 PL cron (07:30 KST) 첫 실행 — `coupang_pl/{YYYY-MM-DD}` 생성 + 100개
 - [ ] **빌드** 1.0.12 — 홈화면 UI / vendorItemId / 가격그래프 / iOS 무한로딩 fix 통합
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 - [ ] **검증** 요일별 morning/evening 문구 매칭 (07:30/20:00 cron)
@@ -195,6 +207,14 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - 페이로드: `{ date, products: [{ productId, productName, productPrice, productImage, deepLink }], updatedAt }`
 - 호출량: 1콜/일. rate-limited 감지 시 즉시 종료 (당일 재실행 없음)
 
+### coupangpl-updater (2026-05-06 신설, 매일 07:30 KST)
+- 위치: `scripts/coupangpl-updater/`, 워크플로우: `.github/workflows/coupangpl-update.yml` (`30 22 * * *`)
+- 엔드포인트: `/v2/providers/affiliate_open_api/apis/openapi/products/coupangPL` (v1 prefix 없음 — goldbox와 동일 패턴)
+- 동작: 1콜 fetch (limit 100, 최대) → coupangPL 응답의 productUrl이 이미 affiliate URL이므로 별도 deeplink 변환 X → Firestore `coupang_pl/{YYYY-MM-DD KST}` 저장
+- 페이로드: `{ date, products: [{ productId, productName, productPrice, productImage, deepLink, isRocket, isFreeShipping }], updatedAt }`
+- 호출량: 1콜/일. rate-limited 감지 시 즉시 종료 (당일 재실행 없음)
+- 골드박스 cron과 동시 실행 (07:30 KST 동일 슬롯)
+
 ### event-best-jigumiya-updater (2026-05-05 후반 신설, 매일 02:35 KST)
 - 위치: `scripts/event-best-jigumiya-updater/`, 워크플로우: `.github/workflows/event-best-jigumiya-update.yml` (`35 17 * * *`)
 - 11개 이벤트 정의 (`events-jigumiya.ts`): valentine(02-14) / samgyeopsal(03-03) / whiteday(03-14) / childrensday(05-05) / parentsday(05-08) / teachersday(05-15) / couplesday(05-21) / roseday(06-14) / halloween(10-31) / pepero(11-11) / christmas(12-25)
@@ -215,7 +235,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 | 03:00 | baby3 (아이고, 10) | 동일 |
 | 03:20 | baby4 (아이고, 14) | 동일 |
 | 04:30~01:00 | `shared-price-check.yml` `*/10 * * * *` | shared_products 가격체크 + 카테고리 fetch (Block zone 가드) |
-| **07:30** | **`goldbox-update.yml`** + `notify-only.yml` | **goldbox 1콜 (신규) / morning_greeting 발송** |
+| **07:30** | **`goldbox-update.yml`** + **`coupangpl-update.yml`** + `notify-only.yml` | **goldbox 1콜 + 쿠팡 PL 1콜 (limit 100, 5/6 신규) / morning_greeting 발송** |
 | 20:00 | `notify-only.yml` | evening_no_change 발송 |
 | (수동) | `tracked-backfill.yml` | productId 누락 보강 (1회 적용 완료, 5/2) |
 
