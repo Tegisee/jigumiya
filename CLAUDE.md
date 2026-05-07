@@ -14,28 +14,44 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-07): priceHistory 동기화 버그 fix + ProductCard trend 뱃지 추가
+## 가장 최근 (2026-05-07~08): 1.0.15 출시 + priceHistory 동기화 fix + token-dedup swap + 인사 알림 제거
 
-1.0.14 출시 후 실기기에서 발견된 priceHistory 관련 버그 3종 코드 분석 → 근본 원인 fix.
+1.0.14 출시 후 실기기 회귀 버그 + 알림 정책 정리 + 1.0.15 (bn50/vc50) 양 스토어 출시 (커밋 `3ec2806` → `2a9e359`).
 
-**1) Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그** (`store/useAppStore.ts:115-145`)
+**1) Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그** (`store/useAppStore.ts:115-145`, 커밋 `2037437`)
 - 1.0.14까지: `updateItemInFirestore(id, { currentPrice })`만 호출 → store에는 priceHistory 누적되지만 Firestore의 `users/{uid}/items.priceHistory`는 추가 시점 1개로 영원히 박혀있음
 - fix: `updateItemInFirestore(id, { currentPrice, priceHistory: history.slice(-30) })` — store와 Firestore 동시 갱신
 - 효과: 백그라운드 → 포그라운드 전환 시 syncFromFirestore가 store를 덮어써도 priceHistory 보존
 
-**2) Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호** (`store/useAppStore.ts:syncFromFirestore`)
+**2) Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호** (`store/useAppStore.ts:syncFromFirestore`, 커밋 `2037437`)
 - 1.0.14까지: `set({ trackedItems: items })` 무조건 덮어쓰기 → Firestore priceHistory가 1개로 박혀있는 기존 사용자는 백그라운드 복귀마다 그래프 데이터 리셋
 - fix: id 단위 매칭해서 `local.priceHistory.length > remote.priceHistory.length`면 local 보존 (priceHistory + currentPrice). 그 외 필드는 remote 채택
-- 효과: Fix A 적용 전 누적된 기존 사용자 store 데이터 보호. Firestore 점진적 회복 (다음 가격 갱신부터 정상화)
 
-**3) Fix C — ProductCard 우측하단 trend 뱃지 추가** (`components/ProductCard.tsx`)
-- 1.0.14까지: 홈 추적 카드에 trend 표시 없음 (목표가 텍스트만). 상세페이지(`detail/[id].tsx:114-119`)에는 있었지만 홈에는 없었음
-- fix: priceHistory 첫값 vs 마지막값 비교 → 📉 가격하락감지(빨강 #FF4444) / 📈 가격상승감지(파랑 #3B82F6) / ➡️ 가격변동없음(그레이) 뱃지. priceHistory 2개 미만이면 미표시
+**3) Fix C — ProductCard 우측하단 trend 뱃지 추가** (`components/ProductCard.tsx`, 커밋 `2037437` + `aa90f1a` 이모지 제거)
+- 1.0.14까지: 홈 추적 카드에 trend 표시 없음 (목표가 텍스트만). 상세페이지(`detail/[id].tsx:114-119`)에만 있었음
+- fix: priceHistory 첫값 vs 마지막값 비교 → "가격하락감지"(빨강 #FF4444) / "가격상승감지"(파랑 #3B82F6) / "가격변동없음"(그레이 theme.subtext) 뱃지 (이모지 없음). priceHistory 2개 미만이면 미표시
 - 위치: 카드 정보 영역 하단 행 우측 (gap 텍스트 좌측 / trend 뱃지 우측 — `flexDirection:row, justifyContent:space-between`)
 
-**근본 원인 요약**: `users/{uid}/items.priceHistory`와 `shared_products.priceHistory`가 분리된 이중 진실 구조 + 클라이언트 측 priceHistory 누락 저장 + sync 시 무조건 덮어쓰기 — 3개 결함이 조합되어 백그라운드 복귀마다 그래프 리셋. Fix A로 클라이언트 누락 차단 + Fix B로 기존 데이터 보호.
+**4) 아침/저녁 인사 알림 제거** (`scripts/shared-price-checker/index.ts`, 커밋 `3ec2806`)
+- `morning_greeting` push 블록(line 843-850) + `evening_no_change` push 블록(line 980-987) 제거 → 가격 변동 알림(target_reached / price_drop_summary / price_up_summary)만 유지
+- `notify-only.yml` 워크플로우 자체는 유지 (07:30 / 20:00 KST 누적 drop 발송 흐름 보존)
+- 아이고 측 동시 처리: `aigo-daily-greeter.yml` schedule 두 줄 주석 처리(workflow_dispatch는 유지) — 아이고 커밋 `fe58515`
 
-**미적용 (다음 빌드)**: Fix A/B는 1.0.15 빌드 출시 후 효과 발생. 출시 전까지 기존 사용자는 Fix B로만 보호됨 (store는 보존, Firestore는 다음 가격 체크부터 회복).
+**5) token-dedup swap 정책 (orphan tracker fix)** (`scripts/shared-price-checker/index.ts:fetchActiveUsers`, 커밋 `2a9e359`)
+- 기존: 동일 expoPushToken 공유 시 doc id asc 첫 등장 uid만 보존 → anon 재로그인 후 신 uid에만 tracked가 추가된 케이스에서 추적자가 영구 dup-skip → 알림 미발송
+- 실측 사례: 단말 1대 토큰 공유 — `qw3R…UCh2`(tracked 보유, kept-second) ↔ `FMwP…JGW2`(tracked 없음, kept-first). 익스트림 액티브 에너지젤(`8611087425`) 추적자가 알림 영구 미수신 상태였음
+- fix: 함수 진입 시 `collectionGroup('tracked').get()` 1회 → `trackedUids: Set<string>` 사전 빌드. 충돌 시 신 uid만 tracked 보유하면 swap (`map.delete(firstUid)` + 신 uid로 교체). 그 외(둘 다 보유 / 둘 다 미보유 / first만 보유)는 first 유지
+- 로그: `[ActiveUsers] swap-token uid=… (has tracked) replaces … (no tracked)` 신설. 요약에 `swap N건` + `trackedUids=N` 추가
+- 비용: 사이클당 collectionGroup 쿼리 1회 추가 (현재 N≈수십, <1초)
+- 영향: 전환 사이클 한정 1회성 24h 가드 orphan으로 알림 1건 추가 가능 (페어당 최대 1회, 이후 정상화)
+
+**6) 1.0.15 (bn50/vc50) 양 스토어 출시**
+- 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab`
+- iOS App Store 심사 제출 / Android Play Store 프로덕션 승급 신청 완료
+- 포함 변경: Fix A + B + C, 인사 알림 제거(서버 측은 이미 적용), token-dedup swap (서버 측은 이미 적용)
+
+**미확인 이슈 (1.0.15 출시 후 재확인 필요)**:
+- ⚠️ **데이터/캐시 삭제 후 첫 상품 추가 실패** — 5/7~5/8 재현 보고. AsyncStorage 초기화 + 신규 anon 로그인 직후 첫 add-item 호출에서 무한로딩/실패 발생 추정. ensureUserDoc/Auth 워밍업 race 의심. 1.0.15 (Functions timeout 8s 복원 + Auth 대기 1.5s)에서 재현 여부 검증 후 추가 fix 결정.
 
 ## 직전 (2026-05-06 심야): 1.0.14 — iOS 무한로딩 fix + Android 성능 개선
 
@@ -348,25 +364,36 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **release** 1.0.14 iOS App Store + Android Play Store 출시 완료
 
 ### 2026-05-07 완료
-- [x] **fix** 아침/저녁 인사 알림 제거 — `index.ts:843-850`(morning_greeting) + `980-987`(evening_no_change) push 블록 제거. 가격 변동 알림(target_reached/price_drop_summary/price_up_summary)은 유지
-- [x] **fix** 아이고 인사 알림 schedule 비활성화 — `aigo-daily-greeter.yml` schedule 두 줄 주석 처리. workflow_dispatch는 유지(수동 복원)
-- [x] **fix** Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그 (`store/useAppStore.ts:115-145`). `currentPrice` + `priceHistory.slice(-30)` 둘 다 저장하도록 수정 → 백그라운드 복귀 시 priceHistory 1개로 리셋되던 사고 차단
-- [x] **fix** Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호. id 단위 매칭해서 `local.priceHistory.length > remote.priceHistory.length`면 local의 priceHistory + currentPrice 보존
-- [x] **feat** Fix C — `ProductCard` 우측하단 trend 뱃지 추가. priceHistory 첫값 vs 마지막값 비교 → 📉 가격하락감지(빨강) / 📈 가격상승감지(파랑) / ➡️ 가격변동없음(그레이). priceHistory 2개 미만이면 미표시
+- [x] **fix** 아침/저녁 인사 알림 제거 — `index.ts:843-850`(morning_greeting) + `980-987`(evening_no_change) push 블록 제거. 가격 변동 알림(target_reached/price_drop_summary/price_up_summary)은 유지 (커밋 `3ec2806`)
+- [x] **fix** 아이고 인사 알림 schedule 비활성화 — `aigo-daily-greeter.yml` schedule 두 줄 주석 처리. workflow_dispatch는 유지(수동 복원). 아이고 커밋 `fe58515`
+- [x] **fix** Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그 (`store/useAppStore.ts:115-145`). `currentPrice` + `priceHistory.slice(-30)` 둘 다 저장하도록 수정 (커밋 `2037437`)
+- [x] **fix** Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호. id 단위 매칭해서 `local.priceHistory.length > remote.priceHistory.length`면 local의 priceHistory + currentPrice 보존 (커밋 `2037437`)
+- [x] **feat** Fix C — `ProductCard` 우측하단 trend 뱃지 추가. priceHistory 첫값 vs 마지막값 비교 → "가격하락감지"(빨강 #FF4444) / "가격상승감지"(파랑 #3B82F6) / "가격변동없음"(그레이 theme.subtext). priceHistory 2개 미만이면 미표시 (커밋 `2037437` + 이모지 제거 `aa90f1a`)
+- [x] **bump** 1.0.14 (bn49/vc49) → 1.0.15 (bn50/vc50). app.config.js + android/app/build.gradle 동기화 (커밋 `aa90f1a`)
+- [x] **fix** token-dedup swap 정책 (orphan tracker fix) — `fetchActiveUsers`에 `collectionGroup('tracked').get()` 사전 스캔 + `trackedUids` Set. 충돌 시 신 uid만 tracked 보유하면 swap (`map.delete` + 신 uid 등록). 그 외는 first 유지. `swap-token` 로그 신설 (커밋 `2a9e359`)
 
-### 2026-05-07 이후 미완
+### 2026-05-08 완료
+- [x] **build** 1.0.15 (bn50/vc50) production 로컬 빌드 — iOS + Android
+- [x] **release** 1.0.15 양 스토어 업로드 — iOS App Store 심사 제출 + Android Play Store 프로덕션 승급 신청
 
-#### 🌅 내일 검증 (1.0.14 출시 후)
+### 2026-05-08 이후 미완
+
+#### ⚠️ 미확인 이슈 (1.0.15 출시 후 재확인)
+- [ ] **재현 확인** 데이터/캐시 삭제 후 첫 상품 추가 실패 — 5/7~5/8 보고. AsyncStorage 초기화 + 신규 anon 로그인 직후 첫 add-item 호출에서 무한로딩/실패 추정. ensureUserDoc/Auth 워밍업 race 의심. 1.0.15 (Functions timeout 8s 복원 + Auth 1.5s 대기) 환경에서 재현 여부 검증 → 재현 시 추가 fix
+
+#### 🌅 검증 (1.0.15 출시 후)
+- [ ] **검증** Fix A/B/C 효과 — 백그라운드 복귀 시 그래프 데이터 보존 / 홈 카드 trend 뱃지 노출 (priceHistory 2개 이상)
+- [ ] **검증** token-dedup swap 동작 — 다음 cron 사이클에 `[ActiveUsers] swap-token uid=qw3R… replaces FMwP… (no tracked)` 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자가 가격 변동 시 알림 정상 수신
 - [ ] **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출, 5개 미만은 스킵
-- [ ] ~~**검증** 아침/저녁 알림 정상 발송~~ — 5/7 폐기. notify-only.yml은 유지하되 인사 push 블록만 제거됨
 - [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
-- [ ] **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image + 가상화 효과)
 
-#### 📦 다음 빌드 (1.0.15) 때 수정
-- [ ] **fix** priceHistory 동기화 fix 출시 — Fix A/B/C 코드 5/7 커밋. 빌드 출시되어야 클라이언트 효과
+#### 📦 다음 빌드 (1.0.16) 때 수정
+- [ ] **fix** 데이터/캐시 삭제 후 첫 상품 추가 실패 (재현 시)
 - [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
 - [ ] **chore** Android proguard 설정 — 빌드 크기 축소 + 코드 보호
-- [ ] **port** 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 / priceHistory fix(A/B/C) / trend 뱃지 등 지금이야 1.0.12~ 이식
+
+#### 🔄 아이고 이식 작업 (별도 레포 `~/aigo/aigo`)
+- [ ] **port** 지금이야 1.0.12~1.0.15 변경 일괄 이식 — 상세 항목은 `~/aigo/aigo/docs/021_Jigumiya_Migration.md` 참조 (5/8 신설)
 
 #### 🔍 cron 검증 (잔여)
 - [ ] **검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
@@ -403,9 +430,12 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - deeplink API: `link.coupang.com/a/XXXXX` shortenUrl 반환 (입력 공유 URL 동일 prefix → slug 비교로 원본/제휴 구분)
 - 코드: `services/coupangApi.ts` (클라이언트 HMAC fallback) / `functions/src/index.ts` (서버 HMAC + HTML `redirectWebUrl` 파싱)
 
-## 현재 상태: 1.0.14 양 스토어 출시 완료 (2026-05-06 심야 기준)
-- **1.0.14 (bn49/vc49) 양 스토어 출시 완료** (커밋 `75d97f4`):
-  - iOS App Store + Android Play Store 출시 완료
+## 현재 상태: 1.0.15 양 스토어 출시 진행 중 (2026-05-08 기준)
+- **1.0.15 (bn50/vc50) 양 스토어 업로드 완료**:
+  - iOS App Store 심사 제출 / Android Play Store 프로덕션 승급 신청
+  - 빌드 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab`
+  - 포함 변경: Fix A (priceHistory Firestore 동시 저장) + Fix B (syncFromFirestore 머지) + Fix C (ProductCard trend 뱃지) + 인사 알림 제거 + token-dedup swap (서버 측 즉시 적용)
+- **1.0.14 (bn49/vc49) 양 스토어 출시 완료** (5/6 심야, 커밋 `75d97f4`):
   - 빌드 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.14-49.ipa` (16.1 MB) / `~/jigumiya/builds/android/jigumiya-1.0.14-49.aab` (58.8 MB)
 - **알림 시스템 A~E 재설계 + shared-price-check 3차 재활성화** (커밋 `48c1fed` + `fb324d9`):
   - A: 카테고리 베스트 알림 완전 제거 — shared_products 단일 출처
