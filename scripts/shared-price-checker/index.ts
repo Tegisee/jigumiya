@@ -840,14 +840,7 @@ async function main() {
     u[path] = value;
   }
 
-  // 1. morning_greeting — 지금이야 사용자 전용 (E: KST 날짜 가드)
-  if (morningMode) {
-    for (const user of jigumiyaUsers.values()) {
-      if (user.lastNotifications.morningKstDate === todayKstStr) continue;
-      payloads.push({ type: 'morning_greeting', token: user.token });
-      markUpdate(user.uid, 'lastNotifications.morningKstDate', todayKstStr);
-    }
-  }
+  // 1. morning_greeting — 폐기 (2026-05-07): 가격 변동 알림만 유지 정책
 
   // 2~4. 변동 알림 — 지금이야 사용자 전용 (jigumiyaUsers).
   //  - target_reached: 사용자당 첫 번째 통과 상품 1건 (B 통합 유지)
@@ -977,14 +970,7 @@ async function main() {
     );
   }
 
-  // 6. evening_no_change — 지금이야 사용자 전용 (19:30~21:00 KST, E: KST 날짜 가드).
-  if (eveningMode) {
-    for (const user of jigumiyaUsers.values()) {
-      if (user.lastNotifications.eveningKstDate === todayKstStr) continue;
-      payloads.push({ type: 'evening_no_change', token: user.token });
-      markUpdate(user.uid, 'lastNotifications.eveningKstDate', todayKstStr);
-    }
-  }
+  // 6. evening_no_change — 폐기 (2026-05-07): 가격 변동 알림만 유지 정책
 
   console.log(`[Flush] payloads ${payloads.length}건`);
   const { successfulTokens, invalidTokens } =
