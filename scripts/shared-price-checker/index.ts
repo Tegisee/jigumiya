@@ -474,16 +474,28 @@ async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
 async function fetchActiveUsers(
   client: Firestore,
 ): Promise<Map<string, UserState>> {
+  // 사전: tracked 보유 uid 집합 — token-dedup 충돌 시 우선순위 결정용 (2026-05-07).
+  // 기존 정책(첫 등장 uid 보존)은 anon 재로그인 후 신 uid에만 tracked 추가된 경우
+  // 신 uid가 dup-skip되어 알림 영구 미발송 regression이 있었음. 신 uid만 tracked 보유 시 swap.
+  const trackedSnap = await client.collectionGroup('tracked').get();
+  const trackedUids = new Set<string>();
+  for (const doc of trackedSnap.docs) {
+    const uid = doc.ref.parent.parent?.id;
+    if (uid) trackedUids.add(uid);
+  }
+
   const snap = await client.collection('users').get();
   const map = new Map<string, UserState>();
   // 동일 expoPushToken을 공유하는 uid 중복 제거 — 재설치/익명 재로그인으로 같은 device token이
   // 여러 user doc에 등록된 경우 한 사이클에 같은 token으로 N번 push 되는 사고 차단
-  // (5/6 morning_greeting 4건 발송 사고 원인). 첫 등장 uid만 보존
-  // (Firestore default ordering = doc id asc → 안정적). orphan uid의 trackers는
-  // 동기적으로 수령 불가 (regression) — 별도 cleanup으로 정리 예정.
+  // (5/6 morning_greeting 4건 발송 사고 원인).
+  // 정책 (2026-05-07 갱신): tracked 보유 uid 우선. 충돌 시:
+  //   - 신 uid만 tracked 보유 → swap (kept 교체)
+  //   - 그 외(둘 다 보유 / 둘 다 미보유 / first만 보유) → first 유지
   const seenTokens = new Map<string, string>();
   let countJigumiya = 0;
   let dupTokens = 0;
+  let swapTokens = 0;
   let skipAigo = 0;
   let skipUnknown = 0;
   let skipOther = 0;
@@ -501,6 +513,25 @@ async function fetchActiveUsers(
     }
     const firstUid = seenTokens.get(token);
     if (firstUid) {
+      const newHasTracked = trackedUids.has(u.id);
+      const firstHasTracked = trackedUids.has(firstUid);
+      if (newHasTracked && !firstHasTracked) {
+        // swap: 신 uid가 tracked 보유, first는 미보유 → kept 교체
+        swapTokens++;
+        console.log(
+          `  [ActiveUsers] swap-token uid=${u.id} (has tracked) replaces ${firstUid} (no tracked) token=${token.slice(0, 30)}…`,
+        );
+        map.delete(firstUid);
+        seenTokens.set(token, u.id);
+        map.set(u.id, {
+          uid: u.id,
+          token,
+          app: 'jigumiya',
+          lastNotifications:
+            (d.lastNotifications as LastNotifications | undefined) ?? {},
+        });
+        continue;
+      }
       dupTokens++;
       console.log(
         `  [ActiveUsers] dup-token uid=${u.id} kept-first=${firstUid} token=${token.slice(0, 30)}…`,
@@ -518,7 +549,7 @@ async function fetchActiveUsers(
     });
   }
   console.log(
-    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상, token-dedup ${dupTokens}건 제외) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther}`,
+    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상, token-dedup ${dupTokens}건 제외, swap ${swapTokens}건) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther} | trackedUids=${trackedUids.size}`,
   );
   return map;
 }
