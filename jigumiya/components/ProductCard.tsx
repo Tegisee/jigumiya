@@ -49,9 +49,9 @@ function ProductCardImpl({ item }: Props) {
     if (item.priceHistory.length < 2) return null;
     const first = item.priceHistory[0].price;
     const last = item.priceHistory[item.priceHistory.length - 1].price;
-    if (last < first) return { text: '📉 가격하락감지', color: '#FF4444' };
-    if (last > first) return { text: '📈 가격상승감지', color: '#3B82F6' };
-    return { text: '➡️ 가격변동없음', color: theme.subtext };
+    if (last < first) return { text: '가격하락감지', color: '#FF4444' };
+    if (last > first) return { text: '가격상승감지', color: '#3B82F6' };
+    return { text: '가격변동없음', color: theme.subtext };
   })();
 
   const confirmDelete = () => {
