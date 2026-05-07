@@ -44,6 +44,16 @@ function ProductCardImpl({ item }: Props) {
 
   const isAchieved = item.currentPrice > 0 && hasTarget && item.currentPrice <= item.targetPrice!;
 
+  // Trend 뱃지 — priceHistory 첫값 vs 마지막값 비교 (상세페이지와 동일 정책)
+  const trendBadge: { text: string; color: string } | null = (() => {
+    if (item.priceHistory.length < 2) return null;
+    const first = item.priceHistory[0].price;
+    const last = item.priceHistory[item.priceHistory.length - 1].price;
+    if (last < first) return { text: '📉 가격하락감지', color: '#FF4444' };
+    if (last > first) return { text: '📈 가격상승감지', color: '#3B82F6' };
+    return { text: '➡️ 가격변동없음', color: theme.subtext };
+  })();
+
   const confirmDelete = () => {
     Alert.alert(
       '상품 삭제',
@@ -170,13 +180,20 @@ function ProductCardImpl({ item }: Props) {
                   </Text>
                 )}
               </View>
-              {hasTarget ? (
-                <Text style={[styles.gap, isAchieved && styles.gapAchieved]}>
-                  {isAchieved ? '목표 달성!' : `목표까지 -${gap}%`}
-                </Text>
-              ) : (
-                <Text style={styles.gap}>가격 추적 중</Text>
-              )}
+              <View style={styles.bottomRow}>
+                {hasTarget ? (
+                  <Text style={[styles.gap, isAchieved && styles.gapAchieved]}>
+                    {isAchieved ? '목표 달성!' : `목표까지 -${gap}%`}
+                  </Text>
+                ) : (
+                  <Text style={styles.gap}>가격 추적 중</Text>
+                )}
+                {trendBadge && (
+                  <Text style={[styles.trendBadge, { color: trendBadge.color }]}>
+                    {trendBadge.text}
+                  </Text>
+                )}
+              </View>
             </View>
           </View>
 
@@ -289,14 +306,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: theme.subtext,
   },
+  bottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    gap: 8,
+  },
   gap: {
     fontSize: 13,
     color: theme.primary,
     fontWeight: '600',
-    marginTop: 4,
   },
   gapAchieved: {
     color: '#4CAF50',
+  },
+  trendBadge: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   chartWrap: {
     marginTop: 12,

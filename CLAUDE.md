@@ -14,7 +14,30 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-06 심야): 1.0.14 — iOS 무한로딩 fix + Android 성능 개선
+## 가장 최근 (2026-05-07): priceHistory 동기화 버그 fix + ProductCard trend 뱃지 추가
+
+1.0.14 출시 후 실기기에서 발견된 priceHistory 관련 버그 3종 코드 분석 → 근본 원인 fix.
+
+**1) Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그** (`store/useAppStore.ts:115-145`)
+- 1.0.14까지: `updateItemInFirestore(id, { currentPrice })`만 호출 → store에는 priceHistory 누적되지만 Firestore의 `users/{uid}/items.priceHistory`는 추가 시점 1개로 영원히 박혀있음
+- fix: `updateItemInFirestore(id, { currentPrice, priceHistory: history.slice(-30) })` — store와 Firestore 동시 갱신
+- 효과: 백그라운드 → 포그라운드 전환 시 syncFromFirestore가 store를 덮어써도 priceHistory 보존
+
+**2) Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호** (`store/useAppStore.ts:syncFromFirestore`)
+- 1.0.14까지: `set({ trackedItems: items })` 무조건 덮어쓰기 → Firestore priceHistory가 1개로 박혀있는 기존 사용자는 백그라운드 복귀마다 그래프 데이터 리셋
+- fix: id 단위 매칭해서 `local.priceHistory.length > remote.priceHistory.length`면 local 보존 (priceHistory + currentPrice). 그 외 필드는 remote 채택
+- 효과: Fix A 적용 전 누적된 기존 사용자 store 데이터 보호. Firestore 점진적 회복 (다음 가격 갱신부터 정상화)
+
+**3) Fix C — ProductCard 우측하단 trend 뱃지 추가** (`components/ProductCard.tsx`)
+- 1.0.14까지: 홈 추적 카드에 trend 표시 없음 (목표가 텍스트만). 상세페이지(`detail/[id].tsx:114-119`)에는 있었지만 홈에는 없었음
+- fix: priceHistory 첫값 vs 마지막값 비교 → 📉 가격하락감지(빨강 #FF4444) / 📈 가격상승감지(파랑 #3B82F6) / ➡️ 가격변동없음(그레이) 뱃지. priceHistory 2개 미만이면 미표시
+- 위치: 카드 정보 영역 하단 행 우측 (gap 텍스트 좌측 / trend 뱃지 우측 — `flexDirection:row, justifyContent:space-between`)
+
+**근본 원인 요약**: `users/{uid}/items.priceHistory`와 `shared_products.priceHistory`가 분리된 이중 진실 구조 + 클라이언트 측 priceHistory 누락 저장 + sync 시 무조건 덮어쓰기 — 3개 결함이 조합되어 백그라운드 복귀마다 그래프 리셋. Fix A로 클라이언트 누락 차단 + Fix B로 기존 데이터 보호.
+
+**미적용 (다음 빌드)**: Fix A/B는 1.0.15 빌드 출시 후 효과 발생. 출시 전까지 기존 사용자는 Fix B로만 보호됨 (store는 보존, Firestore는 다음 가격 체크부터 회복).
+
+## 직전 (2026-05-06 심야): 1.0.14 — iOS 무한로딩 fix + Android 성능 개선
 
 1.0.13 실기기 테스트 → iOS 상품 추가 무한로딩 잔존 + Android 스크롤 여전히 느림 → 근본 원인 재조사 후 1.0.14 (bn49/vc49) 재빌드 + 양 스토어 출시 완료 (커밋 `75d97f4`).
 
@@ -249,9 +272,11 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 4. **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image 캐싱 + today-best 가상화 효과)
 
 **📦 다음 빌드 (1.0.15) 때 수정할 것**:
+- **priceHistory 동기화 fix 출시** — Fix A/B/C 코드 반영 (5/7 커밋), 출시 시점부터 신규 사용자 정상화 + 기존 사용자도 store 보존됨
+- 아침/저녁 인사 알림(`morning_greeting`/`evening_no_change`) 제거 (5/7 커밋, 다음 cron부터 실 효과 — 빌드와 무관)
 - 앱 공유 시 iOS/Android 구분 없이 **앱스토어 + 구글플레이 링크 모두 발송** (현재 Platform.OS 분기 단일 링크 → 양쪽 동시)
 - Android proguard 설정 — 빌드 크기 축소 + 코드 보호
-- 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 등 지금이야 1.0.12~1.0.14 변경 이식
+- 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 / priceHistory fix(A/B/C) 등 지금이야 1.0.12~ 변경 이식
 
 **🔍 cron 검증 (잔여)**:
 - shared-price-check cron 3차 재활성화 후 자동 실행 (A~E 검증 — 가짜 변동 알림 0건 / dropRate 가드 / 요일 문구)
@@ -322,18 +347,26 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **build** 1.0.14 (bn49/vc49) production 로컬 빌드 (iOS + Android)
 - [x] **release** 1.0.14 iOS App Store + Android Play Store 출시 완료
 
+### 2026-05-07 완료
+- [x] **fix** 아침/저녁 인사 알림 제거 — `index.ts:843-850`(morning_greeting) + `980-987`(evening_no_change) push 블록 제거. 가격 변동 알림(target_reached/price_drop_summary/price_up_summary)은 유지
+- [x] **fix** 아이고 인사 알림 schedule 비활성화 — `aigo-daily-greeter.yml` schedule 두 줄 주석 처리. workflow_dispatch는 유지(수동 복원)
+- [x] **fix** Fix A — `updateItemPrice`가 Firestore에 priceHistory 누락 저장하던 버그 (`store/useAppStore.ts:115-145`). `currentPrice` + `priceHistory.slice(-30)` 둘 다 저장하도록 수정 → 백그라운드 복귀 시 priceHistory 1개로 리셋되던 사고 차단
+- [x] **fix** Fix B — `syncFromFirestore` 머지 정책으로 기존 사용자 데이터 보호. id 단위 매칭해서 `local.priceHistory.length > remote.priceHistory.length`면 local의 priceHistory + currentPrice 보존
+- [x] **feat** Fix C — `ProductCard` 우측하단 trend 뱃지 추가. priceHistory 첫값 vs 마지막값 비교 → 📉 가격하락감지(빨강) / 📈 가격상승감지(파랑) / ➡️ 가격변동없음(그레이). priceHistory 2개 미만이면 미표시
+
 ### 2026-05-07 이후 미완
 
 #### 🌅 내일 검증 (1.0.14 출시 후)
 - [ ] **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출, 5개 미만은 스킵
-- [ ] **검증** 아침/저녁 알림 정상 발송 — 07:30 morning_greeting / 20:00 evening_no_change, 요일별 문구 매칭
+- [ ] ~~**검증** 아침/저녁 알림 정상 발송~~ — 5/7 폐기. notify-only.yml은 유지하되 인사 push 블록만 제거됨
 - [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
 - [ ] **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image + 가상화 효과)
 
 #### 📦 다음 빌드 (1.0.15) 때 수정
+- [ ] **fix** priceHistory 동기화 fix 출시 — Fix A/B/C 코드 5/7 커밋. 빌드 출시되어야 클라이언트 효과
 - [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
 - [ ] **chore** Android proguard 설정 — 빌드 크기 축소 + 코드 보호
-- [ ] **port** 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 등 지금이야 1.0.12~1.0.14 이식
+- [ ] **port** 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 / priceHistory fix(A/B/C) / trend 뱃지 등 지금이야 1.0.12~ 이식
 
 #### 🔍 cron 검증 (잔여)
 - [ ] **검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)

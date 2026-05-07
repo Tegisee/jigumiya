@@ -114,6 +114,9 @@ export const useAppStore = create<AppState>()(
       },
       updateItemPrice: (id, newPrice) => {
         const today = new Date().toISOString().slice(0, 10);
+        // Firestore에 함께 저장할 최신 priceHistory를 외부 변수로 캡처
+        // (set 콜백 내부에서 만들어지지만 updateItemInFirestore에도 동일 값 전달 필요)
+        let nextHistory: { date: string; price: number }[] | null = null;
         set((state) => ({
           trackedItems: state.trackedItems.map((item) => {
             if (item.id !== id || newPrice === 0) return item;
@@ -124,24 +127,44 @@ export const useAppStore = create<AppState>()(
             } else {
               history.push({ date: today, price: newPrice });
             }
+            const sliced = history.slice(-30);
+            nextHistory = sliced;
             return {
               ...item,
               currentPrice: newPrice,
-              priceHistory: history.slice(-30),
+              priceHistory: sliced,
             };
           }),
         }));
+        // priceHistory 누락 시 백그라운드 복귀 후 syncFromFirestore가 store를 덮어쓸 때
+        // 누적 그래프가 1개로 리셋되는 사고 방어 (이전: currentPrice만 저장)
         updateItemInFirestore(id, {
           currentPrice: newPrice,
+          ...(nextHistory ? { priceHistory: nextHistory } : {}),
         });
       },
       syncFromFirestore: async () => {
-        const items = await fetchItemsFromFirestore();
-        if (items.length > 0) {
-          set({ trackedItems: items });
-          // fresh fetch 결과에 productId 누락이 섞여 있어도 자가 보정
-          useAppStore.getState().backfillProductIds();
-        }
+        const remote = await fetchItemsFromFirestore();
+        if (remote.length === 0) return;
+        // 머지 정책: id 단위 매칭 — local.priceHistory가 remote보다 길면 local 보존.
+        // 이전 버전은 무조건 remote로 set → 백그라운드 복귀마다 priceHistory 1개로 리셋되는 사고가 있었음.
+        // (updateItemPrice가 currentPrice만 Firestore에 저장하던 시기에 누적된 기존 사용자 데이터 보호)
+        const local = useAppStore.getState().trackedItems;
+        const localById = new Map(local.map((i) => [i.id, i]));
+        const merged = remote.map((r) => {
+          const l = localById.get(r.id);
+          if (l && l.priceHistory.length > r.priceHistory.length) {
+            return {
+              ...r,
+              priceHistory: l.priceHistory,
+              currentPrice: l.currentPrice,
+            };
+          }
+          return r;
+        });
+        set({ trackedItems: merged });
+        // fresh fetch 결과에 productId 누락이 섞여 있어도 자가 보정
+        useAppStore.getState().backfillProductIds();
       },
       /**
        * productId 누락 trackedItem을 url/resolvedUrl에서 재추출해 자가 치유.
