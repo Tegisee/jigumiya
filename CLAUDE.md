@@ -14,7 +14,35 @@ docs/000_MD_사용법.md 와 이 파일을 먼저 읽을 것.
 기준 초과 시 Claude Code가 다음 메시지 출력:
 "⚠️ 세션이 길어졌어요. 다음 작업 전에 새 세션 시작을 권장합니다."
 
-## 가장 최근 (2026-05-07~08): 1.0.15 출시 + priceHistory 동기화 fix + token-dedup swap + 인사 알림 제거
+## 가장 최근 (2026-05-10): 강제 업데이트 팝업 운영 데이터 갱신 + 미해결 이슈 2건 진단
+
+1.0.15 양 스토어 출시 후 운영 작업. Firestore `meta/config_jigumiya` 갱신으로 업데이트 팝업 활성화 + 그래프/알림 미동작 이슈 원인 파악.
+
+**1) `meta/config_jigumiya` Firestore 운영 데이터 갱신 (콘솔 작업, 코드 변경 X)**
+- 변경 전: `minRequiredVersion: "1.0.8"` (5/2 갱신, 1.0.15와 7버전 격차로 1.0.8~1.0.14 사용자에게 팝업 미노출 상태였음)
+- 변경 후: `minRequiredVersion: "1.0.15"` / `latestVersion: "1.0.15"` / `updateMessage` 설정 / `forceUpdate: false`
+- 효과: 1.0.14 이하 사용자 앱 마운트 시 `services/updateChecker.ts:73 checkForUpdate` Alert 노출 → "나중에" 디스미스 가능(`forceUpdate:false`)
+- 코드는 1.0.7 시점부터 이미 구현되어 있던 상태 (`services/updateChecker.ts` + `app/_layout.tsx:80` 호출 + `services/firebase.ts:755 getMetaConfig` + Firestore rules `meta/{docId}` public read). 갭은 운영 데이터 미갱신뿐이었음
+
+**2) 🚨 Issue 1 진단 — 가격추적 그래프 자동 업데이트 안 됨 (앱 측)**
+- 증상: cron이 매 사이클 정상 동작(`shared_products` priceHistory 누적 중)인데 앱에서 백그라운드 → 포그라운드 전환 시 그래프 변화 없음
+- 호출 흐름 추적: `app/(tabs)/index.tsx:46-51` AppState `active` 전환 → `syncFromFirestore()` → `services/firebase.ts:270 fetchItemsFromFirestore` → **`users/{uid}/items` 컬렉션만 read**
+- 근본 원인: cron(`scripts/shared-price-checker/index.ts:764-770`)은 `shared_products/{productId}.priceHistory` 만 update. `users/{uid}/items/{itemId}.priceHistory` 손도 안 댐 → 앱이 cron 결과를 영원히 못 봄
+- 5/7 Fix B (syncFromFirestore 머지 정책)는 "앱 로컬 누적 priceHistory 보존"용이라 이번 이슈와 별개. 신선한 데이터 출처 자체가 끊겨있는 상태
+
+**3) 🚨 Issue 2 진단 — 가격변동 알림 0건 (cron 측)**
+- cron 로그 분석 (5/8 14:17 ~ 5/9 15:08, 약 25 사이클): 거의 전부 `[Flush] payloads 0건`. PriceDrop은 정상 기록(예: 5/9 15:08 — `8522615082` -15.3%, `8850725306` -4.5%, trackers=1 each)
+- 결론: **수신 문제 아님 — 발송 자체가 0건** (Expo push API 호출 X)
+- 근본 원인 1 — token-dedup dup-skip:
+  - 5/7 swap 정책은 "신 uid에만 tracked 있으면 1회 swap" → 동일 토큰 공유 uid가 3+개 + 2+개가 tracked 보유 시 2번째 이후는 여전히 dup-skip
+  - 실측 (5/9 15:08): `nVZEN00Uj`(swap-in, has tracked) → `qw3R…UCh2`(also has tracked, 익스트림 액티브 에너지젤 `8611087425` 추적자) 가 dup-skip → `jigumiyaUsers.get('qw3R')`=undefined → flush L911-931에서 payload 미빌드
+  - drop 잡혀서 `events.drops`에 들어가도 trackers의 uid가 dup-skip되면 영원히 push 안 됨
+- 근본 원인 2 — unknown 40명 미분류:
+  - `[ActiveUsers] jigumiya=17 | unknown=40 | trackedUids=10` — `app === 'jigumiya'` strict 필터(L508)가 `app` 필드 없는 user doc 40개를 통째 제외
+  - 1.0.11+ 의 `ensureUserDoc`이 박지만, 이 기간 앱 미실행자(40명)는 영원히 unknown
+  - 이들 중 tracked 보유자가 있다면 그 사용자의 drop은 영원히 알림 안 옴
+
+## 직전 (2026-05-07~08): 1.0.15 출시 + priceHistory 동기화 fix + token-dedup swap + 인사 알림 제거
 
 1.0.14 출시 후 실기기 회귀 버그 + 알림 정책 정리 + 1.0.15 (bn50/vc50) 양 스토어 출시 (커밋 `3ec2806` → `2a9e359`).
 
@@ -279,19 +307,18 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 
 타임라인 조정: event-best-jigumiya 02:30→02:35 KST (category-best과 격차 10분). shared-price-check cron 3차 재활성화 (`fb324d9`)
 
-## 다음 작업 순서 (2026-05-06 심야 이후)
+## 다음 작업 순서 (2026-05-10 기준)
 
-**🌅 내일 확인 (1.0.14 출시 후 검증)**:
-1. **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출 (5개 미만은 스킵 동작 확인)
-2. **검증** 아침/저녁 알림 정상 발송 (07:30 morning_greeting / 20:00 evening_no_change, 요일별 문구 매칭)
-3. **검증** 골드박스 cron 07:30 KST 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
-4. **검증** 1.0.14 실기기 — iOS 상품 추가 (link.coupang.com 단축 URL 처리) / Android 스크롤 (expo-image 캐싱 + today-best 가상화 효과)
+**🚨 우선순위 1 (긴급, 서버 측만 — 빌드 불필요)**:
+1. **fix** Issue 2-A — `shared-price-checker` flush token-dedup 전환. 사용자 수집 시 dedup 폐기 + payload 빌드 후 token 기준 items concat → expo push 1건/토큰. 5/6 사고 재발 방지 위해 token 단 1회 push 보장 필수
+2. **backfill** Issue 2-C — `users` 컬렉션 `app` 누락 + token + tracked 보유 doc 골라 `app:'jigumiya'` 박기 (1회성 스크립트)
 
-**📦 다음 빌드 (1.0.15) 때 수정할 것**:
-- **priceHistory 동기화 fix 출시** — Fix A/B/C 코드 반영 (5/7 커밋), 출시 시점부터 신규 사용자 정상화 + 기존 사용자도 store 보존됨
-- 아침/저녁 인사 알림(`morning_greeting`/`evening_no_change`) 제거 (5/7 커밋, 다음 cron부터 실 효과 — 빌드와 무관)
-- 앱 공유 시 iOS/Android 구분 없이 **앱스토어 + 구글플레이 링크 모두 발송** (현재 Platform.OS 분기 단일 링크 → 양쪽 동시)
-- Android proguard 설정 — 빌드 크기 축소 + 코드 보호
+**📦 우선순위 2 (다음 빌드 1.0.16)**:
+- **fix** Issue 1 — `syncFromFirestore`에 `shared_products` read 머지 추가 (`fetchSharedProductByIds` 신설)
+- **chore** expo-image 마이그레이션 잔여 사용처 점검 (1.0.14에서 8개 메인 처리 — 누락 확인)
+- 데이터/캐시 삭제 후 첫 상품 추가 실패 (재현 시)
+- 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
+- Android proguard 설정
 - 아이고 빌드 — `ensureUserDoc` / 가격그래프 / 사달라고 조르기 / priceHistory fix(A/B/C) 등 지금이야 1.0.12~ 변경 이식
 
 **🔍 cron 검증 (잔여)**:
@@ -376,7 +403,16 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [x] **build** 1.0.15 (bn50/vc50) production 로컬 빌드 — iOS + Android
 - [x] **release** 1.0.15 양 스토어 업로드 — iOS App Store 심사 제출 + Android Play Store 프로덕션 승급 신청
 
+### 2026-05-10 완료
+- [x] **ops** Firestore `meta/config_jigumiya` 갱신 — `minRequiredVersion: "1.0.15"` / `latestVersion: "1.0.15"` / `updateMessage` 설정 / `forceUpdate: false`. 1.0.14 이하 사용자에게 디스미스 가능 업데이트 팝업 노출
+- [x] **진단** Issue 1 — 그래프 자동 업데이트 안 됨. 원인: cron은 `shared_products`만 갱신, 앱은 `users/{uid}/items`만 read → 컬렉션 불일치
+- [x] **진단** Issue 2 — 가격변동 알림 0건 (5/8 14:17 ~ 5/9 25 사이클 분석). 원인: token-dedup dup-skip(swap 1회 한계) + unknown 40명 strict 필터 제외
+
 ### 2026-05-08 이후 미완
+
+#### 🚨 긴급 (서버 측, 빌드 불필요)
+- [ ] **fix** Issue 2-A — `shared-price-checker` token-dedup 폐기 + 발송 시점 dedup으로 전환. 모든 tracker uid 살린 후 payload 빌드 → token 기준 items concat → expo push 1건/토큰. 5/6 morning_greeting 4 push 사고 재발 방지(token 단 1회 push 보장)
+- [ ] **backfill** Issue 2-C — `users` 컬렉션에서 `app` 필드 누락 + `expoPushToken` 보유 + `tracked` 서브콜렉션 비어있지 않은 doc 골라 `app:'jigumiya'` 박기. 1회성 스크립트 (`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs` 신규)
 
 #### ⚠️ 미확인 이슈 (1.0.15 출시 후 재확인)
 - [ ] **재현 확인** 데이터/캐시 삭제 후 첫 상품 추가 실패 — 5/7~5/8 보고. AsyncStorage 초기화 + 신규 anon 로그인 직후 첫 add-item 호출에서 무한로딩/실패 추정. ensureUserDoc/Auth 워밍업 race 의심. 1.0.15 (Functions timeout 8s 복원 + Auth 1.5s 대기) 환경에서 재현 여부 검증 → 재현 시 추가 fix
@@ -388,8 +424,10 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
 
 #### 📦 다음 빌드 (1.0.16) 때 수정
+- [ ] **fix** Issue 1 — `syncFromFirestore`가 tracked 항목별로 `shared_products/{productId}` read 후 머지. `services/firebase.ts`에 `fetchSharedProductByIds(productIds: string[])` 신설. 머지 정책: `shared.priceHistory.length > merged.priceHistory.length`면 shared 채택 (5/7 Fix B의 머지 로직과 같은 우선순위 정책 활용). 비용 ~10 read/foreground 전환
 - [ ] **fix** 데이터/캐시 삭제 후 첫 상품 추가 실패 (재현 시)
 - [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
+- [ ] **chore** expo-image 마이그레이션 잔여 사용처 (1.0.14에서 8개 메인 사용처 처리 — 누락된 곳 점검)
 - [ ] **chore** Android proguard 설정 — 빌드 크기 축소 + 코드 보호
 
 #### 🔄 아이고 이식 작업 (별도 레포 `~/aigo/aigo`)
@@ -402,7 +440,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - [ ] **검증** 다음 cron 사이클에 `[ActiveUsers] token-dedup N건 제외` 로그 표시 + 갤럭시/아이폰 사용자가 morning push 1건씩 수령
 - [ ] **검증** vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭 → ...원 (옵션 고정)`)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
-- [ ] **갱신** `meta/config_jigumiya.minRequiredVersion` — 1.0.14 안정화 후 단계적 갱신
+- [x] **갱신** `meta/config_jigumiya.minRequiredVersion` — `1.0.15`로 갱신 완료 (2026-05-10) + `latestVersion` / `updateMessage` 동시 설정 / `forceUpdate:false`
 - [ ] **모니터링** Functions 응답시간 로그 (`minInstances:1` 후 콜드 스파이크 사라짐 확인, 최소 20회 표본)
 
 ### 누적 미완 (이전부터)
@@ -430,7 +468,10 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
 - deeplink API: `link.coupang.com/a/XXXXX` shortenUrl 반환 (입력 공유 URL 동일 prefix → slug 비교로 원본/제휴 구분)
 - 코드: `services/coupangApi.ts` (클라이언트 HMAC fallback) / `functions/src/index.ts` (서버 HMAC + HTML `redirectWebUrl` 파싱)
 
-## 현재 상태: 1.0.15 양 스토어 출시 진행 중 (2026-05-08 기준)
+## 현재 상태: 1.0.15 양 스토어 출시 진행 + 미해결 이슈 2건 진단 (2026-05-10 기준)
+- **🚨 Issue 1 — 그래프 자동 업데이트 안 됨 (앱 측, 1.0.16 빌드 필요)**: cron `shared_products` 갱신 vs 앱 `users/{uid}/items` read 컬렉션 불일치. 수정 방향: `syncFromFirestore`에 `shared_products` read 머지 추가
+- **🚨 Issue 2 — 가격변동 알림 0건 (cron 측, 서버만 수정)**: token-dedup dup-skip 한계 + unknown 40명 strict 필터 제외. 5/8 14:17 ~ 5/9 25 사이클 거의 전부 `payloads 0건`. 수정 방향: 발송 시점 dedup 전환 + `users-app-backfill` 스크립트 재실행
+- **🆕 강제 업데이트 팝업 운영 데이터 갱신 (2026-05-10)**: Firestore `meta/config_jigumiya` `minRequiredVersion: "1.0.15"` / `latestVersion: "1.0.15"` / `updateMessage` / `forceUpdate: false`. 1.0.14 이하 사용자 디스미스 가능 팝업 노출 시작
 - **1.0.15 (bn50/vc50) 양 스토어 업로드 완료**:
   - iOS App Store 심사 제출 / Android Play Store 프로덕션 승급 신청
   - 빌드 산출물: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab`
@@ -447,7 +488,7 @@ shared-price-check cron 3차 재활성화 (`*/10 * * * *`). 1.0.11 (bn46/vc46) i
   - 01:00 event-best (아이고) / 01:15 baby1 / 01:30 baby2 / **02:00 category-best** / **02:35 event-best-jigumiya** / 03:00 baby3 / 03:20 baby4 / 04:30 shared-price Block zone 종료 / **07:30 goldbox + coupangPL + notify-only(morning)** / 20:00 notify-only(evening)
 - Functions `resolveAndGenerateAffiliateUrl` `minInstances: 1` 배포 완료 (Cloud Run minScale=1, 콜드 스타트 제거, 월 ~$5~10)
 - **GitHub 레포**: https://github.com/Tegisee/jigumiya (Public, Actions 무제한 무료)
-- **`meta/config_jigumiya.minRequiredVersion = "1.0.8"`** (2026-05-02 갱신) — 1.0.14 안정화 후 단계적 갱신
+- **`meta/config_jigumiya.minRequiredVersion = "1.0.15"`** (2026-05-10 갱신) — `latestVersion: "1.0.15"` + `updateMessage` + `forceUpdate: false` 동반. 1.0.14 이하 사용자 마운트 시 디스미스 가능 업데이트 팝업 노출
 
 ## 주요 기술 현황
 
