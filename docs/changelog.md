@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-05-10 (저녁) — Issue 2-C 검증: backfill 후보 0명 확인
+
+`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs` 작성 + dry-run 실행. 후보 **0명** 확인 → backfill 실행 불필요.
+
+스캔 결과 (185 docs): app 이미 설정 71 / token 없음 67 / tracked 비어있음 47 / 후보 0. 진단 시점 unknown 40명은 대부분 token만 있고 tracked 비어있는 상태였거나 자연 회복된 것으로 보임. 스크립트는 향후 재사용 가능하도록 보존.
+
+상세: [docs/022_Issues.md#issue-2-c](./022_Issues.md)
+
+---
+
 ## 2026-05-10 (저녁) — Issue 2-A fix: fetchActiveUsers 정책 전면 개편
 
 shared-price-checker `fetchActiveUsers` 재작성 (커밋 `a5dfc5d`).

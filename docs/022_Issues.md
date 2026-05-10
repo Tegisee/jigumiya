@@ -48,11 +48,16 @@
 
 **검증 대기**: 다음 cron 사이클에 shared-token winner 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신 확인.
 
-### Issue 2-C — unknown 40명 미분류 (긴급, 수정 대기)
+### Issue 2-C — unknown user 미분류 ✅ 검증 완료 (2026-05-10, 후보 0명)
 
-**근본 원인**: `[ActiveUsers] jigumiya=17 | unknown=40 | trackedUids=10` — `app === 'jigumiya'` strict 필터(L508)가 `app` 필드 없는 user doc 40개를 통째 제외. 1.0.11+ 의 `ensureUserDoc`이 박지만, 이 기간 앱 미실행자(40명)는 영원히 unknown. 이들 중 tracked 보유자가 있다면 그 사용자의 drop은 영원히 알림 안 옴.
+**진단 (5/9)**: `[ActiveUsers] jigumiya=17 | unknown=40 | trackedUids=10` — `app === 'jigumiya'` strict 필터가 `app` 필드 없는 user doc 40개를 통째 제외. 이들 중 tracked 보유자는 알림 미수신 추정.
 
-**수정 방향**: `users` 컬렉션 `app` 누락 + token + tracked 보유 doc 골라 `app:'jigumiya'` 박기 (1회성 스크립트, `scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs`).
+**스크립트 작성** (`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs`): users 중 `app == null` + `expoPushToken` 보유 + `tracked` 서브컬렉션 비어있지 않은 doc → `app: 'jigumiya'` 박기. dry-run 기본, `DRY_RUN=false` 환경변수로 실제 실행.
+
+**dry-run 결과 (5/10)**: 후보 **0명**.
+- 총 185 docs / app 이미 설정 71 / token 없음 67 / tracked 비어있음 47 / **후보 0**
+- 해석: 진단 시점 unknown 40명은 대부분 token만 보유 + tracked 비어있는 상태였거나, 진단 이후 일부가 앱 실행으로 `ensureUserDoc` 자동 트리거되어 자연 회복
+- 결론: 현재 backfill 실행 불필요. 스크립트는 향후 unknown 누적 시 재사용 가능하도록 보존
 
 ---
 
@@ -71,7 +76,7 @@
 ## Issue 4 — 검증 대기 (1.0.15 출시 후)
 
 - [ ] **검증** Fix A/B/C 효과 — 백그라운드 복귀 시 그래프 데이터 보존 / 홈 카드 trend 뱃지 노출 (priceHistory 2개 이상)
-- [ ] **검증** token-dedup swap 동작 — 다음 cron 사이클에 `[ActiveUsers] swap-token uid=qw3R… replaces FMwP… (no tracked)` 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신
+- [ ] **검증** Issue 2-A 정책 동작 — 다음 cron 사이클에 `[ActiveUsers] shared-token winner=… (lastNotif=… createdAt=…) dropped=[…]` 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신
 - [ ] **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출, 5개 미만은 스킵
 - [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
 - [ ] **검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
