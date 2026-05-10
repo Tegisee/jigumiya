@@ -10,6 +10,7 @@ import {
   updateItemInFirestore,
   updateNotificationEnabled,
   fetchItemsFromFirestore,
+  fetchSharedProductsByIds,
   // Phase 3-A: 이중 쓰기용 신규 함수 (기존 함수는 그대로 유지)
   getCurrentUid,
   upsertSharedProduct,
@@ -146,21 +147,48 @@ export const useAppStore = create<AppState>()(
       syncFromFirestore: async () => {
         const remote = await fetchItemsFromFirestore();
         if (remote.length === 0) return;
-        // 머지 정책: id 단위 매칭 — local.priceHistory가 remote보다 길면 local 보존.
-        // 이전 버전은 무조건 remote로 set → 백그라운드 복귀마다 priceHistory 1개로 리셋되는 사고가 있었음.
-        // (updateItemPrice가 currentPrice만 Firestore에 저장하던 시기에 누적된 기존 사용자 데이터 보호)
+        // 머지 정책 — 3-way (remote → local → shared):
+        //   1. remote(`users/{uid}/items`) 베이스
+        //   2. local 보존 (5/7 Fix B): local.priceHistory가 remote보다 길면 local 채택
+        //      → updateItemPrice가 currentPrice만 Firestore에 저장하던 시기 데이터 보호
+        //   3. shared 보존 (Issue 1, 2026-05-10): shared.priceHistory가 (1+2 머지값)보다 길면 shared 채택
+        //      → cron(`shared-price-checker`)이 매 사이클 priceHistory 누적하므로 신선한 출처
+        //      currentPrice도 priceHistory 출처와 함께 따라감
         const local = useAppStore.getState().trackedItems;
         const localById = new Map(local.map((i) => [i.id, i]));
+
+        // shared_products 다건 조회 — productId 보유 항목만 (홈 N=10이라 비용 미미)
+        const productIds = remote
+          .map((r) => r.productId)
+          .filter((p): p is string => !!p);
+        const sharedById =
+          productIds.length > 0
+            ? await fetchSharedProductsByIds(productIds)
+            : new Map();
+
         const merged = remote.map((r) => {
           const l = localById.get(r.id);
-          if (l && l.priceHistory.length > r.priceHistory.length) {
-            return {
-              ...r,
-              priceHistory: l.priceHistory,
-              currentPrice: l.currentPrice,
+          // Step 1+2: local vs remote
+          let m =
+            l && l.priceHistory.length > r.priceHistory.length
+              ? {
+                  ...r,
+                  priceHistory: l.priceHistory,
+                  currentPrice: l.currentPrice,
+                }
+              : r;
+
+          // Step 3: shared 우선 (cron 갱신 출처)
+          const shared = r.productId ? sharedById.get(r.productId) : undefined;
+          const sharedHistLen = shared?.priceHistory?.length ?? 0;
+          if (shared && sharedHistLen > m.priceHistory.length) {
+            m = {
+              ...m,
+              priceHistory: shared.priceHistory,
+              currentPrice: shared.currentPrice,
             };
           }
-          return r;
+          return m;
         });
         set({ trackedItems: merged });
         // fresh fetch 결과에 productId 누락이 섞여 있어도 자가 보정

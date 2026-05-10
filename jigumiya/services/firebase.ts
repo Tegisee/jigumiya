@@ -388,6 +388,37 @@ export async function getSharedProduct(
   }
 }
 
+/**
+ * shared_products/{productId} 다건 조회 — Issue 1 (2026-05-10).
+ *
+ * cron(`shared-price-checker`)이 `shared_products.priceHistory`를 매 사이클 누적하지만
+ * 앱은 `users/{uid}/items`만 read해서 그래프가 영원히 안 바뀌던 문제 fix.
+ * `syncFromFirestore`가 본 함수로 productId별 shared 본을 read해서 머지에 사용.
+ *
+ * 호출량: 홈 N=10 (`MAX_TRACKED_ITEMS`)이라 Promise.all로 1 round-trip.
+ */
+export async function fetchSharedProductsByIds(
+  productIds: string[],
+): Promise<Map<string, SharedProduct>> {
+  const out = new Map<string, SharedProduct>();
+  const validIds = productIds.filter((id): id is string => !!id);
+  if (validIds.length === 0) return out;
+
+  try {
+    const snaps = await Promise.all(
+      validIds.map((id) => getDoc(doc(db, 'shared_products', id))),
+    );
+    snaps.forEach((snap, i) => {
+      if (snap.exists()) {
+        out.set(validIds[i], snap.data() as SharedProduct);
+      }
+    });
+  } catch (e) {
+    console.warn('[Firebase] shared_products 다건 조회 실패:', e);
+  }
+  return out;
+}
+
 /** trackerCount 원자적 증감 (+1 / -1) */
 export async function incrementTrackerCount(
   productId: string,
