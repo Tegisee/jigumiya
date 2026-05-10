@@ -4,25 +4,31 @@
 
 ---
 
-## Issue 1 — 가격추적 그래프 자동 업데이트 안 됨 (앱 측, 1.0.16 빌드 필요)
+## Issue 1 — 가격추적 그래프 자동 업데이트 ✅ 코드 수정 완료 (2026-05-10, 1.0.16 빌드 대기)
 
-**상태**: 진단 완료, 수정 대기 (2026-05-10 진단)
+**증상 (5/10 진단)**: cron이 매 사이클 정상 동작(`shared_products` priceHistory 누적)인데 앱에서 백그라운드 → 포그라운드 전환 시 그래프 변화 없음. cron은 `shared_products`만 update / 앱은 `users/{uid}/items`만 read → 출처 불일치.
 
-**증상**: cron이 매 사이클 정상 동작(`shared_products` priceHistory 누적 중)인데 앱에서 백그라운드 → 포그라운드 전환 시 그래프 변화 없음.
+**수정 (commit `197d50b`)**:
+- `services/firebase.ts`: `fetchSharedProductsByIds(productIds)` 신설. `Promise.all(getDoc)` 패턴 (홈 N=10이라 1 round-trip)
+- `store/useAppStore.ts:syncFromFirestore`: 3-way 머지 (remote → local → shared)
+  1. remote(`users/{uid}/items`) 베이스
+  2. local 보존 (5/7 Fix B): local.priceHistory > remote.priceHistory 시 local 채택
+  3. **shared 보존 (신규)**: shared.priceHistory > (1+2 머지값) 시 shared 채택. currentPrice도 함께
+- 비용: foreground 전환당 +10 read (jigumiya 본 제품)
 
-**호출 흐름**:
-- `app/(tabs)/index.tsx:46-51` AppState `active` 전환 → `syncFromFirestore()`
-- `services/firebase.ts:270 fetchItemsFromFirestore` → **`users/{uid}/items` 컬렉션만 read**
-- cron `scripts/shared-price-checker/index.ts:764-770`은 `shared_products/{productId}.priceHistory` 만 update
-- 앱이 cron 결과를 영원히 못 봄 (컬렉션 출처 불일치)
+**1.0.16 빌드 시 포함 예정** — 빌드 + 출시 후 검증.
 
-**5/7 Fix B와의 관계**: 5/7 Fix B (syncFromFirestore 머지 정책)는 "앱 로컬 누적 priceHistory 보존"용이라 이번 이슈와 별개. 신선한 데이터 출처 자체가 끊겨있는 상태.
+### ⚠️ 별개 — cron 가격 부정확 이슈 (5/10 발견, 보류)
 
-**수정 방향**:
-- `syncFromFirestore`가 tracked 항목별로 `shared_products/{productId}` read 후 머지
-- `services/firebase.ts`에 `fetchSharedProductByIds(productIds: string[])` 신설
-- 머지 정책: `shared.priceHistory.length > merged.priceHistory.length`면 shared 채택 (5/7 Fix B와 같은 우선순위 정책)
-- 비용 ~10 read/foreground 전환
+진단 중 발견: `productId=8522615082`(메오르 액정필름) 추적자에게 cron이 5,870원 저장 / 사용자 페이지/WebView는 4,990원 표시.
+
+원인 (raw 응답 dump로 확인):
+- Search API 응답 top-level에 `vendorItemId`/`itemId` 필드 없음 (URL 쿼리스트링에만 존재)
+- 5/6에 추가한 vendorItemId 정확 매칭 코드(`coupang-api.ts:202-214`)가 영구 undefined → 옵션 매칭 안 됨
+- 이번 케이스는 그것 외에도 4,990원 옵션 자체가 검색 응답에 없음 (즉시할인 또는 다른 SKU)
+- Coupang affiliate Search API의 구조적 한계
+
+**결정 (2026-05-10)**: E 옵션 — 변경 없음. 알림은 신호로만 활용, 정확 가격은 사용자가 앱 진입 후 WebView로 확인. Issue 1 머지 정책으로 그래프는 cron 값 표시 (부정확하지만 갱신은 됨). 추후 (A) vendorItemId URL 파싱 + (B) dropRate 가드 강화 검토 가능.
 
 ---
 

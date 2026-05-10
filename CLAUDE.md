@@ -44,7 +44,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 ## 다음 할 일
 
 **📦 우선순위 1 (1.0.16 빌드)**:
-- Issue 1 fix (`fetchSharedProductByIds` 신설 + syncFromFirestore 머지 추가)
+- ✅ Issue 1 코드 수정 완료 (commit `197d50b`) — 빌드 시 포함
 - Issue 3 재현 검증 후 fix
 - 공유 시 양 스토어 링크 / proguard / expo-image 잔여 점검
 

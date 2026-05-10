@@ -6,6 +6,21 @@
 
 ---
 
+## 2026-05-10 (밤) — Issue 1 fix: syncFromFirestore에 shared_products 머지 추가
+
+`syncFromFirestore` 머지 정책 3-way 확장 (commit `197d50b`).
+
+- `services/firebase.ts`: `fetchSharedProductsByIds(productIds)` 신설 (Promise.all(getDoc), 홈 N=10이라 1 round-trip)
+- `store/useAppStore.ts`: 머지 순서 remote → local → shared. shared.priceHistory가 더 길면 shared 채택 (currentPrice도 함께)
+- 백그라운드 → 포그라운드 전환 시 cron이 누적한 priceHistory가 그래프에 자동 반영
+- 다음 빌드(1.0.16) 출시 시 효과 발생
+
+별개 발견: cron `shared-price-checker`가 즉시할인/옵션 미반영가를 저장하는 케이스 확인 (raw 응답 dump 진단 — `coupang-api` Search API top-level에 vendorItemId 없음). Coupang affiliate API 구조적 한계로 결론. 변경 없음 결정 — 알림은 신호로만 활용. 상세: [022_Issues#issue-1](./022_Issues.md)
+
+상세: [docs/022_Issues.md#issue-1](./022_Issues.md)
+
+---
+
 ## 2026-05-10 (저녁) — Issue 2-C 검증: backfill 후보 0명 확인
 
 `scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs` 작성 + dry-run 실행. 후보 **0명** 확인 → backfill 실행 불필요.
