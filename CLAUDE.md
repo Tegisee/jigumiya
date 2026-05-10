@@ -44,8 +44,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 ## 다음 할 일
 
 **🚨 우선순위 1 (긴급, 서버만 — 빌드 불필요)**:
-1. **Issue 2-A**: `shared-price-checker` flush token-dedup 전환 (token 단 1회 push 보장)
-2. **Issue 2-C**: `users` 컬렉션 backfill 1회성 스크립트 (`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs`)
+1. **Issue 2-C**: `users` 컬렉션 backfill 1회성 스크립트 (`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs`)
 
 **📦 우선순위 2 (1.0.16 빌드)**:
 - Issue 1 fix (`fetchSharedProductByIds` 신설 + syncFromFirestore 머지 추가)

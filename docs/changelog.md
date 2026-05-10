@@ -6,6 +6,21 @@
 
 ---
 
+## 2026-05-10 (저녁) — Issue 2-A fix: fetchActiveUsers 정책 전면 개편
+
+shared-price-checker `fetchActiveUsers` 재작성 (커밋 `a5dfc5d`).
+
+- 후보 = jigumiya + token + notif on + **tracked 보유 uid**만 (tracked 미보유 자동 제외)
+- 같은 token 공유 시 winner = `lastNotifications` 최댓값 timestamp desc → tiebreak `createdAt` desc → 1개만 선택
+- 패자 uid 완전 제외 → push가 winner의 trackers 기반으로만 발송 → 알림 탭 시 winner의 items에서 정상 조회 (UX 버그 차단)
+- token당 push 1건 자연 보장 (5/6 morning_greeting 4건 사고 재발 방지)
+- 신규 헬퍼 `maxLastNotifTime(ln)` 추가
+- 검증 대기: 다음 cron 사이클에 `[ActiveUsers] shared-token winner=… dropped=[…]` 로그 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신
+
+상세: [docs/022_Issues.md#issue-2-a](./022_Issues.md)
+
+---
+
 ## 2026-05-10 — meta/config_jigumiya 갱신 + 미해결 이슈 2건 진단
 
 1.0.15 양 스토어 출시 후 운영 작업.

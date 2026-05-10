@@ -28,21 +28,27 @@
 
 ## Issue 2 — 가격변동 알림 0건 (cron 측, 서버만 수정)
 
-**상태**: 진단 완료, 수정 대기 (2026-05-10 진단)
-
-**증상**: cron 로그 분석 (5/8 14:17 ~ 5/9 15:08, 약 25 사이클): 거의 전부 `[Flush] payloads 0건`. PriceDrop은 정상 기록(예: 5/9 15:08 — `8522615082` -15.3%, `8850725306` -4.5%, trackers=1 each).
+**증상 (진단)**: cron 로그 분석 (5/8 14:17 ~ 5/9 15:08, 약 25 사이클): 거의 전부 `[Flush] payloads 0건`. PriceDrop은 정상 기록(예: 5/9 15:08 — `8522615082` -15.3%, `8850725306` -4.5%, trackers=1 each).
 
 **결론**: 수신 문제 아님 — 발송 자체가 0건 (Expo push API 호출 X).
 
-### Issue 2-A — token-dedup dup-skip (긴급)
+### Issue 2-A — token 공유 시 알림 영구 미발송 ✅ 수정 완료 (2026-05-10, commit `a5dfc5d`)
 
 **근본 원인**: 5/7 swap 정책은 "신 uid에만 tracked 있으면 1회 swap" → 동일 토큰 공유 uid가 3+개 + 2+개가 tracked 보유 시 2번째 이후는 여전히 dup-skip.
 
 **실측 (5/9 15:08)**: `nVZEN00Uj`(swap-in, has tracked) → `qw3R…UCh2`(also has tracked, 익스트림 액티브 에너지젤 `8611087425` 추적자) 가 dup-skip → `jigumiyaUsers.get('qw3R')`=undefined → flush L911-931에서 payload 미빌드. drop 잡혀서 `events.drops`에 들어가도 trackers의 uid가 dup-skip되면 영원히 push 안 됨.
 
-**수정 방향**: `shared-price-checker` flush token-dedup 전환. 사용자 수집 시 dedup 폐기 + payload 빌드 후 token 기준 items concat → expo push 1건/토큰. 5/6 사고 재발 방지 위해 token 단 1회 push 보장 필수.
+**수정 (commit `a5dfc5d`)**: `fetchActiveUsers` 정책 전면 개편.
+- 후보 = jigumiya + token + notif on + **tracked 보유 uid**만 (tracked 미보유 자동 제외)
+- 같은 token 공유 시 winner = `lastNotifications` 최댓값 timestamp desc → tiebreak `createdAt` desc → 1개만 선택
+- 패자 uid 완전 제외 → push가 winner의 trackers 기반으로만 발송 → 알림 탭 시 winner의 items에서 정상 조회 (UX 버그 차단)
+- token당 push 1건 자연 보장 (5/6 morning_greeting 4건 사고 재발 방지)
+- 신규 헬퍼 `maxLastNotifTime(ln)` 추가
+- 로그: `[ActiveUsers] shared-token winner=… (lastNotif=… createdAt=…) dropped=[…]`
 
-### Issue 2-C — unknown 40명 미분류 (긴급)
+**검증 대기**: 다음 cron 사이클에 shared-token winner 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신 확인.
+
+### Issue 2-C — unknown 40명 미분류 (긴급, 수정 대기)
 
 **근본 원인**: `[ActiveUsers] jigumiya=17 | unknown=40 | trackedUids=10` — `app === 'jigumiya'` strict 필터(L508)가 `app` 필드 없는 user doc 40개를 통째 제외. 1.0.11+ 의 `ensureUserDoc`이 박지만, 이 기간 앱 미실행자(40명)는 영원히 unknown. 이들 중 tracked 보유자가 있다면 그 사용자의 drop은 영원히 알림 안 옴.
 
