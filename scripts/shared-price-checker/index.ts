@@ -458,25 +458,40 @@ async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
   return byProductId.size;
 }
 
-/** 활성 사용자 (token 보유 + notificationEnabled !== false + **app === 'jigumiya' strict**)
+/** lastNotifications 내 모든 timestamp 중 최댓값 — token 공유 시 winner 결정용.
+ *  morning/evening(legacy ms) + priceDrop/priceUp/targetReached 맵의 모든 ms 값 검사. */
+function maxLastNotifTime(ln: LastNotifications): number {
+  let m = 0;
+  if (ln.morning && ln.morning > m) m = ln.morning;
+  if (ln.evening && ln.evening > m) m = ln.evening;
+  if (ln.priceDrop) {
+    for (const v of Object.values(ln.priceDrop)) if (v > m) m = v;
+  }
+  if (ln.priceUp) {
+    for (const v of Object.values(ln.priceUp)) if (v > m) m = v;
+  }
+  if (ln.targetReached) {
+    for (const v of Object.values(ln.targetReached)) if (v > m) m = v;
+  }
+  return m;
+}
+
+/** 활성 사용자 (token 보유 + notificationEnabled !== false + **app === 'jigumiya' strict** + **tracked 보유**)
  *
- * 2026-05-05 (사고 후속): strict 모드로 변경 — `app === 'jigumiya'`인 사용자만 picking.
+ * 2026-05-10 (Issue 2-A 수정 v2): 정책 전면 개편.
  *   배경:
- *     - 5/3 batch 거절 사고 = users 컬렉션에 jigumiya/aigo 사용자 혼재
- *     - 5/5 backfill (`users-app-backfill-20260505.mjs`)로 식별 가능한 48명 분류 완료
- *       (aigo 30, jigumiya 18). unknown 102명은 미분류 — 1.0.11 배포 후 자연 회복 대기
- *     - 이전 정책(`app !== 'aigo' → jigumiya 가정`)은 unknown 토큰 보유자(42명)에 잘못 발송 위험
- *   변경: `app === 'jigumiya'`만 발송. unknown/null/aigo/그 외는 모두 제외.
- *   회복: 기존 jigumiya 사용자가 1.0.11 실행 시 `savePushToken`이 자동 `app:'jigumiya'` 박음 → 자동 picking
- *
- * UserState.app 타입은 'jigumiya' | 'aigo' 그대로 유지 — broadcast 분기 호환성 유지(현재 jigumiya만 들어옴).
+ *     - 5/7 swap 정책(첫 등장 uid 보존, 신 uid만 tracked 시 1회 swap)은 3+ uid 공유 시 2번째 이후 영구 dup-skip
+ *     - "잔존 tracker uid에 push 보내기" 시도 시 UX 버그: 알림 탭 → 현재 로그인 uid에 해당 상품 없음 → "상품 없음" 오류
+ *   변경 정책 (token당 1 uid 보장):
+ *     1. 후보 = jigumiya + token + notif on + **tracked 보유 uid**만 (tracked 없으면 받아도 의미 없음)
+ *     2. 같은 token 공유 시 winner = lastNotifications timestamp 최댓값 desc → tiebreak createdAt desc → 첫 후보
+ *     3. 패자 uid는 완전 제외 → push가 winner의 trackers 기반으로만 발송 → 탭 시 winner의 items에서 정상 조회
+ *     4. token당 push 1건 자연 보장 (5/6 morning_greeting 4건 사고 재발 방지)
  */
 async function fetchActiveUsers(
   client: Firestore,
 ): Promise<Map<string, UserState>> {
-  // 사전: tracked 보유 uid 집합 — token-dedup 충돌 시 우선순위 결정용 (2026-05-07).
-  // 기존 정책(첫 등장 uid 보존)은 anon 재로그인 후 신 uid에만 tracked 추가된 경우
-  // 신 uid가 dup-skip되어 알림 영구 미발송 regression이 있었음. 신 uid만 tracked 보유 시 swap.
+  // 1. tracked 보유 uid 집합 — 후보 필터링 + winner 선정 입력
   const trackedSnap = await client.collectionGroup('tracked').get();
   const trackedUids = new Set<string>();
   for (const doc of trackedSnap.docs) {
@@ -484,21 +499,21 @@ async function fetchActiveUsers(
     if (uid) trackedUids.add(uid);
   }
 
+  interface Candidate {
+    uid: string;
+    token: string;
+    lastNotif: LastNotifications;
+    lastNotifTime: number;
+    createdAt: number;
+  }
+
+  // 2. user 후보 수집
   const snap = await client.collection('users').get();
-  const map = new Map<string, UserState>();
-  // 동일 expoPushToken을 공유하는 uid 중복 제거 — 재설치/익명 재로그인으로 같은 device token이
-  // 여러 user doc에 등록된 경우 한 사이클에 같은 token으로 N번 push 되는 사고 차단
-  // (5/6 morning_greeting 4건 발송 사고 원인).
-  // 정책 (2026-05-07 갱신): tracked 보유 uid 우선. 충돌 시:
-  //   - 신 uid만 tracked 보유 → swap (kept 교체)
-  //   - 그 외(둘 다 보유 / 둘 다 미보유 / first만 보유) → first 유지
-  const seenTokens = new Map<string, string>();
-  let countJigumiya = 0;
-  let dupTokens = 0;
-  let swapTokens = 0;
+  const candidates: Candidate[] = [];
   let skipAigo = 0;
   let skipUnknown = 0;
   let skipOther = 0;
+  let skipNoTracked = 0;
   for (const u of snap.docs) {
     const d = u.data() ?? {};
     const token = d.expoPushToken as string | undefined;
@@ -511,45 +526,70 @@ async function fetchActiveUsers(
       else skipOther++;
       continue;
     }
-    const firstUid = seenTokens.get(token);
-    if (firstUid) {
-      const newHasTracked = trackedUids.has(u.id);
-      const firstHasTracked = trackedUids.has(firstUid);
-      if (newHasTracked && !firstHasTracked) {
-        // swap: 신 uid가 tracked 보유, first는 미보유 → kept 교체
-        swapTokens++;
-        console.log(
-          `  [ActiveUsers] swap-token uid=${u.id} (has tracked) replaces ${firstUid} (no tracked) token=${token.slice(0, 30)}…`,
-        );
-        map.delete(firstUid);
-        seenTokens.set(token, u.id);
-        map.set(u.id, {
-          uid: u.id,
-          token,
-          app: 'jigumiya',
-          lastNotifications:
-            (d.lastNotifications as LastNotifications | undefined) ?? {},
-        });
-        continue;
-      }
-      dupTokens++;
-      console.log(
-        `  [ActiveUsers] dup-token uid=${u.id} kept-first=${firstUid} token=${token.slice(0, 30)}…`,
-      );
+    if (!trackedUids.has(u.id)) {
+      skipNoTracked++;
       continue;
     }
-    seenTokens.set(token, u.id);
-    countJigumiya++;
-    map.set(u.id, {
+    const lastNotif =
+      (d.lastNotifications as LastNotifications | undefined) ?? {};
+    candidates.push({
       uid: u.id,
       token,
-      app: 'jigumiya',
-      lastNotifications:
-        (d.lastNotifications as LastNotifications | undefined) ?? {},
+      lastNotif,
+      lastNotifTime: maxLastNotifTime(lastNotif),
+      createdAt: (d.createdAt as number | undefined) ?? 0,
     });
   }
+
+  // 3. token 단위 그룹핑 → winner 1개씩 선정
+  const byToken = new Map<string, Candidate[]>();
+  for (const c of candidates) {
+    let arr = byToken.get(c.token);
+    if (!arr) {
+      arr = [];
+      byToken.set(c.token, arr);
+    }
+    arr.push(c);
+  }
+  const map = new Map<string, UserState>();
+  let countSelected = 0;
+  let sharedTokens = 0;
+  let droppedShared = 0;
+  for (const [token, arr] of byToken) {
+    arr.sort((a, b) => {
+      if (b.lastNotifTime !== a.lastNotifTime) {
+        return b.lastNotifTime - a.lastNotifTime;
+      }
+      return b.createdAt - a.createdAt;
+    });
+    const winner = arr[0];
+    if (arr.length > 1) {
+      sharedTokens++;
+      droppedShared += arr.length - 1;
+      const losers = arr
+        .slice(1)
+        .map(
+          (c) =>
+            `${c.uid}(lastNotif=${c.lastNotifTime} createdAt=${c.createdAt})`,
+        )
+        .join(', ');
+      console.log(
+        `  [ActiveUsers] shared-token winner=${winner.uid} (lastNotif=${winner.lastNotifTime} createdAt=${winner.createdAt}) ` +
+          `dropped=[${losers}] token=${token.slice(0, 30)}…`,
+      );
+    }
+    map.set(winner.uid, {
+      uid: winner.uid,
+      token,
+      app: 'jigumiya',
+      lastNotifications: winner.lastNotif,
+    });
+    countSelected++;
+  }
   console.log(
-    `[ActiveUsers] jigumiya=${countJigumiya} (발송 대상, token-dedup ${dupTokens}건 제외, swap ${swapTokens}건) | skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther} | trackedUids=${trackedUids.size}`,
+    `[ActiveUsers] jigumiya=${countSelected} (발송 대상 = tracked 보유 uid 중 token당 lastNotif 최신 1개) ` +
+      `| skip: aigo=${skipAigo} unknown=${skipUnknown} other=${skipOther} no-tracked=${skipNoTracked} ` +
+      `| shared-token=${sharedTokens}개 (loser ${droppedShared}uid 제외) | trackedUids=${trackedUids.size}`,
   );
   return map;
 }
@@ -947,7 +987,8 @@ async function main() {
     }
   }
 
-  // 2-D. push 단계 — H1 변경: target 1건 + drops 상품별 각각 1건 + ups 합산 1건 (병행 발송 가능)
+  // 2-D. push 단계 — H1: target 1건 + drops 상품별 각각 1건 + ups 합산 1건 (병행 발송 가능).
+  // token-dedup은 fetchActiveUsers 시점에서 token당 1 uid 보장 → token당 push 자연 1건 보장.
   for (const [uid, b] of userBuckets) {
     const user = jigumiyaUsers.get(uid);
     if (!user) continue;
