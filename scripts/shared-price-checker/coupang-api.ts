@@ -110,13 +110,6 @@ export async function searchProducts(
   }
 
   if (json.rCode === '0' && json.data?.productData) {
-    // 진단 (2026-05-10): 즉시할인가 미반영 의심 — 첫 상품 응답 전체 필드 dump.
-    // 목적: salePrice / discountedPrice / couponPrice 등 누락 필드 발견. 원인 확정 후 제거 예정.
-    if (json.data.productData.length > 0) {
-      console.log(
-        `  [API] raw-full[0]: ${JSON.stringify(json.data.productData[0])}`,
-      );
-    }
     for (const p of json.data.productData) {
       console.log(
         `  [API] raw: productId=${p.productId} vendorItemId=${p.vendorItemId ?? 'N/A'} itemId=${p.itemId ?? 'N/A'} price=${p.productPrice} name="${(p.productName || '').slice(0, 40)}"`,
