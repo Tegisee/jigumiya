@@ -81,6 +81,43 @@ shared_products/{productId}에 필드 추가:
 - 사용자 앱 오픈 시 타인 상품 3~5개 추가 업데이트 (크라우드소싱)
 - 관리자 기기 자동 분배 로직 고도화
 
+## 기존 완료 항목 재검토
+
+본 아키텍처 도입 시 5/10 푸시한 두 fix를 재손질해야 한다. 1.0.16 빌드 전 반드시 같이 처리.
+
+### Issue 1 fix (commit `197d50b`) — realPrice 필드 추가 후 머지 로직 재수정 필요
+
+**현재 (197d50b)**:
+- `syncFromFirestore`가 `shared.priceHistory.length > merged.priceHistory.length` 비교 → 더 길면 shared 채택 + `shared.currentPrice` 함께
+- TrackedItem.priceHistory: `{ date, price }[]` (단일 price)
+
+**023 도입 후 변경 필요**:
+- `shared_products.priceHistory`가 `{ date, realPrice }[]`로 스키마 변경 → 머지 시 형식 변환 필요
+- `shared.currentPrice` → `shared.realPrice` 참조 (apiPrice는 그래프/알림 베이스 X)
+- TrackedItem 타입도 `priceHistory`의 price 의미를 realPrice로 통일 (또는 필드명 변경 검토)
+- length 비교 정책은 유지하되 비교 대상이 realPrice 시리즈여야 함 — apiPrice는 머지에서 무시
+- `fetchSharedProductsByIds` 반환 SharedProduct 타입에도 realPrice/apiPrice 분리 반영
+
+**작업**: `services/firebase.ts:fetchSharedProductsByIds` + `store/useAppStore.ts:syncFromFirestore` + `types/index.ts` SharedProduct/TrackedItem 동시 수정. 1A(addItem 머지)와 함께 묶어서 진행하면 일관성 유지.
+
+### Issue 2-A fix (commit `a5dfc5d`) — cron 알림 로직이 Cloud Functions로 대체 예정
+
+**현재 (a5dfc5d)**:
+- `shared-price-checker:fetchActiveUsers`에서 tracked 보유 + token-share 시 lastNotif 최신 winner 1개 선정
+- cron 본 흐름이 가격 비교 + token당 1 push 발송
+
+**023 도입 후 변경**:
+- 알림 발송 주체가 cron → Cloud Functions onUpdate 트리거로 이전 (realPrice 변경 시점에 정확한 알림)
+- cron은 apiPrice 갱신 + needsCheck 플래그 + 골드박스/이벤트 유도 알림만 담당 → `fetchActiveUsers` 호출 흐름 자체가 cron에서 사라짐
+- token-share winner 정책은 **Cloud Functions 측에 이식** 필요 (uid별 분기 → 같은 token 공유 다중 uid에 push 폭주 방지). 동일한 winner 결정 로직 재사용 가능
+
+**작업 순서 권장**: cron 알림 로직 제거 전에 Cloud Functions 측 onUpdate 트리거 + token-share 가드 먼저 구현/검증. cron 측 코드는 삭제가 아닌 비활성화(workflow_dispatch만 유지)로 단계 전환 → 검증 완료 후 정식 폐기.
+
+**유지되는 자산**:
+- `maxLastNotifTime` 헬퍼 + winner 선정 알고리즘 → CF로 이식
+- `users/{uid}.lastNotifications` 24h 가드 스키마 → CF에서 동일 read/write
+- token dedup 통계 로그 포맷 → CF 로그에 동일 적용
+
 ## 참고
 - Gemini 세컨드 오피니언: 클라이언트 주도형 크라우드소싱 구조 권장
 - Coupang Affiliate API 한계 확정: 단건 조회 없음 + 즉시할인가 필드 없음
