@@ -43,8 +43,17 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ## 다음 할 일
 
-**📦 우선순위 1 (1.0.16 빌드)**:
-- ✅ Issue 1 코드 수정 완료 (commit `197d50b`) — 빌드 시 포함
+**🏗️ 우선순위 1 (1.0.16 — RealPrice 아키텍처)**: 상세 [docs/023_RealPrice_Architecture.md](./docs/023_RealPrice_Architecture.md)
+- shared_products 필드 분리 (apiPrice / realPrice / lastRealPriceUpdatedAt / needsCheck)
+- 앱 1A: addItem 시 shared_products 과거 이력 머지
+- 앱 1B: updateItemPrice 시 shared_products.realPrice 역방향 write
+- 앱 3: mount 시 syncFromFirestore 1회 호출 추가
+- Cloud Functions: realPrice onUpdate 트리거 → 목표가 도달 알림
+- cron: apiPrice 갱신 + needsCheck 플래그 (알림 발송은 폐기, 골드박스 유도 알림으로 전환)
+- 관리자 모드 UI: 안드로이드/아이패드 2대 홀수/짝수 분배 자동 순회
+- ✅ 기 완료: Issue 1 syncFromFirestore 머지 (commit `197d50b`) — 1.0.16 빌드 시 포함
+
+**📦 우선순위 1.5 (1.0.16 동반)**:
 - Issue 3 재현 검증 후 fix
 - 공유 시 양 스토어 링크 / proguard / expo-image 잔여 점검
 
@@ -197,6 +206,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - [docs/018_FirebaseFunctions_Resolver.md](./docs/018_FirebaseFunctions_Resolver.md)
 - [docs/019_Phase3_SharedProducts.md](./docs/019_Phase3_SharedProducts.md)
 - [docs/020_PriceChecker_CronDesign.md](./docs/020_PriceChecker_CronDesign.md)
+- [docs/023_RealPrice_Architecture.md](./docs/023_RealPrice_Architecture.md) — apiPrice/realPrice 분리 아키텍처 (1.0.16 작업)
 
 ### 기타
 - 글로벌 지시: `~/.claude/CLAUDE.md`
