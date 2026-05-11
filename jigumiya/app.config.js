@@ -15,7 +15,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.jigumiya.app",
-      buildNumber: "51",
+      buildNumber: "52",
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         LSApplicationQueriesSchemes: ["coupang", "itms-appss"],
@@ -28,7 +28,7 @@ export default {
     },
     android: {
       package: "com.jigumiya.app",
-      versionCode: 51,
+      versionCode: 52,
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
       adaptiveIcon: {
         backgroundColor: "#000000",
