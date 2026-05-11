@@ -38,4 +38,11 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+/android/**
+# Exception: google-services Gradle plugin 적용 상태 보존 (2026-05-11)
+# 디렉토리 자체를 살려야 negation 적용됨 (git 명세: 부모 디렉토리 제외 시 자식 negation 불가).
+# google-services.json은 비밀이라 계속 제외 — EAS Secret(FILE_BASE64)으로 주입.
+!/android/
+!/android/app/
+!/android/build.gradle
+!/android/app/build.gradle
