@@ -25,7 +25,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 ## 현재 상태 (2026-05-11 기준)
 
 - **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 코드 작업 전체 완료 — 빌드 + 베타 검증 대기.**
-- **1.0.16 작업 (2026-05-11 완료)**: RealPrice 아키텍처(docs/023) 8개 항목 + iOS 무한로딩 fix + 관리자 모드 UI 신설. 상세 [docs/changelog.md](./docs/changelog.md)
+- **1.0.16 작업 (2026-05-11 완료)**: RealPrice 아키텍처(docs/023) 8개 항목 + iOS 무한로딩 fix + 관리자 모드 UI 신설 + admin `fetchAllSharedProducts` orderBy fix (createdAt → documentId, 78개 createdAt 백필). 상세 [docs/changelog.md](./docs/changelog.md)
 - **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab` (1.0.16 빌드 예정)
 - **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"` (`forceUpdate:false` 디스미스 가능). 1.0.16 출시 후 갱신 예정.
 - **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)

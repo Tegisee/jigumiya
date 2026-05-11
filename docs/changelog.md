@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-05-11 (저녁) — 관리자 모드 fetchAllSharedProducts orderBy 버그 fix + createdAt 백필
+
+**증상**: 1.0.16 빌드 직전 admin.tsx 실측 — Android 기기에서 "담당 1개 / 전체 3개" 표시. 실제 `shared_products` 컬렉션은 81개.
+
+**원인**: `services/firebase.ts:fetchAllSharedProducts`의 `orderBy('createdAt', 'asc')` 쿼리. Firestore orderBy는 해당 필드가 **존재하는** doc만 반환 — 81개 중 createdAt 필드 보유 doc은 3개뿐 (1.0.16 RealPrice 작업 이후 추가된 신규 doc만). cron이 생성한 78개는 createdAt 미설정 → 쿼리 결과에서 완전히 제외됨. 분배 로직(`idx % 2`) 자체는 정상.
+
+**수정 (`services/firebase.ts:823`)**: `orderBy('createdAt', 'asc')` → `orderBy(documentId(), 'asc')`. doc.id === productId 일치 확인됨 → productId 정렬과 동일. createdAt 미보유 doc도 모두 포함. import에 `documentId` 추가.
+
+**데이터 보강 (`scripts/cleanup/backfill-shared-createdat-20260511.mjs` 신설)**: 78개 doc에 `createdAt = Date.now()` (epoch ms) 일괄 set merge. batch commit 1회로 완료. 검증: `orderBy('createdAt')` 결과 81/81개 일치. 향후 다른 곳에서 createdAt 정렬 기준 사용 시에도 안전.
+
+**효과**: 1.0.16 빌드 후 관리자 기기는 "담당 ~40 / 전체 81" 정상 표시 예상. iOS/Android 두 기기가 동일 productId 정렬로 분배 — 인덱스 불일치 없음.
+
+---
+
 ## 2026-05-11 — 1.0.16 RealPrice 아키텍처 전체 완료 + iOS 무한로딩 fix + 관리자 모드
 
 `docs/023_RealPrice_Architecture.md` 8개 작업 항목 모두 완료. 1.0.16 빌드 + 베타 검증 대기 단계.

@@ -55,6 +55,7 @@
 - [ ] **검증** RealPrice 트리거(`onSharedProductRealPriceChange`) — 실기기에서 updateItemPrice → CF 발화 → push 도달 → `lastNotifications.targetReached.{pid}` 가드 박힘 + needsCheck 클리어
 - [ ] **검증** cron 변경 — `skipRecentRealPrice=N` 카운트 / `[needsCheck]` 마크 / `payloads` target_reached 0건 / lastRealPriceUpdatedAt 1h 가드 효과
 - [ ] **검증** 관리자 모드 — isAdmin 시만 노출 / Platform.OS 홀수/짝수 분배 / 이어서 진행 / wallclock 카운트다운 백그라운드 정확성 / AsyncStorage 복원
+  - ✅ 2026-05-11 저녁 fix: `fetchAllSharedProducts` `orderBy('createdAt')` → `orderBy(documentId())` + 78개 doc createdAt 백필 (changelog 참조). 빌드 후 "담당 ~40 / 전체 81" 정상 표시 확인 필요.
 - [ ] **검증** iOS 상품 추가 — 단축 URL/직접 URL/vp URL 4가지 케이스 무한로딩 해소
 - [ ] **검증** 가격 그래프 — 신규 사용자가 추가 시점 즉시 shared 과거 이력 머지 (1A) / 백그라운드 복귀 시 realPrice 우선 머지 (3)
 - [ ] **검증** Android Push Token null 케이스 (Issue NEW-A 참조)

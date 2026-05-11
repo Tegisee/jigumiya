@@ -20,6 +20,7 @@ import {
   getDocs,
   query,
   orderBy,
+  documentId,
   where,
   limit,
   writeBatch,
@@ -816,14 +817,15 @@ export function subscribeIsAdmin(
 }
 
 /**
- * shared_products 전체 fetch — 관리자 모드 자동 순회용 (createdAt asc 정렬).
+ * shared_products 전체 fetch — 관리자 모드 자동 순회용 (documentId asc 정렬).
  * 정렬 기준이 일정해야 두 기기가 같은 인덱스로 분배됨.
- * createdAt 미존재 doc은 뒤로 밀림.
+ * doc.id === productId 이므로 documentId 정렬은 productId 정렬과 동일.
+ * (이전 createdAt orderBy는 필드 누락 doc을 제외하는 버그가 있었음 — 1.0.16 fix)
  */
 export async function fetchAllSharedProducts(): Promise<SharedProduct[]> {
   try {
     const snap = await getDocs(
-      query(collection(db, 'shared_products'), orderBy('createdAt', 'asc')),
+      query(collection(db, 'shared_products'), orderBy(documentId(), 'asc')),
     );
     return snap.docs.map((d) => d.data() as SharedProduct);
   } catch (e) {
