@@ -8,58 +8,34 @@
 
 ---
 
-## Issue NEW-A — Android Push Token null 저장 케이스 (1.0.16 빌드 후 검증)
-
-**상태**: 신규 진단 (2026-05-11), 1.0.16 출시 후 실기기 검증 예정.
-
-**증상**: CF `onSharedProductRealPriceChange` 트리거 첫 발화 로그(`9309948201` 도달 후보 1명) 결과 `skip.noToken=1` — 추적자 user의 `expoPushToken` 필드가 미보유. 시뮬레이터/웹/권한 거부/Android FCM 발급 실패 케이스 중 하나.
-
-**기존 흐름 (`services/notifications.ts:18 + firebase.ts:199`)**:
-- `registerForPushNotifications`가 권한 거부 / `getExpoPushTokenAsync` 예외 / EAS projectId 미존재 시 null 반환 + `savePushToken` 미호출 → user doc의 `expoPushToken` 필드 자체 미설정 (undefined)
-- `ensureUserDoc` (5/6 갤럭시 fix)는 user doc은 보장하지만 token은 안 박음 → CF/cron이 `!token` 분기에서 skip (의도된 동작)
-
-**Android 토큰 발급 실패 후보** (notifications.ts catch:52에서 흡수):
-- `google-services.json` 누락/mismatch (`.easignore` 처리 필수)
-- Firebase Cloud Messaging V1 API 미활성화 (Legacy 폐지 흐름)
-- Google Play Services 미설치/구버전
-- Android 13+ `POST_NOTIFICATIONS` 런타임 권한 거부
-- Expo Push 서버 일시 5xx (재시도 로직 없음 — 단발 실패 시 영구 미저장)
-
-**iOS는 추가로**: 시뮬레이터(토큰 발급 불가), APNs cert/p8 미등록, provisional 거부.
-
-**검증 계획 (1.0.16 출시 후)**:
-- [ ] CF 트리거 발화 로그에서 `skip.noToken` 비율 모니터링
-- [ ] 실기기(Android 14, iPad)에서 첫 실행 시 `expoPushToken` 박힘 확인
-- [ ] 발급 실패 시 `[Notifications] 토큰 등록 실패` 로그 + AppState active 재시도 추가 검토
-
-**개선 후보 (필요 시)**:
-- `registerForPushNotifications` 분기별 console.warn 보강 (어느 분기에서 null 반환인지 식별)
-- `getExpoPushTokenAsync` 실패 시 1회 재시도 + AppState active 시 재발급 시도
+> Issue NEW-A (Android Push Token null)은 1.0.16 google-services Gradle plugin 적용으로 해결되어 changelog(2026-05-12)로 이동.
 
 ---
 
-## Issue 3 — 데이터/캐시 삭제 후 첫 상품 추가 실패 (1.0.16 빌드 후 재검증)
+## Issue 3 — 상품 추가 일시 실패 (쿠팡 IP 차단)
 
-**상태**: 5/7~5/8 보고. 1.0.16에서 iOS 무한로딩 fix(HTML fetch 폐기 + vp URL 직접 로드 + SCRAPE_JS 내부 폴링 + link.coupang.com 차단) 적용으로 자연 해소 가능성 큼 — 출시 후 재검증.
+**상태**: 2026-05-12 베타 검증 중 확인. 일시적 차단 — 1시간 후 재시도 시 해소.
 
-**증상**: AsyncStorage 초기화 + 신규 anon 로그인 직후 첫 add-item 호출에서 무한로딩/실패 발생 추정.
+**증상**: 상품 URL 추가 시 CoupangScraper 무한로딩 또는 onError. 5/7 보고된 "AsyncStorage 초기화 후 첫 추가 실패"와는 별개 — 1.0.16 iOS 무한로딩 fix(HTML fetch 폐기 + vp 직접 로드 + SCRAPE_JS 폴링)로 자연 해소된 것으로 보임.
 
-**의심**: `ensureUserDoc` / Auth 워밍업 race condition + Universal Link 흡수 가능성.
+**원인**: 동일 공인 IP에서 단시간 다수 쿠팡 WebView 호출(특히 관리자 모드 두 기기 동시 실행) → 쿠팡 IP 차단 (5xx / 차단 페이지 응답).
 
-**수정 방향**: 1.0.16 환경에서 재현 여부 검증 → 재현 시 추가 fix (auth wait 시간 조정 등).
+**대응**:
+- 즉시: 1시간 후 재시도
+- 운영: 관리자 모드 한 기기씩 순차 실행 + 대기 30분 이상 (운영 주의사항 참조)
+- 1.0.17 검토: 차단 페이지 감지 후 사용자에게 명시적 안내 (현재는 무한로딩으로 보임)
 
 ---
 
-## Issue 4 — 1.0.16 출시 후 검증 대기
+## Issue 4 — 1.0.16 검증 잔여 항목
 
-- [ ] **검증** RealPrice 트리거(`onSharedProductRealPriceChange`) — 실기기에서 updateItemPrice → CF 발화 → push 도달 → `lastNotifications.targetReached.{pid}` 가드 박힘 + needsCheck 클리어
-- [ ] **검증** cron 변경 — `skipRecentRealPrice=N` 카운트 / `[needsCheck]` 마크 / `payloads` target_reached 0건 / lastRealPriceUpdatedAt 1h 가드 효과
-- [ ] **검증** 관리자 모드 — isAdmin 시만 노출 / Platform.OS 홀수/짝수 분배 / 이어서 진행 / wallclock 카운트다운 백그라운드 정확성 / AsyncStorage 복원
-  - ✅ 2026-05-11 저녁 fix: `fetchAllSharedProducts` `orderBy('createdAt')` → `orderBy(documentId())` + 78개 doc createdAt 백필 (changelog 참조). 빌드 후 "담당 ~40 / 전체 81" 정상 표시 확인 필요.
-- [ ] **검증** iOS 상품 추가 — 단축 URL/직접 URL/vp URL 4가지 케이스 무한로딩 해소
-- [ ] **검증** 가격 그래프 — 신규 사용자가 추가 시점 즉시 shared 과거 이력 머지 (1A) / 백그라운드 복귀 시 realPrice 우선 머지 (3)
-- [ ] **검증** Android Push Token null 케이스 (Issue NEW-A 참조)
-- [ ] **모니터링** Functions 응답시간 로그 (`minInstances:1` 후 콜드 스파이크 사라짐 확인, 최소 20회 표본)
+- [x] ~~**검증** 관리자 모드 분배~~ — 2026-05-12 실기기 "담당 ~42 / 전체 84" 정상 확인 (orderBy documentId fix + createdAt 백필 효과). changelog 이동.
+- [x] ~~**검증** 가격 그래프 (1A/3 머지)~~ — 2026-05-12 신규/기존 사용자 모두 정상 표시 확인. changelog 이동.
+- [x] ~~**검증** Android Push Token null 케이스~~ — 2026-05-12 google-services plugin 적용 후 정상 발급 확인. changelog 이동 (Issue NEW-A 종결).
+- [x] ~~**검증** iOS 상품 추가 무한로딩 해소~~ — 1.0.16 4가지 케이스 정상.
+- [ ] **검증** RealPrice 트리거(`onSharedProductRealPriceChange`) — token 보유 사용자가 target 도달 시 실제 push 수신 + `lastNotifications.targetReached.{pid}` 가드 박힘 + needsCheck 클리어 (token=YES 케이스 표본)
+- [ ] **검증** cron 변경 — `skipRecentRealPrice=N` 카운트 / `[needsCheck]` 마크 / `payloads` target_reached 0건 / lastRealPriceUpdatedAt 1h 가드 효과 (로그 표본 5회 이상)
+- [ ] **모니터링** Functions 응답시간 (`minInstances:1` 콜드 스파이크 사라짐, 표본 20회)
 - [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 
 ---
@@ -95,6 +71,39 @@
 - [ ] **추적** `addTrackedItem`/`removeTrackedItem` increment 비대칭 (재발 모니터링)
 - [ ] **별도 PR** `meta/stats.sharedProductCount` 자동 갱신 (FieldValue.increment)
 - [ ] 메인 화면에 쿠팡 이동 버튼 추가 (위치/형태 미정)
+
+---
+
+## Issue 8 — shared_products 컬렉션에 아이고 상품 혼재
+
+**상태**: 신규 발견 (2026-05-12). 아이고 이식 작업(Issue 6) 시 별도 처리.
+
+**증상**: `shared_products` 컬렉션에 아이고 앱 사용자가 추가한 상품 10개 혼재. cron 가격 체크는 무차별 진행되지만 알림 발송은 `users.app === 'jigumiya'` 필터로 분리되어 잘못 알림은 안 가는 상태.
+
+**위험**:
+- 관리자 모드 순회 대상에 아이고 상품도 포함 → 불필요한 쿠팡 API/WebView 호출 + 분배 인덱스 변동
+- 1.0.16 관리자 모드 "전체 84개"에 아이고 상품 ~10개 포함된 수치
+- 향후 아이고 이식 시 명시적 분리 필요
+
+**해결 방향 (Issue 6 아이고 이식 트랙)**:
+- `shared_products` 문서에 `app: 'jigumiya' | 'aigo'` 또는 `apps: string[]` 필드 추가
+- `fetchAllSharedProducts` (관리자 모드) + cron 모두 app 필터 적용
+- 또는 컬렉션 분리 (`shared_products_jigumiya` / `shared_products_aigo`)
+
+---
+
+## 운영 주의사항
+
+### 관리자 모드 — 같은 Wi-Fi에서 두 기기 동시 실행 금지
+
+**증상**: 동일 공인 IP에서 두 관리자 기기(Android + iPad)가 동시 WebView 호출 시 쿠팡 IP 차단 발생. 모든 상품 추가/새로고침 1시간가량 실패.
+
+**원인**: 쿠팡은 단시간 다수 동일 IP 트래픽을 봇으로 판정. 두 기기가 각자 30~40개 상품을 sequential하게 처리(상품당 3~5초) → 분당 12~24회 호출 × 2 = 24~48회/분 → 차단 임계 초과.
+
+**운영 가이드**:
+- 한 기기씩 순차 실행 (다른 기기는 대기시간 중)
+- 대기시간 30분 이상 설정 권장 (현재 admin UI: 10/15/30/60/120분 chip)
+- 3대+ 확장 시(Issue 5 1.0.17) deviceId hash modulo + 시간차 staggered 호출 검토
 
 ---
 

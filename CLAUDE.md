@@ -22,41 +22,42 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ---
 
-## 현재 상태 (2026-05-11 기준)
+## 현재 상태 (2026-05-12 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 코드 작업 전체 완료 — 빌드 + 베타 검증 대기.**
-- **1.0.16 작업 (2026-05-11 완료)**: RealPrice 아키텍처(docs/023) 8개 항목 + iOS 무한로딩 fix + 관리자 모드 UI 신설 + admin `fetchAllSharedProducts` orderBy fix (createdAt → documentId, 78개 createdAt 백필). 상세 [docs/changelog.md](./docs/changelog.md)
-- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab` (1.0.16 빌드 예정)
-- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"` (`forceUpdate:false` 디스미스 가능). 1.0.16 출시 후 갱신 예정.
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 (bn52/vc52) 빌드 완료 — 베타 검증 완료, 스토어 업로드 대기.**
+- **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix(createdAt → documentId + 78개 백필) + **Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용**(FCM 토큰 정상 발급 확인) + 그래프 스크롤(오늘=오른쪽 끝) + syncFromFirestore realPrice 분리 머지. 상세 [docs/changelog.md](./docs/changelog.md)
+- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.16-52.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.16-52.aab`
+- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.16 출시 후 갱신 예정.
 - **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
-- **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + **`onSharedProductRealPriceChange`** v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
+- **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + `onSharedProductRealPriceChange` v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- 🆕 **Issue NEW-A** — Android Push Token null 케이스 (CF skip.noToken=1 1건 관측). 1.0.16 출시 후 실기기 검증
-- ⚠️ **Issue 3** — 데이터/캐시 삭제 후 첫 상품 추가 실패. 1.0.16 iOS fix로 자연 해소 가능성 큼 — 재검증
-- 📦 **Issue 4** — 1.0.16 출시 후 검증 대기 항목 (트리거 / cron / 관리자 모드 / iOS scraper / 그래프 머지)
+- ⚠️ **Issue 3** — 상품 추가 일시 실패 (쿠팡 IP 차단, 1시간 후 재시도로 해소). 1.0.17에서 차단 페이지 감지 + 안내 추가 검토
+- 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링)
 - 📦 **Issue 5** — 1.0.17 빌드 정리 항목 (공유 링크 양 스토어, proguard, expo-image 잔여, cron target_reached 정식 삭제, 크라우드소싱, 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
+- 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
 
-> Issue 1 / Issue 2 (2-A/2-C)는 1.0.16 RealPrice 아키텍처로 출처 불일치 자체가 해소되어 [docs/changelog.md](./docs/changelog.md)로 이동.
+> Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
+
+> ⚠️ **운영 주의**: 관리자 모드는 같은 Wi-Fi에서 두 기기 동시 실행 금지 (쿠팡 IP 차단). 한 기기씩 순차 + 대기 30분 이상. 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
 
 ## 다음 할 일
 
-**🔨 우선순위 1 — 1.0.16 빌드 + 베타 검증**:
-- 버전 bump (`app.config.js` + `android/app/build.gradle`) 1.0.16 / bn51 / vc51
-- iOS: `eas build --local --profile production --platform ios` → Transporter 수동 업로드
-- Android: `eas build --local --profile production --platform android` → Play Console 내부 테스트
-- 베타 검증 (Issue 4 항목): RealPrice 트리거 발화 + cron skipRecentRealPrice / needsCheck 효과 + 관리자 모드 / iOS 무한로딩 해소 / 그래프 머지
+**🔨 우선순위 1 — 1.0.16 스토어 업로드**:
+- iOS: Transporter로 `jigumiya-1.0.16-52.ipa` 수동 업로드 → App Store Connect 심사
+- Android: Play Console 내부 테스트 → 단계적 출시
+- 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.16"` 갱신
 
-**📋 검증 후 후속**:
-- cron `events.targets.push` / flush target 분기 **정식 삭제** (주석 처리 → 코드 제거)
-- Android 토큰 null 케이스(Issue NEW-A) 진단 — 분기별 console.warn 보강 또는 재시도 로직
-- Issue 3 재현 여부 확인
+**📋 후속**:
+- cron `events.targets.push` / flush target 분기 **정식 삭제** (베타 검증 완료, 코드 제거 단계)
+- Issue 4 잔여 검증 (CF 트리거 token 보유자 실제 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
+- 1.0.17 정리 항목(Issue 5) 착수
 
-**🔄 별도 트랙**: 아이고 이식 (Issue 6)
+**🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) 포함
 
 ---
 
@@ -74,8 +75,8 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - Play Store / App Store는 단조 증가만 허용
 
 ### 로컬 빌드
-- Android: `eas build --local --profile production --platform android`. `google-services.json`은 .gitignore이므로 `.easignore`로 빌드 시 포함
-- iOS: `eas build --local --profile production --platform ios`. fastlane 필요 (`brew install fastlane`). `GoogleService-Info.plist`도 `.easignore` 제외 필수. app-store 서명 IPA → Transporter 수동 업로드 (`eas submit` 금지 — §017 §12)
+- Android: `eas build --local --profile production --platform android`. `google-services.json`은 EAS Secret(FILE_BASE64) `GOOGLE_SERVICES_JSON`으로 빌드 시 주입. `android/build.gradle` + `android/app/build.gradle`는 git 추적(.gitignore exception, 2026-05-11) — `com.google.gms.google-services:4.4.2` plugin 적용 상태 보존 필수 (미적용 시 FCM 토큰 발급 실패, 1.0.15 사고).
+- iOS: `eas build --local --profile production --platform ios`. fastlane 필요 (`brew install fastlane`). `GoogleService-Info.plist`는 .gitignore 미포함이라 archive에 그대로 포함. app-store 서명 IPA → Transporter 수동 업로드 (`eas submit` 금지 — §017 §12)
 - 빌드 산출물 네이밍: `jigumiya-{version}-{versionCode}[-dev].{aab|apk|ipa}` → `~/jigumiya/builds/{android,ios}/`. .gitignore 포함
 
 ### 수익모델

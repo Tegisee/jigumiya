@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-05-12 — 1.0.16 빌드 완료(iOS/Android) + 베타 검증 완료
+
+### 빌드 산출물
+- `~/jigumiya/builds/ios/jigumiya-1.0.16-52.ipa` — Transporter 업로드 대기
+- `~/jigumiya/builds/android/jigumiya-1.0.16-52.aab` — Play Console 내부 테스트 대기
+
+### 검증 완료 항목
+- ✅ **Android FCM 토큰 정상 발급** — 1.0.16에 적용한 `com.google.gms.google-services:4.4.2` Gradle plugin 효과 실기기 검증. `expoPushToken` 즉시 박힘 → `savePushToken` 호출 정상 → user doc 저장 정상. NEW-A(skip.noToken) 해소 예상.
+- ✅ **관리자 모드 `fetchAllSharedProducts`** — 실기기 "담당 ~42 / 전체 84" 정상 표시 (이전 "담당 1 / 전체 3"). `orderBy(documentId())` + createdAt 백필 효과 확인.
+- ✅ **그래프 방향** — 오늘이 오른쪽 끝 고정, 왼쪽 스크롤로 과거 가격 확인 동작.
+- ✅ **자동 새로고침 syncFromFirestore realPrice 분리 머지** — 기존 사용자 앱 오픈 시 currentPrice 즉시 반영.
+
+### 운영 주의사항 (신규)
+- **관리자 모드 동일 Wi-Fi 두 기기 동시 실행 금지** — 동일 공인 IP에서 두 기기가 동시 쿠팡 WebView 호출 시 쿠팡 IP 차단(분당 24~48회 호출 봇 판정). 한 기기씩 순차 실행 + 대기시간 30분 이상 권장. 3대+ 확장 시(Issue 5 1.0.17)는 deviceId hash modulo + 시간차 staggered 호출 검토.
+
+### 알려진 일시 이슈
+- 상품 추가 실패 — 쿠팡 IP 차단 시 1시간 후 재시도하면 해소. WebView 503/차단 페이지 → CoupangScraper 무한로딩/onError. Issue 3 갱신 참조.
+
+### shared_products 아이고 상품 혼재 발견
+- 아이고 사용자가 추가한 상품 10개가 `shared_products`에 혼재. 알림 발송 단계의 `users.app === 'jigumiya'` 필터로 잘못 알림은 차단되지만, 관리자 모드 순회 대상에 포함되어 불필요 호출 발생. 아이고 이식(Issue 6) 시 `app` 필드 또는 컬렉션 분리로 처리 — Issue 8 신설.
+
+---
+
 ## 2026-05-11 (밤) — Android google-services Gradle plugin 누락 fix + 그래프 스크롤 + syncFromFirestore realPrice 분리 머지
 
 ### Android FCM 토큰 발급 실패 근본 원인 fix (1.0.16 bn52/vc52)
