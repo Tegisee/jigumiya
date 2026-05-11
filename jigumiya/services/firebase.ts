@@ -328,10 +328,13 @@ export async function syncLocalToFirestore(
 /**
  * shared_products/{productId} 업서트 (merge)
  *
- * ⚠️ 시그니처를 Partial로 완화한 이유:
- * - trackerCount/favoriteCount는 increment()로만 관리 → 절대 이 경로로 쓰지 말 것
- * - priceHistory/lowestPrice/highestPrice는 서버(Phase 3-C)가 관리
- * - 클라이언트는 메타데이터(url, productName, thumbnail, currentPrice 등)만 기록
+ * ⚠️ 시그니처를 Partial로 완화한 이유 + RealPrice 역할 분담(docs/023):
+ * - trackerCount/favoriteCount: increment()로만 관리 → 절대 이 경로로 쓰지 말 것
+ * - priceHistory/lowestPrice/highestPrice: 서버(cron / CF)가 관리
+ * - apiPrice/lastCheckedAt: cron 전용 (이 함수로 쓰지 말 것)
+ * - realPrice/lastRealPriceUpdatedAt: 앱 WebView 전용 (1B 작업에서 updateItemPrice 경로로 wire)
+ * - needsCheck: cron set / CF·앱 clear
+ * - 클라이언트는 메타데이터(url, productName, thumbnail, vendorItemId) + 최초 realPrice mirror만 기록
  */
 export async function upsertSharedProduct(
   product: Partial<SharedProduct> & { productId: string },
@@ -357,11 +360,16 @@ export async function upsertSharedProduct(
  *
  * productId 없으면 null 반환 (shared_products 스킵).
  * 카운터 / priceHistory / lowest·highestPrice 는 의도적으로 제외.
+ *
+ * RealPrice 아키텍처(docs/023): 앱 추가 시점의 currentPrice는 WebView 파싱 결과 →
+ * 사실상 realPrice이므로 realPrice/lastRealPriceUpdatedAt도 함께 mirror.
+ * apiPrice/needsCheck는 cron 영역이라 미설정.
  */
 export function trackedItemToSharedProduct(
   item: TrackedItem,
 ): (Partial<SharedProduct> & { productId: string }) | null {
   if (!item.productId) return null;
+  const now = Date.now();
   return {
     productId: item.productId,
     url: item.url,
@@ -369,8 +377,11 @@ export function trackedItemToSharedProduct(
     ...(item.vendorItemId ? { vendorItemId: item.vendorItemId } : {}),
     productName: item.productName,
     thumbnail: item.thumbnail,
-    currentPrice: item.currentPrice,
-    lastCheckedAt: Date.now(),
+    currentPrice: item.currentPrice, // legacy 호환 — 곧 제거 예정
+    ...(item.currentPrice > 0
+      ? { realPrice: item.currentPrice, lastRealPriceUpdatedAt: now }
+      : {}),
+    lastCheckedAt: now,
   };
 }
 
@@ -778,6 +789,67 @@ export async function fetchCoupangPLToday(): Promise<CoupangPLDoc | null> {
 // ──────────────────────────────────────────────────────────
 // 업데이트 알림 (meta/config_jigumiya)
 // ──────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────
+// 관리자 모드 (docs/023 §관리자 기기 설계)
+// ──────────────────────────────────────────────────────────
+
+/**
+ * users/{uid}.isAdmin 실시간 구독 — 설정 화면에서 진입 버튼 노출 판단.
+ * doc 미존재 / 필드 미존재 / false → false 콜백. Unsubscribe 함수 반환.
+ */
+export function subscribeIsAdmin(
+  uid: string,
+  callback: (isAdmin: boolean) => void,
+): () => void {
+  return onSnapshot(
+    doc(db, 'users', uid),
+    (snap) => {
+      const data = snap.data() ?? {};
+      callback(data.isAdmin === true);
+    },
+    (error) => {
+      console.warn('[admin] isAdmin 구독 실패:', error);
+      callback(false);
+    },
+  );
+}
+
+/**
+ * shared_products 전체 fetch — 관리자 모드 자동 순회용 (createdAt asc 정렬).
+ * 정렬 기준이 일정해야 두 기기가 같은 인덱스로 분배됨.
+ * createdAt 미존재 doc은 뒤로 밀림.
+ */
+export async function fetchAllSharedProducts(): Promise<SharedProduct[]> {
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'shared_products'), orderBy('createdAt', 'asc')),
+    );
+    return snap.docs.map((d) => d.data() as SharedProduct);
+  } catch (e) {
+    console.warn('[admin] shared_products 전체 조회 실패:', e);
+    return [];
+  }
+}
+
+/**
+ * 관리자 모드 — realPrice + lastRealPriceUpdatedAt + needsCheck:false 업데이트.
+ * 1B(useAppStore.updateItemPrice)와 다른 점: needsCheck를 명시적 클리어 (CF 트리거 부담 감소).
+ */
+export async function adminUpdateRealPrice(
+  productId: string,
+  realPrice: number,
+): Promise<void> {
+  await setDoc(
+    doc(db, 'shared_products', productId),
+    {
+      realPrice,
+      lastRealPriceUpdatedAt: Date.now(),
+      needsCheck: false,
+    },
+    { merge: true },
+  );
+}
 
 /**
  * meta/config_jigumiya 단건 조회 — 인증 없이 호출 가능 (rules: read if true).

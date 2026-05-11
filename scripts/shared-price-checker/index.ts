@@ -69,6 +69,14 @@ const ONE_DAY_MS = 24 * 3600 * 1000;
 const BROADCAST_TIER10 = -10; // dropRate ≤ -10 (== 10% 이상 하락)
 const BROADCAST_TIER20 = -20;
 
+// docs/023 RealPrice 아키텍처:
+//   - REAL_PRICE_FRESH_MS: 앱 WebView가 realPrice mirror한 지 1시간 이내면 apiPrice 호출 skip.
+//     (search API rate limit 절감 + 정확한 realPrice 우선)
+//   - NEEDS_CHECK_DROPRATE_PCT: apiPrice 변동 절댓값 >= 10%면 needsCheck: true 플래그.
+//     CF onUpdate가 realPrice 갱신 시 false로 클리어. 앱/관리자 기기는 needsCheck=true 상품 우선 확인.
+const REAL_PRICE_FRESH_MS = 60 * 60 * 1000; // 1h
+const NEEDS_CHECK_DROPRATE_PCT = 10;
+
 // ─── §11 자동화 설계 — N값 기반 실행 타이밍 자동 결정 ───
 // docs/020 §3 매트릭스 — [최대 N, 간격 분]. 오름차순 정렬 필수 (lookupBaseInterval 선형 탐색).
 // N > 13,200은 추후 검토 숙제 — 안전을 위해 가장 큰 간격(330)으로 fallback.
@@ -436,13 +444,15 @@ async function loadDropsForNotifyOnly(events: RawEvents): Promise<number> {
     };
     events.drops.push({ ...brief, dropRate, trackers });
 
-    // target_reached 추출
-    for (const t of trackers) {
-      const target = t.targetPrice;
-      if (target && target > 0 && currentPrice <= target) {
-        events.targets.push({ uid: t.uid, item: brief, targetPrice: target });
-      }
-    }
+    // target_reached — docs/023: CF onUpdate 트리거(onSharedProductRealPriceChange)가 인계.
+    // cron의 currentPrice(=apiPrice)는 정가라 false positive가 많아 비활성.
+    // 코드 보존 (검증 후 정식 폐기 단계 — 023 §Issue 2-A fix).
+    // for (const t of trackers) {
+    //   const target = t.targetPrice;
+    //   if (target && target > 0 && currentPrice <= target) {
+    //     events.targets.push({ uid: t.uid, item: brief, targetPrice: target });
+    //   }
+    // }
 
     // 브로드캐스트 분류 (24h 가드는 flush에서 처리)
     if (dropRate <= BROADCAST_TIER20) {
@@ -677,6 +687,7 @@ async function main() {
   let scanned = 0;
   let skipZero = 0;
   let skipToday = 0;
+  let skipRecentRealPrice = 0; // docs/023: lastRealPriceUpdatedAt 1h 이내 → apiPrice skip
   let cacheHits = 0;
   let apiCalls = 0;
   let priceDrops = 0;
@@ -742,6 +753,17 @@ async function main() {
       continue;
     }
 
+    // docs/023 RealPrice: 앱 WebView가 1h 이내 realPrice mirror한 상품은 apiPrice 갱신 skip.
+    // 정확한 realPrice가 이미 신선하므로 search API 호출 + 부정확한 apiPrice 덮어쓰기 회피.
+    const lastReal = Number(data.lastRealPriceUpdatedAt || 0);
+    if (lastReal > 0 && Date.now() - lastReal < REAL_PRICE_FRESH_MS) {
+      skipRecentRealPrice++;
+      console.log(
+        `[Skip-RealFresh] ${productId} (lastReal=${Math.round((Date.now() - lastReal) / 60000)}분 전)`,
+      );
+      continue;
+    }
+
     const prevPrice = Number(data.currentPrice || 0);
     let newPrice = 0;
     let usedCache = false;
@@ -801,16 +823,25 @@ async function main() {
       newPrice,
     );
 
+    // docs/023: apiPrice 변동 절댓값 >= 10%면 needsCheck:true 박음.
+    // CF onUpdate가 realPrice 갱신 시 false로 클리어, 앱/관리자 기기는 needsCheck=true 우선 확인.
+    // dropRate는 아래 알림 분기에서도 재사용 — 위에서 한 번만 계산.
+    const dropRate =
+      prevPrice > 0 ? ((newPrice - prevPrice) / prevPrice) * 100 : 0;
+    const needsCheck = Math.abs(dropRate) >= NEEDS_CHECK_DROPRATE_PCT;
+
     await item.ref.update({
       currentPrice: newPrice,
+      apiPrice: newPrice, // docs/023: cron은 apiPrice mirror (realPrice는 앱 WebView 출처)
       priceHistory: trimmed,
       lowestPrice,
       highestPrice,
       lastCheckedAt: Date.now(),
+      ...(needsCheck ? { needsCheck: true } : {}),
     });
 
     console.log(
-      `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원${usedCache ? ' (cache)' : ''}`,
+      `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원${usedCache ? ' (cache)' : ''}${needsCheck ? ' [needsCheck]' : ''}`,
     );
 
     // 변동 없음 / 비교 baseline 없음 → 알림 이벤트 없음
@@ -822,7 +853,6 @@ async function main() {
       currentPrice: newPrice,
       previousPrice: prevPrice,
     };
-    const dropRate = ((newPrice - prevPrice) / prevPrice) * 100;
 
     // 2026-05-05 B: dropRate 절댓값 가드 — 60%를 넘는 변동은 search API 매칭 휴리스틱 오류
     // (옵션 mismatch / 다른 상품 매칭) 가능성이 매우 높아 알림 차단. 가격 갱신 자체는 위에서 이미 완료.
@@ -849,13 +879,15 @@ async function main() {
       const trackers = await fetchTrackers(productId);
       events.drops.push({ ...brief, dropRate, trackers });
 
-      // 목표가 도달 추출
-      for (const t of trackers) {
-        const target = t.targetPrice;
-        if (target && target > 0 && newPrice <= target) {
-          events.targets.push({ uid: t.uid, item: brief, targetPrice: target });
-        }
-      }
+      // 목표가 도달 — docs/023: CF onUpdate 트리거(onSharedProductRealPriceChange)가 인계.
+      // cron의 newPrice(=apiPrice)는 정가라 false positive가 많아 비활성.
+      // 코드 보존 (검증 후 정식 폐기 단계 — 023 §Issue 2-A fix).
+      // for (const t of trackers) {
+      //   const target = t.targetPrice;
+      //   if (target && target > 0 && newPrice <= target) {
+      //     events.targets.push({ uid: t.uid, item: brief, targetPrice: target });
+      //   }
+      // }
 
       // 브로드캐스트 (10%/20% 이상 하락)
       if (dropRate <= BROADCAST_TIER20) {
@@ -936,7 +968,9 @@ async function main() {
     return b;
   }
 
-  // 2-A. targets — 가드 통과 항목만 bucket.target에 등록 (사용자당 첫 번째 1건만 보존)
+  // 2-A. targets — docs/023: CF onUpdate 트리거가 target_reached 발송 인계.
+  // events.targets.push 2곳을 위에서 주석 처리 → events.targets는 항상 빈 배열 → 본 루프 무동작.
+  // 코드 보존: 검증 완료 후 정식 폐기 단계에서 함께 삭제 (023 §Issue 2-A fix).
   for (const ev of events.targets) {
     const user = jigumiyaUsers.get(ev.uid);
     if (!user) continue;
@@ -993,7 +1027,8 @@ async function main() {
     const user = jigumiyaUsers.get(uid);
     if (!user) continue;
 
-    // target_reached (사용자당 1건)
+    // target_reached (사용자당 1건) — docs/023: CF가 인계해서 b.target은 항상 undefined → 본 블록 무동작.
+    // 코드 보존: 검증 완료 후 정식 폐기 단계에서 함께 삭제.
     if (b.target) {
       payloads.push({
         type: 'target_reached',
@@ -1103,7 +1138,7 @@ async function main() {
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `[SharedPriceChecker] 완료 mode=${notifyOnly ? 'notify-only' : 'price-check'} scanned=${scanned} processed=${processedCount} skipZero=${skipZero} skipToday=${skipToday} ` +
+    `[SharedPriceChecker] 완료 mode=${notifyOnly ? 'notify-only' : 'price-check'} scanned=${scanned} processed=${processedCount} skipZero=${skipZero} skipToday=${skipToday} skipRecentRealPrice=${skipRecentRealPrice} ` +
       `cacheHits=${cacheHits} apiCalls=${apiCalls} drops=${priceDrops} ups=${events.ups.length} ` +
       `targets=${events.targets.length} bc10=${events.broadcastTier10.length} bc20=${events.broadcastTier20.length} ` +
       `notif=${payloads.length} rateLimited=${rateLimited} elapsed=${elapsed}s`,

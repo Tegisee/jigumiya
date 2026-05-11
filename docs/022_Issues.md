@@ -4,103 +4,73 @@
 
 ---
 
-## Issue 1 — 가격추적 그래프 자동 업데이트 ✅ 코드 수정 완료 (2026-05-10, 1.0.16 빌드 대기)
-
-**증상 (5/10 진단)**: cron이 매 사이클 정상 동작(`shared_products` priceHistory 누적)인데 앱에서 백그라운드 → 포그라운드 전환 시 그래프 변화 없음. cron은 `shared_products`만 update / 앱은 `users/{uid}/items`만 read → 출처 불일치.
-
-**수정 (commit `197d50b`)**:
-- `services/firebase.ts`: `fetchSharedProductsByIds(productIds)` 신설. `Promise.all(getDoc)` 패턴 (홈 N=10이라 1 round-trip)
-- `store/useAppStore.ts:syncFromFirestore`: 3-way 머지 (remote → local → shared)
-  1. remote(`users/{uid}/items`) 베이스
-  2. local 보존 (5/7 Fix B): local.priceHistory > remote.priceHistory 시 local 채택
-  3. **shared 보존 (신규)**: shared.priceHistory > (1+2 머지값) 시 shared 채택. currentPrice도 함께
-- 비용: foreground 전환당 +10 read (jigumiya 본 제품)
-
-**1.0.16 빌드 시 포함 예정** — 빌드 + 출시 후 검증.
-
-### ⚠️ 별개 — cron 가격 부정확 이슈 (5/10 발견, 보류)
-
-진단 중 발견: `productId=8522615082`(메오르 액정필름) 추적자에게 cron이 5,870원 저장 / 사용자 페이지/WebView는 4,990원 표시.
-
-원인 (raw 응답 dump로 확인):
-- Search API 응답 top-level에 `vendorItemId`/`itemId` 필드 없음 (URL 쿼리스트링에만 존재)
-- 5/6에 추가한 vendorItemId 정확 매칭 코드(`coupang-api.ts:202-214`)가 영구 undefined → 옵션 매칭 안 됨
-- 이번 케이스는 그것 외에도 4,990원 옵션 자체가 검색 응답에 없음 (즉시할인 또는 다른 SKU)
-- Coupang affiliate Search API의 구조적 한계
-
-**결정 (2026-05-10)**: E 옵션 — 변경 없음. 알림은 신호로만 활용, 정확 가격은 사용자가 앱 진입 후 WebView로 확인. Issue 1 머지 정책으로 그래프는 cron 값 표시 (부정확하지만 갱신은 됨). 추후 (A) vendorItemId URL 파싱 + (B) dropRate 가드 강화 검토 가능.
+> Issue 1 / Issue 2-A / Issue 2-C는 모두 해결되어 `changelog.md`로 이동. 1.0.16 RealPrice 아키텍처(`docs/023`) 전체 구현 완료로 그래프/알림 출처 불일치 자체가 해소됨.
 
 ---
 
-## Issue 2 — 가격변동 알림 0건 (cron 측, 서버만 수정)
+## Issue NEW-A — Android Push Token null 저장 케이스 (1.0.16 빌드 후 검증)
 
-**증상 (진단)**: cron 로그 분석 (5/8 14:17 ~ 5/9 15:08, 약 25 사이클): 거의 전부 `[Flush] payloads 0건`. PriceDrop은 정상 기록(예: 5/9 15:08 — `8522615082` -15.3%, `8850725306` -4.5%, trackers=1 each).
+**상태**: 신규 진단 (2026-05-11), 1.0.16 출시 후 실기기 검증 예정.
 
-**결론**: 수신 문제 아님 — 발송 자체가 0건 (Expo push API 호출 X).
+**증상**: CF `onSharedProductRealPriceChange` 트리거 첫 발화 로그(`9309948201` 도달 후보 1명) 결과 `skip.noToken=1` — 추적자 user의 `expoPushToken` 필드가 미보유. 시뮬레이터/웹/권한 거부/Android FCM 발급 실패 케이스 중 하나.
 
-### Issue 2-A — token 공유 시 알림 영구 미발송 ✅ 수정 완료 (2026-05-10, commit `a5dfc5d`)
+**기존 흐름 (`services/notifications.ts:18 + firebase.ts:199`)**:
+- `registerForPushNotifications`가 권한 거부 / `getExpoPushTokenAsync` 예외 / EAS projectId 미존재 시 null 반환 + `savePushToken` 미호출 → user doc의 `expoPushToken` 필드 자체 미설정 (undefined)
+- `ensureUserDoc` (5/6 갤럭시 fix)는 user doc은 보장하지만 token은 안 박음 → CF/cron이 `!token` 분기에서 skip (의도된 동작)
 
-**근본 원인**: 5/7 swap 정책은 "신 uid에만 tracked 있으면 1회 swap" → 동일 토큰 공유 uid가 3+개 + 2+개가 tracked 보유 시 2번째 이후는 여전히 dup-skip.
+**Android 토큰 발급 실패 후보** (notifications.ts catch:52에서 흡수):
+- `google-services.json` 누락/mismatch (`.easignore` 처리 필수)
+- Firebase Cloud Messaging V1 API 미활성화 (Legacy 폐지 흐름)
+- Google Play Services 미설치/구버전
+- Android 13+ `POST_NOTIFICATIONS` 런타임 권한 거부
+- Expo Push 서버 일시 5xx (재시도 로직 없음 — 단발 실패 시 영구 미저장)
 
-**실측 (5/9 15:08)**: `nVZEN00Uj`(swap-in, has tracked) → `qw3R…UCh2`(also has tracked, 익스트림 액티브 에너지젤 `8611087425` 추적자) 가 dup-skip → `jigumiyaUsers.get('qw3R')`=undefined → flush L911-931에서 payload 미빌드. drop 잡혀서 `events.drops`에 들어가도 trackers의 uid가 dup-skip되면 영원히 push 안 됨.
+**iOS는 추가로**: 시뮬레이터(토큰 발급 불가), APNs cert/p8 미등록, provisional 거부.
 
-**수정 (commit `a5dfc5d`)**: `fetchActiveUsers` 정책 전면 개편.
-- 후보 = jigumiya + token + notif on + **tracked 보유 uid**만 (tracked 미보유 자동 제외)
-- 같은 token 공유 시 winner = `lastNotifications` 최댓값 timestamp desc → tiebreak `createdAt` desc → 1개만 선택
-- 패자 uid 완전 제외 → push가 winner의 trackers 기반으로만 발송 → 알림 탭 시 winner의 items에서 정상 조회 (UX 버그 차단)
-- token당 push 1건 자연 보장 (5/6 morning_greeting 4건 사고 재발 방지)
-- 신규 헬퍼 `maxLastNotifTime(ln)` 추가
-- 로그: `[ActiveUsers] shared-token winner=… (lastNotif=… createdAt=…) dropped=[…]`
+**검증 계획 (1.0.16 출시 후)**:
+- [ ] CF 트리거 발화 로그에서 `skip.noToken` 비율 모니터링
+- [ ] 실기기(Android 14, iPad)에서 첫 실행 시 `expoPushToken` 박힘 확인
+- [ ] 발급 실패 시 `[Notifications] 토큰 등록 실패` 로그 + AppState active 재시도 추가 검토
 
-**검증 대기**: 다음 cron 사이클에 shared-token winner 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신 확인.
-
-### Issue 2-C — unknown user 미분류 ✅ 검증 완료 (2026-05-10, 후보 0명)
-
-**진단 (5/9)**: `[ActiveUsers] jigumiya=17 | unknown=40 | trackedUids=10` — `app === 'jigumiya'` strict 필터가 `app` 필드 없는 user doc 40개를 통째 제외. 이들 중 tracked 보유자는 알림 미수신 추정.
-
-**스크립트 작성** (`scripts/cleanup/users-app-backfill-jigumiya-20260510.mjs`): users 중 `app == null` + `expoPushToken` 보유 + `tracked` 서브컬렉션 비어있지 않은 doc → `app: 'jigumiya'` 박기. dry-run 기본, `DRY_RUN=false` 환경변수로 실제 실행.
-
-**dry-run 결과 (5/10)**: 후보 **0명**.
-- 총 185 docs / app 이미 설정 71 / token 없음 67 / tracked 비어있음 47 / **후보 0**
-- 해석: 진단 시점 unknown 40명은 대부분 token만 보유 + tracked 비어있는 상태였거나, 진단 이후 일부가 앱 실행으로 `ensureUserDoc` 자동 트리거되어 자연 회복
-- 결론: 현재 backfill 실행 불필요. 스크립트는 향후 unknown 누적 시 재사용 가능하도록 보존
+**개선 후보 (필요 시)**:
+- `registerForPushNotifications` 분기별 console.warn 보강 (어느 분기에서 null 반환인지 식별)
+- `getExpoPushTokenAsync` 실패 시 1회 재시도 + AppState active 시 재발급 시도
 
 ---
 
-## Issue 3 — 데이터/캐시 삭제 후 첫 상품 추가 실패 (재현 확인 필요)
+## Issue 3 — 데이터/캐시 삭제 후 첫 상품 추가 실패 (1.0.16 빌드 후 재검증)
 
-**상태**: 5/7~5/8 보고, 1.0.15 출시 후 재현 여부 검증 필요
+**상태**: 5/7~5/8 보고. 1.0.16에서 iOS 무한로딩 fix(HTML fetch 폐기 + vp URL 직접 로드 + SCRAPE_JS 내부 폴링 + link.coupang.com 차단) 적용으로 자연 해소 가능성 큼 — 출시 후 재검증.
 
 **증상**: AsyncStorage 초기화 + 신규 anon 로그인 직후 첫 add-item 호출에서 무한로딩/실패 발생 추정.
 
-**의심**: `ensureUserDoc` / Auth 워밍업 race condition.
+**의심**: `ensureUserDoc` / Auth 워밍업 race condition + Universal Link 흡수 가능성.
 
-**수정 방향**: 1.0.15 (Functions timeout 8s 복원 + Auth 1.5s 대기) 환경에서 재현 여부 검증 → 재현 시 추가 fix.
+**수정 방향**: 1.0.16 환경에서 재현 여부 검증 → 재현 시 추가 fix (auth wait 시간 조정 등).
 
 ---
 
-## Issue 4 — 검증 대기 (1.0.15 출시 후)
+## Issue 4 — 1.0.16 출시 후 검증 대기
 
-- [ ] **검증** Fix A/B/C 효과 — 백그라운드 복귀 시 그래프 데이터 보존 / 홈 카드 trend 뱃지 노출 (priceHistory 2개 이상)
-- [ ] **검증** Issue 2-A 정책 동작 — 다음 cron 사이클에 `[ActiveUsers] shared-token winner=… (lastNotif=… createdAt=…) dropped=[…]` 로그 표시 + 익스트림 액티브 에너지젤(`8611087425`) 추적자 알림 정상 수신
-- [ ] **검증** 가격 그래프 — priceHistory 5개 이상 상품에서 SparklineChart 정상 노출, 5개 미만은 스킵
-- [ ] **검증** 골드박스 cron (07:30 KST) 첫 자동 실행 — `goldbox/{YYYY-MM-DD}` 생성 + productUrl affiliate prefix
-- [ ] **검증** shared-price-check cron 3차 재활성화 후 첫 자동 실행 (A~E 검증)
-- [ ] **검증** 이벤트 cron (02:35 KST) 첫 실행 — D-7 윈도우 동작
-- [ ] **검증** 쿠팡 PL cron 자동 실행 (07:30 KST 정기) — workflow_dispatch 외 schedule 트리거 + categoryName 응답 포함 여부
-- [ ] **검증** vendorItemId 매칭 로그 (`[API] vendorItemId=... 정확 매칭 → ...원 (옵션 고정)`)
-- [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
+- [ ] **검증** RealPrice 트리거(`onSharedProductRealPriceChange`) — 실기기에서 updateItemPrice → CF 발화 → push 도달 → `lastNotifications.targetReached.{pid}` 가드 박힘 + needsCheck 클리어
+- [ ] **검증** cron 변경 — `skipRecentRealPrice=N` 카운트 / `[needsCheck]` 마크 / `payloads` target_reached 0건 / lastRealPriceUpdatedAt 1h 가드 효과
+- [ ] **검증** 관리자 모드 — isAdmin 시만 노출 / Platform.OS 홀수/짝수 분배 / 이어서 진행 / wallclock 카운트다운 백그라운드 정확성 / AsyncStorage 복원
+- [ ] **검증** iOS 상품 추가 — 단축 URL/직접 URL/vp URL 4가지 케이스 무한로딩 해소
+- [ ] **검증** 가격 그래프 — 신규 사용자가 추가 시점 즉시 shared 과거 이력 머지 (1A) / 백그라운드 복귀 시 realPrice 우선 머지 (3)
+- [ ] **검증** Android Push Token null 케이스 (Issue NEW-A 참조)
 - [ ] **모니터링** Functions 응답시간 로그 (`minInstances:1` 후 콜드 스파이크 사라짐 확인, 최소 20회 표본)
+- [ ] **확인** category_best.products[0].productUrl raw vs affiliate (Firebase Console)
 
 ---
 
-## Issue 5 — 다음 빌드 (1.0.16) 정리
+## Issue 5 — 다음 빌드 (1.0.17) 정리
 
-- [ ] **fix** Issue 1 (위 참조)
-- [ ] **fix** Issue 3 재현 시
 - [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 모두 발송
-- [ ] **chore** expo-image 마이그레이션 잔여 사용처 (1.0.14에서 8개 메인 사용처 처리 — 누락된 곳 점검)
-- [ ] **chore** Android proguard 설정 — 빌드 크기 축소 + 코드 보호
+- [ ] **chore** expo-image 마이그레이션 잔여 사용처 점검
+- [ ] **chore** Android proguard 설정
+- [ ] **cleanup** cron `events.targets.push` / flush target 분기 정식 삭제 (베타 검증 후)
+- [ ] **feat** 크라우드소싱 — 사용자 앱 오픈 시 타인 상품 3~5개 추가 realPrice 업데이트
+- [ ] **feat** 관리자 모드 — 3대+ 확장 시 deviceId hash 기반 modulo 분배
 
 ---
 

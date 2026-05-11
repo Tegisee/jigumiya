@@ -13,6 +13,7 @@ import {
   fetchSharedProductsByIds,
   // Phase 3-A: 이중 쓰기용 신규 함수 (기존 함수는 그대로 유지)
   getCurrentUid,
+  getSharedProduct,
   upsertSharedProduct,
   trackedItemToSharedProduct,
   addTrackedRef,
@@ -28,7 +29,7 @@ interface AppState {
   notificationEnabled: boolean;
   hasSeenOnboarding: boolean;
   trackedItems: TrackedItem[];
-  addItem: (item: TrackedItem) => void;
+  addItem: (item: TrackedItem) => Promise<void>;
   removeItem: (id: string) => void;
   updateTargetPrice: (id: string, price: number) => void;
   updateItemPrice: (id: string, price: number) => void;
@@ -45,7 +46,7 @@ export const useAppStore = create<AppState>()(
       notificationEnabled: true,
       hasSeenOnboarding: false,
       trackedItems: [],
-      addItem: (item) => {
+      addItem: async (item) => {
         // Phase 3-A: 추가 전 상태에 동일 productId 중복 여부 판단 (trackerCount 중복 증가 방지)
         const alreadyTracking = item.productId
           ? useAppStore
@@ -65,12 +66,43 @@ export const useAppStore = create<AppState>()(
           return;
         }
 
-        set((state) => ({ trackedItems: [...state.trackedItems, item] }));
-        saveItemToFirestore(item); // 기존 경로 유지 (하위 호환)
+        // 1A (docs/023): 첫 추적 + productId 있을 때 shared_products 과거 이력 머지.
+        // cron이 누적해온 priceHistory를 신규 사용자도 즉시 보이게 한다. 오늘자 가격은
+        // WebView 결과(item.currentPrice)가 더 신선하므로 같은 날짜면 덮어쓰고 아니면 append.
+        // lowestPrice/highestPrice는 detail 화면이 priceHistory에서 derive하므로 별도 보존 불필요.
+        let finalItem = item;
+        if (!alreadyTracking && item.productId) {
+          try {
+            const snapshot = await getSharedProduct(item.productId);
+            const sharedHist = snapshot?.priceHistory ?? [];
+            if (sharedHist.length > 0) {
+              const today = new Date().toISOString().slice(0, 10);
+              const merged = sharedHist.map((p) => ({ ...p }));
+              const last = merged[merged.length - 1];
+              if (item.currentPrice > 0) {
+                if (last?.date === today) {
+                  last.price = item.currentPrice;
+                } else {
+                  merged.push({ date: today, price: item.currentPrice });
+                }
+              }
+              finalItem = { ...item, priceHistory: merged };
+              console.log(
+                `[addItem] shared 머지 ${item.productId}: ${sharedHist.length}건 + 오늘 → ${merged.length}건`,
+              );
+            }
+          } catch (e) {
+            // 머지 실패해도 단독 진행 (사용자 추가 자체는 막지 않음)
+            console.warn('[addItem] shared 머지 실패 — 단독 진행:', e);
+          }
+        }
+
+        set((state) => ({ trackedItems: [...state.trackedItems, finalItem] }));
+        saveItemToFirestore(finalItem); // 기존 경로 유지 (하위 호환) — 머지된 priceHistory도 함께 저장
 
         // shared_products 이중 쓰기 (productId 있고 + 첫 추적일 때만)
         if (!alreadyTracking) {
-          const shared = trackedItemToSharedProduct(item);
+          const shared = trackedItemToSharedProduct(finalItem);
           if (shared) {
             const uid = getCurrentUid();
             upsertSharedProduct(shared);
@@ -118,9 +150,11 @@ export const useAppStore = create<AppState>()(
         // Firestore에 함께 저장할 최신 priceHistory를 외부 변수로 캡처
         // (set 콜백 내부에서 만들어지지만 updateItemInFirestore에도 동일 값 전달 필요)
         let nextHistory: { date: string; price: number }[] | null = null;
+        let productId: string | undefined;
         set((state) => ({
           trackedItems: state.trackedItems.map((item) => {
             if (item.id !== id || newPrice === 0) return item;
+            productId = item.productId;
             const history = [...item.priceHistory];
             const last = history[history.length - 1];
             if (last?.date === today) {
@@ -143,6 +177,16 @@ export const useAppStore = create<AppState>()(
           currentPrice: newPrice,
           ...(nextHistory ? { priceHistory: nextHistory } : {}),
         });
+        // 1B (docs/023): WebView 결과는 사실상 realPrice → shared_products 역방향 mirror.
+        // cron은 lastRealPriceUpdatedAt 확인해 최근 WebView 갱신 있으면 apiPrice 호출 skip.
+        // needsCheck는 CF onUpdate 트리거가 알림 검토 후 클리어할 책임이라 미터치.
+        if (productId && nextHistory) {
+          upsertSharedProduct({
+            productId,
+            realPrice: newPrice,
+            lastRealPriceUpdatedAt: Date.now(),
+          });
+        }
       },
       syncFromFirestore: async () => {
         const remote = await fetchItemsFromFirestore();
@@ -153,7 +197,11 @@ export const useAppStore = create<AppState>()(
         //      → updateItemPrice가 currentPrice만 Firestore에 저장하던 시기 데이터 보호
         //   3. shared 보존 (Issue 1, 2026-05-10): shared.priceHistory가 (1+2 머지값)보다 길면 shared 채택
         //      → cron(`shared-price-checker`)이 매 사이클 priceHistory 누적하므로 신선한 출처
-        //      currentPrice도 priceHistory 출처와 함께 따라감
+        //      currentPrice는 1B(docs/023) 도입 후 realPrice 우선 + legacy currentPrice fallback.
+        //      shared.realPrice는 앱 WebView가 mirror하는 가장 정확한 가격, shared.currentPrice는
+        //      cron이 과거 apiPrice를 mirror하던 시기 호환 경로.
+        //   ※ priceHistory 스키마({date, price}→{date, realPrice})는 cron의 realPrice 기록 전환과 함께
+        //      별도 task에서 일괄 변환 예정. 현재는 length 비교 정책만 유지.
         const local = useAppStore.getState().trackedItems;
         const localById = new Map(local.map((i) => [i.id, i]));
 
@@ -178,14 +226,17 @@ export const useAppStore = create<AppState>()(
                 }
               : r;
 
-          // Step 3: shared 우선 (cron 갱신 출처)
+          // Step 3: shared 우선 (cron 누적 + 앱 WebView mirror 출처)
           const shared = r.productId ? sharedById.get(r.productId) : undefined;
           const sharedHistLen = shared?.priceHistory?.length ?? 0;
           if (shared && sharedHistLen > m.priceHistory.length) {
+            const sharedPrice = shared.realPrice ?? shared.currentPrice;
             m = {
               ...m,
               priceHistory: shared.priceHistory,
-              currentPrice: shared.currentPrice,
+              ...(typeof sharedPrice === 'number' && sharedPrice > 0
+                ? { currentPrice: sharedPrice }
+                : {}),
             };
           }
           return m;

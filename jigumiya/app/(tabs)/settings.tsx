@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { View, Text, Switch, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -5,6 +6,7 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
+import { subscribeAuthUid, subscribeIsAdmin } from '../../services/firebase';
 
 const appVersion = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -15,6 +17,25 @@ export default function SettingsScreen() {
     toggleNotification,
     resetAllData,
   } = useAppStore();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // uid 변경 → isAdmin 구독 — docs/023 §관리자 모드
+  useEffect(() => {
+    let unsubAdmin: (() => void) | null = null;
+    const unsubUid = subscribeAuthUid((uid) => {
+      unsubAdmin?.();
+      unsubAdmin = null;
+      if (!uid) {
+        setIsAdmin(false);
+        return;
+      }
+      unsubAdmin = subscribeIsAdmin(uid, setIsAdmin);
+    });
+    return () => {
+      unsubUid();
+      unsubAdmin?.();
+    };
+  }, []);
 
   const handleReset = () => {
     Alert.alert(
@@ -101,6 +122,28 @@ export default function SettingsScreen() {
           <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
         </TouchableOpacity>
       </View>
+
+      {isAdmin && (
+        <>
+          <Text style={styles.sectionTitle}>관리자</Text>
+          <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push('/admin')}
+              activeOpacity={0.6}
+            >
+              <View style={styles.rowLeft}>
+                <Ionicons name="construct-outline" size={20} color={theme.primary} />
+                <View style={styles.rowText}>
+                  <Text style={styles.label}>관리자 모드</Text>
+                  <Text style={styles.desc}>shared_products realPrice 자동 순회</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
 
       <Text style={styles.affiliate}>
         이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.

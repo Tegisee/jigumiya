@@ -25,13 +25,25 @@ export interface SharedProduct {
   vendorItemId?: string;
   productName: string;
   thumbnail: string;
+  /**
+   * @deprecated 1.0.16 RealPrice 아키텍처(docs/023) 이행 중 — 곧 apiPrice/realPrice로 대체.
+   * cron이 apiPrice와 동시에 mirror, 앱은 realPrice 우선 사용 + 미존재 시 fallback.
+   */
   currentPrice: number;
+  /** cron(파트너스 search API) 정가. 즉시할인 미반영 → 알림/그래프 베이스 X. (docs/023) */
+  apiPrice?: number;
+  /** 앱 WebView가 파싱한 실제 판매가. 알림/그래프의 진실 원천. (docs/023) */
+  realPrice?: number;
+  /** realPrice 마지막 write 시점. cron이 본 값으로 최근 WebView 갱신 여부 판단 후 가격 skip. */
+  lastRealPriceUpdatedAt?: number;
+  /** cron이 apiPrice 큰 변동 감지 시 true. CF/앱이 realPrice 재확인 후 false로 클리어. */
+  needsCheck?: boolean;
   lowestPrice: number;
   highestPrice: number;
-  priceHistory: { date: string; price: number }[]; // 최근 90일
+  priceHistory: { date: string; price: number }[]; // 최근 90일 — 1.0.16에서 realPrice 기준으로 단계 전환 예정
   trackerCount: number; // 홈 추적 유저 수 (FieldValue.increment로 관리)
   favoriteCount: number; // 자주사는 유저 수
-  lastCheckedAt: number; // ms epoch
+  lastCheckedAt: number; // ms epoch — cron의 apiPrice 마지막 갱신 시점
   lastPriceDropAt?: number;
   lastDropRate?: number; // 음수 %
   createdAt?: number; // ms epoch — 신규 생성 시 기록 (019 §5-2 당일 추가 스킵용)

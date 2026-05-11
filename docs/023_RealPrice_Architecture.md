@@ -1,4 +1,8 @@
-# 023. RealPrice 아키텍처 설계 (2026-05-10 논의)
+# 023. RealPrice 아키텍처 설계 (2026-05-10 논의 / 2026-05-11 구현 완료)
+
+> **상태**: ✅ 8개 항목 모두 코드 완료 — 1.0.16 빌드 + 베타 검증 대기.
+> CF 트리거 `onSharedProductRealPriceChange`는 이미 프로덕션 배포 + 실제 트리거 발화 검증 완료.
+
 
 ## 배경
 - 파트너스 API가 즉시할인 미반영 정가(apiPrice) 반환
@@ -70,16 +74,20 @@ shared_products/{productId}에 필드 추가:
 
 ## 작업 순서
 
-### 1.0.16
-1. shared_products에 apiPrice/realPrice/lastRealPriceUpdatedAt/needsCheck 필드 추가
-2. 앱 코드 1A + 1B + 3 수정
-3. Cloud Functions onUpdate 트리거 추가
-4. cron 알림 로직 변경 (골드박스 유도 알림)
-5. 관리자 모드 UI 구현
+### 1.0.16 — 2026-05-11 완료
+1. ✅ shared_products에 apiPrice/realPrice/lastRealPriceUpdatedAt/needsCheck 필드 추가 (`types/index.ts` + `services/firebase.ts:trackedItemToSharedProduct` realPrice mirror)
+2. ✅ 앱 코드 1A (`store/useAppStore.ts:addItem` async + getSharedProduct 머지), 1B (`updateItemPrice`에 realPrice/lastRealPriceUpdatedAt 역방향 write), 3 (`syncFromFirestore` realPrice 우선 + currentPrice fallback)
+3. ✅ Cloud Functions `onSharedProductRealPriceChange` 배포 (asia-northeast3) — 실제 트리거 발화 + tracked 조회 + target 필터 + token-share dedup + needsCheck 클리어 검증 완료
+4. ✅ cron 변경 (`scripts/shared-price-checker/index.ts`): lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그(절댓값 ≥10%) + target_reached 발송 비활성화(주석 처리, CF가 인계)
+5. ✅ 관리자 모드 UI (`app/admin.tsx` 신설): isAdmin 기반 진입, Platform.OS 홀수/짝수 분배, sequential WebView 순회, 이어서 진행, wallclock 기반 카운트다운 (AsyncStorage 영속화 + AppState 만료 검사)
+
+추가로:
+- iOS 상품 추가 무한로딩 fix: HTML fetch 폐기 → vp URL 직접 로드 통일 + SCRAPE_JS 내부 0.5s × 20회 폴링 + link.coupang.com 차단
 
 ### 1.0.17 이후
 - 사용자 앱 오픈 시 타인 상품 3~5개 추가 업데이트 (크라우드소싱)
-- 관리자 기기 자동 분배 로직 고도화
+- 관리자 기기 자동 분배 로직 고도화 (3대+ modulo, deviceId hash)
+- cron의 주석 처리된 `events.targets.push` / flush 단계 정식 삭제 (베타 검증 후)
 
 ## 기존 완료 항목 재검토
 

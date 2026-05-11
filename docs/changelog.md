@@ -6,6 +6,55 @@
 
 ---
 
+## 2026-05-11 — 1.0.16 RealPrice 아키텍처 전체 완료 + iOS 무한로딩 fix + 관리자 모드
+
+`docs/023_RealPrice_Architecture.md` 8개 작업 항목 모두 완료. 1.0.16 빌드 + 베타 검증 대기 단계.
+
+### RealPrice 아키텍처 (docs/023)
+
+1. **SharedProduct 필드 분리** (`types/index.ts`, `services/firebase.ts`): apiPrice / realPrice / lastRealPriceUpdatedAt / needsCheck 4개 optional 추가. 기존 currentPrice는 `@deprecated` JSDoc + 호환 유지. `trackedItemToSharedProduct`가 첫 추가 시 realPrice/lastRealPriceUpdatedAt 동시 mirror.
+2. **1A — addItem 머지** (`store/useAppStore.ts:addItem` async 변환 + `app/modal/add-item.tsx` await): 첫 추적 + productId 있을 때 `getSharedProduct` 호출 → shared.priceHistory 머지 후 setState. 신규 사용자가 즉시 풍부한 그래프 표시.
+3. **1B — updateItemPrice realPrice mirror** (`store/useAppStore.ts:updateItemPrice`): WebView 결과를 shared_products에 역방향 write (realPrice + lastRealPriceUpdatedAt). needsCheck는 CF 책임이라 미터치.
+4. **작업 3 — syncFromFirestore realPrice 우선** (`store/useAppStore.ts:syncFromFirestore`): Step 3 shared 채택 시 `shared.realPrice ?? shared.currentPrice` (1.0.16 중간 전환 fallback).
+5. **Cloud Functions 트리거** (`functions/src/index.ts:onSharedProductRealPriceChange`): v2 onDocumentUpdated `shared_products/{productId}` (asia-northeast3). realPrice 변경 + > 0 가드 → `collectionGroup('tracked').where(productId)` → target 도달 필터 → user 검증(app/jigumiya, token, notif on) → 24h 가드 → token-share dedup → Expo push → `lastNotifications.targetReached.{pid}` 마킹 + needsCheck:false 클리어. 무한 루프 방지 (`beforeReal===afterReal` early return). 이미 프로덕션 배포 + 실제 트리거 발화 검증 완료 (`9309948201` 1건 처리, skip.noToken=1 — Issue NEW-A 참조). 의존성: `expo-server-sdk ^6.1.0`.
+6. **cron 변경** (`scripts/shared-price-checker/index.ts`):
+   - `REAL_PRICE_FRESH_MS = 1h` / `NEEDS_CHECK_DROPRATE_PCT = 10` 상수 추가
+   - main loop에 `lastRealPriceUpdatedAt` 1h 가드 추가 (skipRecentRealPrice 카운터) → 최근 WebView 갱신 상품 apiPrice 호출 skip
+   - `item.ref.update`에 `apiPrice` mirror + `dropRate ≥ 10%` 시 `needsCheck:true` 박음
+   - `events.targets.push` 2곳(line 451, 856) 주석 처리 + flush 단계 2곳 코멘트 — CF 인계, 코드는 검증 완료 후 정식 폐기
+7. **관리자 모드 UI** (`app/admin.tsx` 신설 + `app/_layout.tsx` Stack + `app/(tabs)/settings.tsx` 진입 + `services/firebase.ts` 헬퍼 3종):
+   - `subscribeIsAdmin(uid, cb)` + `fetchAllSharedProducts()` (createdAt asc) + `adminUpdateRealPrice(productId, realPrice)` (needsCheck:false 명시 클리어)
+   - Platform.OS 기반 홀수/짝수 분배 (Android=홀수 / iOS=짝수)
+   - CoupangScraper sequential WebView 호출 (promise resolver ref 패턴) + 1.5s sleep + 25s 외부 안전망
+   - **이어서 진행**: `resumeIdx` 보존 → 정지/이탈 후 N번부터 재시작, 1회 순회 완료 시 0 리셋, "처음부터 다시 시작" 보조 링크
+   - **wallclock 카운트다운**: setInterval 1초 tick + `nextRunAt - Date.now()` 재계산 + AsyncStorage 영속화(`admin_nextRunAt`) + AppState active 만료 즉시 실행 + 앱 재실행 시 nextRunAt 복원 + autoLoop 자동 ON
+   - 대기 시간 chip 그룹 (10/15/30/60/120분) + 카운트다운 카드 + 최근 15건 결과 리스트
+
+### iOS 상품 추가 무한로딩 fix
+
+- **HTML fetch 폐기** (`app/modal/add-item.tsx:startScrape`): iOS 전용 `fetchWithTimeout` + `setScrapeHtml` 경로 제거. iOS/Android 공통 `setScrapeUrl(targetUrl)` 통일. async 시그니처도 제거.
+- **link.coupang.com 가드 2중**: `startScrape` 진입 시 즉시 `setScrapeFailed(true)` + `CoupangScraper:handleShouldStartLoadWithRequest`에 `host === 'link.coupang.com'` 명시 차단 (Universal Link 흡수 원천 차단).
+- **SCRAPE_JS 내부 폴링** (`components/CoupangScraper.tsx`): 0.5s × 20회(10초) `setInterval` 폴링. `extractOnce()` 헬퍼로 셀렉터 추출 분리, `price > 0 && image` 충족 시 즉시 postMessage + `clearInterval`. 20회 소진 시 마지막 결과 보내고 종료. `window.__coupangPollHandle` 글로벌로 외부 재시도(2/4/6s) 시 이전 polling 자동 정리 → setInterval 누적 방지. 셀렉터는 기존 그대로 유지 (og:title / .total-price strong / og:image 등).
+
+원인: Functions cold/timeout(8s) → client fallback이 link.coupang.com 단축 URL 그대로 사용 → iOS Universal Link 흡수 → 쿠팡 앱 강제 실행 → 복귀 후 WebView 멈춤 → SCRAPED postMessage 없음 → 20-30s 후 실패. 폐기로 원천 차단.
+
+### CF 트리거 검증 결과 (20:37 KST 1건)
+
+- productId `9309948201` ("삼성전자 갤럭시 S26 자급제"): before=0 → after=1,009,000원
+- 도달 후보 total=1, qualified=1 / 발송 대상 sendCount=0, skip.noToken=1
+- 확인: 앱 1B realPrice mirror 작동 ✓ / 트리거 흐름 정상 ✓ / collectionGroup 인덱스 정상 ✓
+- 남은 검증: 실기기(`expoPushToken` 보유) 사용자가 target 도달 시 실제 push 도달 + `발송 완료` 로그
+
+### 다음 단계
+
+- 1.0.16 빌드 (iOS + Android)
+- 베타 검증 → cron 주석 처리된 target_reached 코드 정식 삭제
+- Android 토큰 null 케이스 (Issue NEW-A) 실기기 검증
+
+상세: [docs/023_RealPrice_Architecture.md](./023_RealPrice_Architecture.md), [docs/022_Issues.md](./022_Issues.md)
+
+---
+
 ## 2026-05-10 (밤) — Issue 1 fix: syncFromFirestore에 shared_products 머지 추가
 
 `syncFromFirestore` 머지 정책 3-way 확장 (commit `197d50b`).

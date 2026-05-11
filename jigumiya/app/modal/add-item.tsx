@@ -317,37 +317,26 @@ export default function AddItemModal() {
     startScrape(scrapeTarget);
   };
 
-  /** iOS: HTML fetch (8s timeout) → html prop, Android: URL 직접 로드 */
-  const startScrape = async (targetUrl: string) => {
-    if (Platform.OS === 'ios') {
-      try {
-        console.log('[AddItem] iOS: HTML fetch 시작 →', targetUrl.slice(0, 80));
-        const res = await fetchWithTimeout(
-          targetUrl,
-          {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-              'Accept':
-                'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'ko-KR,ko;q=0.9',
-            },
-            redirect: 'follow',
-          },
-          8000,
-        );
-        if (res.ok) {
-          const html = await res.text();
-          console.log('[AddItem] iOS: HTML fetch 성공, length=', html.length);
-          setScrapeHtml(html);
-          setScrapeUrl(null);
-          return;
-        }
-      } catch (e) {
-        console.warn('[AddItem] iOS: HTML fetch timeout/실패, URL 폴백 →', e);
-      }
+  /**
+   * iOS/Android 공통: vp/vm URL을 WebView uri로 직접 로드.
+   *
+   * iOS HTML fetch 폐기 (1.0.16 무한로딩 fix):
+   *   - 봇 차단(403/429) 시 URL 폴백이 단축 URL 그대로 → Universal Link 흡수
+   *   - html prop 로드 시 window.ReactNativeWebView.postMessage 컨텍스트 불안정 (RN-WebView iOS 알려진 이슈)
+   *   - 내부 setInterval 폴링(SCRAPE_JS 0.5s × 20회)으로 hydration 지연 흡수
+   *
+   * link.coupang.com은 진입 자체 차단 — vp/vm으로 resolve 안 됐다는 신호.
+   * WebView에 단축 URL 넘기면 iOS Universal Link 시스템 가로채기로 쿠팡 앱 강제 실행 → 복귀 시 WebView 멈춤.
+   */
+  const startScrape = (targetUrl: string) => {
+    if (targetUrl.includes('link.coupang.com')) {
+      console.warn('[AddItem] link.coupang.com 차단 — vp URL resolve 실패, 스크래핑 스킵');
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      setScrapeUrl(null);
+      setScrapeHtml(null);
+      setScrapeFailed(true);
+      return;
     }
-    // Android 또는 iOS fetch 실패/타임아웃 시 URL 직접 로드
     setScrapeHtml(null);
     setScrapeUrl(targetUrl);
   };
@@ -435,7 +424,9 @@ export default function AddItemModal() {
       parsedUrlRef.current,
     );
 
-    addItem({
+    // 1A (docs/023): addItem이 shared_products 과거 이력을 머지해서 setState하므로 await 필수.
+    // router.back() 전에 머지 완료되어 홈 화면이 즉시 풍부한 priceHistory를 표시.
+    await addItem({
       id: Date.now().toString(),
       url: affiliateUrl,
       resolvedUrl,

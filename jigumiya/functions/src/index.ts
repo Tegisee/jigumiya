@@ -1,7 +1,16 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
 import { createHmac } from 'crypto';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { Expo, ExpoPushMessage } from 'expo-server-sdk';
+
+// Admin SDK 1회 초기화 — onCall 핸들러는 admin 미사용이지만 트리거가 사용.
+if (getApps().length === 0) initializeApp();
+const adminDb = getFirestore();
+const expoClient = new Expo();
 
 const COUPANG_ACCESS_KEY = defineSecret('COUPANG_ACCESS_KEY');
 const COUPANG_SECRET_KEY = defineSecret('COUPANG_SECRET_KEY');
@@ -232,6 +241,273 @@ async function callDeeplinkApi(
   });
   return null;
 }
+
+// ──────────────────────────────────────────────────────────
+// shared_products/{productId} realPrice 변경 트리거 (docs/023 RealPrice 아키텍처)
+//
+// 흐름:
+//   1. before.realPrice !== after.realPrice && after.realPrice > 0 일 때만 진행
+//   2. collectionGroup('tracked').where('productId', '==', X) → 추적 uid + targetPrice 조회
+//   3. afterReal <= targetPrice && (beforeReal > targetPrice || beforeReal == 0) → 도달 후보
+//   4. user 검증 — app === 'jigumiya' + expoPushToken + notificationEnabled !== false
+//   5. lastNotifications.targetReached[productId] 24h 가드 통과
+//   6. token-share dedup (Set<token>) — 같은 단말 중복 발송 차단
+//   7. Expo push 발송 + 성공 토큰의 uid에 lastNotifications 마킹
+//   8. needsCheck 클리어 (트리거 자기 자신은 realPrice 미변경이라 무한 루프 X)
+//
+// 폐기 가능: cron의 `target_reached` 발송 로직은 본 트리거가 실시간 대체.
+// ──────────────────────────────────────────────────────────
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+const TARGET_REACHED_MESSAGES = [
+  { title: '🎯 목표가 도달!', body: '지금이 바로 그 순간이에요' },
+  { title: '기다리던 가격이 됐어요!', body: '지금 확인해보세요 ✨' },
+  { title: '드디어!', body: '관심 상품이 목표가에 도달했어요 🎉' },
+] as const;
+
+function pickRandom<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+async function clearNeedsCheck(
+  productId: string,
+  after: FirebaseFirestore.DocumentData,
+): Promise<void> {
+  if (after.needsCheck !== true) return;
+  try {
+    await adminDb
+      .collection('shared_products')
+      .doc(productId)
+      .update({ needsCheck: false });
+    logger.info('[realPrice] needsCheck 클리어', { productId });
+  } catch (e) {
+    logger.warn('[realPrice] needsCheck 클리어 실패', {
+      productId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+export const onSharedProductRealPriceChange = onDocumentUpdated(
+  {
+    document: 'shared_products/{productId}',
+    region: 'asia-northeast3',
+  },
+  async (event) => {
+    const productId = event.params.productId;
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) {
+      logger.warn('[realPrice] before/after 누락', { productId });
+      return;
+    }
+
+    const beforeReal = Number(before.realPrice ?? 0);
+    const afterReal = Number(after.realPrice ?? 0);
+
+    // realPrice 미변경 또는 무효값이면 즉시 종료 — needsCheck 클리어 자체 트리거도 여기서 멈춤.
+    if (beforeReal === afterReal || afterReal <= 0) {
+      return;
+    }
+
+    const productName = (after.productName as string | undefined) ?? '';
+    const previousPrice = beforeReal > 0 ? beforeReal : afterReal;
+
+    logger.info('[realPrice] 변경 감지', {
+      productId,
+      productName: productName.slice(0, 30),
+      before: beforeReal,
+      after: afterReal,
+    });
+
+    // 1. productId 추적자 조회 — collectionGroup('tracked').where(productId)
+    let trackedSnap: FirebaseFirestore.QuerySnapshot;
+    try {
+      trackedSnap = await adminDb
+        .collectionGroup('tracked')
+        .where('productId', '==', productId)
+        .get();
+    } catch (e) {
+      logger.error('[realPrice] tracked 조회 실패', {
+        productId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      await clearNeedsCheck(productId, after);
+      return;
+    }
+
+    // 2. 목표가 도달 필터 — afterReal <= target && (beforeReal == 0 또는 beforeReal > target)
+    //    "이미 도달 상태"였던 항목은 신규 도달이 아니므로 제외 (재발송 방지).
+    interface Candidate {
+      uid: string;
+      targetPrice: number;
+    }
+    const candidates: Candidate[] = [];
+    for (const doc of trackedSnap.docs) {
+      const uid = doc.ref.parent.parent?.id;
+      if (!uid) continue;
+      const data = doc.data();
+      const targetPrice = Number(data.targetPrice ?? 0);
+      if (targetPrice <= 0) continue;
+      if (afterReal > targetPrice) continue;
+      if (beforeReal > 0 && beforeReal <= targetPrice) continue;
+      candidates.push({ uid, targetPrice });
+    }
+
+    logger.info('[realPrice] 도달 후보', {
+      productId,
+      total: trackedSnap.size,
+      qualified: candidates.length,
+    });
+
+    if (candidates.length === 0) {
+      await clearNeedsCheck(productId, after);
+      return;
+    }
+
+    // 3. user 검증 + 24h 가드 + token-share dedup
+    interface Sendable {
+      uid: string;
+      token: string;
+      targetPrice: number;
+    }
+    const now = Date.now();
+    const sendables: Sendable[] = [];
+    const sentTokens = new Set<string>();
+    const skip = {
+      noUser: 0,
+      otherApp: 0,
+      noToken: 0,
+      notifOff: 0,
+      guard24h: 0,
+      sameToken: 0,
+    };
+
+    for (const c of candidates) {
+      try {
+        const userSnap = await adminDb.collection('users').doc(c.uid).get();
+        if (!userSnap.exists) {
+          skip.noUser++;
+          continue;
+        }
+        const user = userSnap.data() ?? {};
+        if (user.app !== 'jigumiya') {
+          skip.otherApp++;
+          continue;
+        }
+        const token = user.expoPushToken as string | undefined;
+        if (!token || !Expo.isExpoPushToken(token)) {
+          skip.noToken++;
+          continue;
+        }
+        if (user.notificationEnabled === false) {
+          skip.notifOff++;
+          continue;
+        }
+        const lastNotif = user.lastNotifications ?? {};
+        const last = Number(lastNotif.targetReached?.[productId] ?? 0);
+        if (last > 0 && now - last < ONE_DAY_MS) {
+          skip.guard24h++;
+          continue;
+        }
+        if (sentTokens.has(token)) {
+          skip.sameToken++;
+          continue;
+        }
+        sentTokens.add(token);
+        sendables.push({ uid: c.uid, token, targetPrice: c.targetPrice });
+      } catch (e) {
+        logger.warn('[realPrice] user 조회 실패', {
+          uid: c.uid,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    logger.info('[realPrice] 발송 대상', {
+      productId,
+      sendCount: sendables.length,
+      skip,
+    });
+
+    // 4. Expo push 발송 + lastNotifications 마킹
+    if (sendables.length > 0) {
+      const messages: ExpoPushMessage[] = sendables.map((s) => {
+        const m = pickRandom(TARGET_REACHED_MESSAGES);
+        return {
+          to: s.token,
+          sound: 'default',
+          title: m.title,
+          body: `${productName.slice(0, 20)} ${previousPrice.toLocaleString()}원 → ${afterReal.toLocaleString()}원 🎯`,
+          data: {
+            screen: 'detail',
+            itemId: productId,
+            alertType: 'target_reached',
+          },
+        };
+      });
+
+      const successfulTokens = new Set<string>();
+      const chunks = expoClient.chunkPushNotifications(messages);
+      for (const chunk of chunks) {
+        try {
+          const tickets = await expoClient.sendPushNotificationsAsync(chunk);
+          tickets.forEach((ticket, i) => {
+            const m = chunk[i];
+            const tok =
+              typeof m?.to === 'string'
+                ? m.to
+                : Array.isArray(m?.to)
+                  ? m.to[0]
+                  : '';
+            if (ticket.status === 'ok' && tok) successfulTokens.add(tok);
+            else if (ticket.status === 'error') {
+              logger.warn('[realPrice] push ticket error', {
+                token: tok?.slice(0, 30),
+                error: ticket.details?.error,
+                message: ticket.message,
+              });
+            }
+          });
+        } catch (e) {
+          logger.error('[realPrice] push batch 실패', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+
+      // 성공 토큰의 uid만 24h 가드 박기
+      const winners = sendables.filter((s) => successfulTokens.has(s.token));
+      await Promise.all(
+        winners.map((s) =>
+          adminDb
+            .collection('users')
+            .doc(s.uid)
+            .update({
+              [`lastNotifications.targetReached.${productId}`]: now,
+            })
+            .catch((e) =>
+              logger.warn('[realPrice] lastNotif 마킹 실패', {
+                uid: s.uid,
+                error: e instanceof Error ? e.message : String(e),
+              }),
+            ),
+        ),
+      );
+
+      logger.info('[realPrice] 발송 완료', {
+        productId,
+        attempted: sendables.length,
+        successful: successfulTokens.size,
+        marked: winners.length,
+      });
+    }
+
+    // 5. needsCheck 클리어
+    await clearNeedsCheck(productId, after);
+  },
+);
 
 export const resolveAndGenerateAffiliateUrl = onCall(
   {

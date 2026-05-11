@@ -22,42 +22,41 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ---
 
-## 현재 상태 (2026-05-10 기준)
+## 현재 상태 (2026-05-11 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시 (iOS 심사 / Android 프로덕션 승급 신청)
-- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab`
-- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"` (2026-05-10 갱신, `forceUpdate:false` 디스미스 가능)
-- **활성 cron**: shared-price-check (`*/10` Block zone 가드) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
-- **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` (Cloud Run minScale=1, 콜드 제거)
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 코드 작업 전체 완료 — 빌드 + 베타 검증 대기.**
+- **1.0.16 작업 (2026-05-11 완료)**: RealPrice 아키텍처(docs/023) 8개 항목 + iOS 무한로딩 fix + 관리자 모드 UI 신설. 상세 [docs/changelog.md](./docs/changelog.md)
+- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.15-50.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.15-50.aab` (1.0.16 빌드 예정)
+- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"` (`forceUpdate:false` 디스미스 가능). 1.0.16 출시 후 갱신 예정.
+- **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
+- **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + **`onSharedProductRealPriceChange`** v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- 🚨 **Issue 1** — 가격추적 그래프 자동 업데이트 안 됨 (앱 측, 1.0.16 빌드 필요): cron `shared_products` 갱신 vs 앱 `users/{uid}/items` read 컬렉션 불일치
-- 🚨 **Issue 2** — 가격변동 알림 0건 (cron 측, 서버만 수정): token-dedup dup-skip 한계 + unknown 40명 strict 필터 제외. 5/8 14:17 ~ 5/9 25 사이클 거의 전부 `payloads 0건`
-- ⚠️ **Issue 3** — 데이터/캐시 삭제 후 첫 상품 추가 실패 (재현 확인 필요)
-- 📦 **Issue 4** — 1.0.15 출시 후 검증 대기 항목들 (Fix A/B/C, swap, 그래프, cron 등)
-- 📦 **Issue 5** — 1.0.16 빌드 정리 항목 (Issue 1 반영, 공유 링크 양 스토어, expo-image 잔여, proguard)
+- 🆕 **Issue NEW-A** — Android Push Token null 케이스 (CF skip.noToken=1 1건 관측). 1.0.16 출시 후 실기기 검증
+- ⚠️ **Issue 3** — 데이터/캐시 삭제 후 첫 상품 추가 실패. 1.0.16 iOS fix로 자연 해소 가능성 큼 — 재검증
+- 📦 **Issue 4** — 1.0.16 출시 후 검증 대기 항목 (트리거 / cron / 관리자 모드 / iOS scraper / 그래프 머지)
+- 📦 **Issue 5** — 1.0.17 빌드 정리 항목 (공유 링크 양 스토어, proguard, expo-image 잔여, cron target_reached 정식 삭제, 크라우드소싱, 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
+
+> Issue 1 / Issue 2 (2-A/2-C)는 1.0.16 RealPrice 아키텍처로 출처 불일치 자체가 해소되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 
 ## 다음 할 일
 
-**🏗️ 우선순위 1 (1.0.16 — RealPrice 아키텍처)**: 상세 [docs/023_RealPrice_Architecture.md](./docs/023_RealPrice_Architecture.md)
-- shared_products 필드 분리 (apiPrice / realPrice / lastRealPriceUpdatedAt / needsCheck)
-- 앱 1A: addItem 시 shared_products 과거 이력 머지
-- 앱 1B: updateItemPrice 시 shared_products.realPrice 역방향 write
-- 앱 3: mount 시 syncFromFirestore 1회 호출 추가
-- Cloud Functions: realPrice onUpdate 트리거 → 목표가 도달 알림
-- cron: apiPrice 갱신 + needsCheck 플래그 (알림 발송은 폐기, 골드박스 유도 알림으로 전환)
-- 관리자 모드 UI: 안드로이드/아이패드 2대 홀수/짝수 분배 자동 순회
-- ✅ 기 완료: Issue 1 syncFromFirestore 머지 (commit `197d50b`) — 1.0.16 빌드 시 포함
+**🔨 우선순위 1 — 1.0.16 빌드 + 베타 검증**:
+- 버전 bump (`app.config.js` + `android/app/build.gradle`) 1.0.16 / bn51 / vc51
+- iOS: `eas build --local --profile production --platform ios` → Transporter 수동 업로드
+- Android: `eas build --local --profile production --platform android` → Play Console 내부 테스트
+- 베타 검증 (Issue 4 항목): RealPrice 트리거 발화 + cron skipRecentRealPrice / needsCheck 효과 + 관리자 모드 / iOS 무한로딩 해소 / 그래프 머지
 
-**📦 우선순위 1.5 (1.0.16 동반)**:
-- Issue 3 재현 검증 후 fix
-- 공유 시 양 스토어 링크 / proguard / expo-image 잔여 점검
+**📋 검증 후 후속**:
+- cron `events.targets.push` / flush target 분기 **정식 삭제** (주석 처리 → 코드 제거)
+- Android 토큰 null 케이스(Issue NEW-A) 진단 — 분기별 console.warn 보강 또는 재시도 로직
+- Issue 3 재현 여부 확인
 
-**🔍 검증**: Issue 4 항목들 (Fix A/B/C 효과, Issue 2-A winner 로그, 그래프, 골드박스/이벤트/쿠팡 PL cron 자동 실행)
+**🔄 별도 트랙**: 아이고 이식 (Issue 6)
 
 ---
 
@@ -135,7 +134,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - §11 자동화: yml `*/10 * * * *` 고정 + 코드가 N값 read → §3 매트릭스 기반 간격 결정. 피크(07-22 KST) base, 비피크 ×2. `meta/stats.lastRunAt` start-to-start 간격 유지
 - 알림 전용 cron (`notify-only.yml`): `'30 22 * * *'`(07:30 KST) + `'0 11 * * *'`(20:00 KST). `NOTIFY_ONLY=true` 분기로 가격 스캔 스킵
 - Block zone 자동 대기: 01:00 ≤ KST < 04:30 → 04:30까지 sleep
-- 활성 알림 5종: morning_greeting / price_drop_summary / target_reached / price_up_summary / evening_no_change (legacy: broadcast_drop10/20 통계만)
+- 활성 알림 4종 (1.0.16): price_drop_summary / price_up_summary (cron 측). **`target_reached`는 Cloud Functions `onSharedProductRealPriceChange` 트리거가 인계** — cron 측 코드는 주석 처리 (검증 완료 후 정식 삭제). (legacy: morning/evening/broadcast_drop10/20 폐기 또는 통계만)
 - 24h productId 가드: `users/{uid}.lastNotifications` (priceDrop[pid] / priceUp[pid] / targetReached[pid])
 - successfulTokens 기반 dotted-path update (발송 실패 시 가드 미박힘)
 - 앱 필터링: `users/{uid}.app === 'jigumiya'` strict
@@ -160,9 +159,10 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 비활성: legacy `price-check.yml.disabled` (Phase 3-C에서 정식 폐기 예정)
 
 ### 클라이언트 CoupangScraper (WebView DOM)
-- iOS Universal Link 이탈 fix: fetch HTML → WebView에 html 문자열 로드
+- **1.0.16 무한로딩 fix**: iOS HTML fetch 폐기 → iOS/Android 공통 vp URL 직접 로드 통일. link.coupang.com는 startScrape 진입 시 + handleShouldStartLoadWithRequest 호스트 차단 2중 가드 (Universal Link 흡수 차단)
+- **1.0.16 SCRAPE_JS 내부 폴링**: 0.5s × 20회(10초) setInterval, `price > 0 && image` 충족 시 즉시 postMessage. window.__coupangPollHandle 글로벌로 외부 재시도 시 중복 정리
 - iOS 쿠팡 튕김 개선: onShouldStartLoadWithRequest 딥링크 차단 + allowsBackForwardNavigationGestures={false}
-- 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 즉시 onError() 호출 (1.0.14)
+- 외부 타임아웃 20초, 단계적 재시도(2초/4초/6초), 실패 시 즉시 onError() 호출 (1.0.14)
 
 ### 앱 구조 (1.0.12+ 4탭)
 - 탭: 홈(추적 10개) / 자주사는(무제한) / 가격변동 / 설정

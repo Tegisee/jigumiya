@@ -72,13 +72,24 @@ const BLOCK_DEEPLINK_JS = `
 true;
 `;
 
-// DOM에서 상품 정보 추출하는 JS — 각 단계별 디버그 로그 포함
+// DOM에서 상품 정보 추출 + 내부 setInterval 폴링 (1.0.16 무한로딩 fix):
+//   - 0.5s × 20회 = 10s 동안 가격/이미지 DOM 등장 대기 (쿠팡 SPA hydration 지연 흡수)
+//   - 가격+이미지 둘 다 발견 시 즉시 SCRAPED postMessage + clearInterval
+//   - 20회 소진 시 마지막 결과 postMessage (price=0이어도 외부가 재시도/실패 판단)
+//   - window.__coupangPollHandle로 외부 재시도(2/4/6s) 시 이전 polling 정리 → 누적 방지
+// 외부 재시도 구조는 그대로 유지 — 내부 폴링이 즉시 답 못 주는 케이스의 안전망.
 const SCRAPE_JS = `
 (function() {
-  try {
-    var log = [];
+  if (window.__coupangPollHandle) {
+    clearInterval(window.__coupangPollHandle);
+    window.__coupangPollHandle = null;
+  }
 
-    // ── Title 추출 ──
+  var attempts = 0;
+  var MAX_ATTEMPTS = 20;
+  var INTERVAL_MS = 500;
+
+  function extractOnce() {
     var title = '';
     var titleSource = 'none';
     var ogTitle = document.querySelector('meta[property="og:title"]');
@@ -91,9 +102,7 @@ const SCRAPE_JS = `
       var metaTitle = document.querySelector('title');
       if (metaTitle) { title = metaTitle.textContent.trim(); titleSource = 'title-tag'; }
     }
-    log.push('T:' + titleSource + (title ? '=' + title.slice(0,30) : '=EMPTY'));
 
-    // ── Price 추출 ──
     var price = 0;
     var priceSource = 'none';
     var totalPrice = document.querySelector('.total-price strong');
@@ -127,9 +136,7 @@ const SCRAPE_JS = `
         } catch(e) {}
       }
     }
-    log.push('P:' + priceSource + '=' + price);
 
-    // ── Image 추출 ──
     var image = '';
     var imgSource = 'none';
     var ogImage = document.querySelector('meta[property="og:image"]');
@@ -139,32 +146,67 @@ const SCRAPE_JS = `
       if (mainImg) { image = mainImg.getAttribute('src') || ''; imgSource = 'dom-img'; }
     }
     if (image && image.startsWith('//')) image = 'https:' + image;
-    log.push('I:' + imgSource + (image ? '=OK' : '=EMPTY'));
 
     title = title.replace(/\\s*[|\\-].*$/, '').trim();
 
-    // ── 페이지 상태 디버그 ──
-    var bodyLen = document.body ? document.body.innerHTML.length : 0;
-    var metaCount = document.querySelectorAll('meta').length;
-    var readyState = document.readyState;
-    log.push('body=' + bodyLen + ' meta=' + metaCount + ' ready=' + readyState);
-    log.push('url=' + window.location.href.slice(0,100));
-
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'SCRAPED',
-      url: window.location.href,
+    return {
       title: title,
       price: price,
       image: image,
-      debug: log.join(' | ')
-    }));
-  } catch(e) {
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'ERROR',
-      message: e.message,
-      stack: (e.stack || '').slice(0, 200)
-    }));
+      titleSource: titleSource,
+      priceSource: priceSource,
+      imgSource: imgSource,
+    };
   }
+
+  function stopPolling() {
+    if (window.__coupangPollHandle) {
+      clearInterval(window.__coupangPollHandle);
+      window.__coupangPollHandle = null;
+    }
+  }
+
+  function tick() {
+    attempts++;
+    try {
+      var r = extractOnce();
+      var hasFull = r.price > 0 && r.image;
+      var lastTry = attempts >= MAX_ATTEMPTS;
+
+      if (hasFull || lastTry) {
+        stopPolling();
+        var bodyLen = document.body ? document.body.innerHTML.length : 0;
+        var metaCount = document.querySelectorAll('meta').length;
+        var readyState = document.readyState;
+        var debug =
+          'T:' + r.titleSource + (r.title ? '=' + r.title.slice(0,30) : '=EMPTY') + ' | ' +
+          'P:' + r.priceSource + '=' + r.price + ' | ' +
+          'I:' + r.imgSource + (r.image ? '=OK' : '=EMPTY') + ' | ' +
+          'attempts=' + attempts + '/' + MAX_ATTEMPTS + ' | ' +
+          'body=' + bodyLen + ' meta=' + metaCount + ' ready=' + readyState + ' | ' +
+          'url=' + window.location.href.slice(0,100);
+
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'SCRAPED',
+          url: window.location.href,
+          title: r.title,
+          price: r.price,
+          image: r.image,
+          debug: debug,
+        }));
+      }
+    } catch(e) {
+      stopPolling();
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'ERROR',
+        message: e.message,
+        stack: (e.stack || '').slice(0, 200),
+      }));
+    }
+  }
+
+  window.__coupangPollHandle = setInterval(tick, INTERVAL_MS);
+  tick(); // 즉시 1회 — hydration 이미 끝났을 가능성 대비
 })();
 true;
 `;
@@ -348,8 +390,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     }
     try {
       const host = new URL(reqUrl).hostname;
-      // 앱스토어/앱링크 차단
+      // 앱스토어/앱링크/Universal Link 차단
+      // link.coupang.com: iOS Universal Link로 쿠팡 앱 강제 실행 → 무한로딩 (1.0.16 fix)
+      // applink.coupang.com: 동일 (alternate)
       if (
+        host === 'link.coupang.com' ||
         host === 'applink.coupang.com' ||
         host === 'play.google.com' ||
         host === 'apps.apple.com' ||
