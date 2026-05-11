@@ -345,7 +345,8 @@ export default function DetailScreen() {
                 initialSpacing={10}
                 endSpacing={10}
                 spacing={45}
-                adjustToWidth
+                scrollToEnd
+                scrollAnimation={false}
                 yAxisOffset={yAxisOffset}
                 maxValue={maxValue}
                 startFillColor={chartColor}

@@ -6,6 +6,31 @@
 
 ---
 
+## 2026-05-11 (밤) — Android google-services Gradle plugin 누락 fix + 그래프 스크롤 + syncFromFirestore realPrice 분리 머지
+
+### Android FCM 토큰 발급 실패 근본 원인 fix (1.0.16 bn52/vc52)
+- 진단: 1.0.15/1.0.16-51 aab `base/resources.pb`에 `google_app_id` 등 string resources 0개. `com.google.gms.google-services` Gradle plugin이 빌드 설정에 완전 누락. iOS는 정상(Gradle 무관).
+- 증상: Android user 25명 중 21명(84%) `expoPushToken` 미보유. `registerForPushNotifications`가 native Firebase 미초기화로 `getExpoPushTokenAsync` 예외 → catch 흡수 → null 반환 → `savePushToken` 미호출.
+- fix:
+  - `android/build.gradle` top-level dependencies: `classpath('com.google.gms:google-services:4.4.2')` 추가
+  - `android/app/build.gradle` 끝: `apply plugin: "com.google.gms.google-services"` 추가
+  - `android/app/google-services.json`: root에서 복사 (md5 `5ccc0e47…`)
+  - 버전 bump 1.0.16 / bn52 / vc52 (bn51 aab 폐기)
+- `.gitignore`에서 `/android` → `/android/**` + negation으로 변경. `build.gradle` 2개 파일 git 추적 시작 (218 insertions, commit `7fb166b`). google-services.json은 비밀이라 계속 제외 — EAS Secret(FILE_BASE64)으로 주입.
+- 빌드 검증: `unzip -p ~/jigumiya/builds/android/jigumiya-1.0.16-52.aab base/resources.pb | strings | grep 250441543259` 가 결과를 출력하면 plugin 정상 적용 (이전 빌드는 0건).
+
+### 그래프 방향 — 오른쪽=오늘 고정, 왼쪽 스크롤
+- `app/detail/[id].tsx:348` LineChart props: `adjustToWidth` 제거 → `scrollToEnd` + `scrollAnimation={false}` 추가.
+- `adjustToWidth`는 데이터 전체를 viewport(300px)에 압축 → 스크롤 X. 제거 시 spacing(45px)×N points로 가로로 늘어남 → ScrollView 발생. `scrollToEnd`로 초기 위치를 마지막 점(=오늘)이 오른쪽 끝에 고정.
+
+### syncFromFirestore — currentPrice 분리 머지 (자동 새로고침 일부만 동작 fix)
+- `store/useAppStore.ts:229-246` Step 3 분기 분리:
+  - **priceHistory**: 기존 length 비교 정책 유지 (`shared.length > local.length`이면 채택, 기존 사용자 local 보호)
+  - **currentPrice**: `shared.realPrice ?? shared.currentPrice` 우선 채택 (길이 무관, `>0 && != 현재값` 조건만)
+- 증상: 기존 사용자가 앱 오픈(AppState active → syncFromFirestore) 시 `shared.realPrice`가 갱신됐어도 `priceHistory` 길이가 그대로면 `currentPrice` 미반영. cron이 `lastRealPriceUpdatedAt` 1h 가드로 priceHistory 추가 없이 apiPrice만 mirror하는 케이스 + 다른 사용자 WebView가 realPrice만 갱신한 케이스에 해당.
+
+---
+
 ## 2026-05-11 (저녁) — 관리자 모드 fetchAllSharedProducts orderBy 버그 fix + createdAt 백필
 
 **증상**: 1.0.16 빌드 직전 admin.tsx 실측 — Android 기기에서 "담당 1개 / 전체 3개" 표시. 실제 `shared_products` 컬렉션은 81개.

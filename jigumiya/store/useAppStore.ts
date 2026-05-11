@@ -227,17 +227,25 @@ export const useAppStore = create<AppState>()(
               : r;
 
           // Step 3: shared 우선 (cron 누적 + 앱 WebView mirror 출처)
+          // 2026-05-11 split: priceHistory와 currentPrice를 분리 머지.
+          //   - priceHistory: length 비교 정책 유지 (안전 — 기존 사용자 local 보존)
+          //   - currentPrice: shared.realPrice 우선 채택 (길이 무관) — realPrice 갱신만 있고
+          //     priceHistory 길이는 그대로인 케이스(cron 1h 가드 skip 등)에 currentPrice 누락
+          //     되어 "자동 새로고침 일부만 동작" 증상 발생하던 버그 수정.
           const shared = r.productId ? sharedById.get(r.productId) : undefined;
-          const sharedHistLen = shared?.priceHistory?.length ?? 0;
-          if (shared && sharedHistLen > m.priceHistory.length) {
+          if (shared) {
+            const sharedHistLen = shared.priceHistory?.length ?? 0;
+            if (sharedHistLen > m.priceHistory.length) {
+              m = { ...m, priceHistory: shared.priceHistory };
+            }
             const sharedPrice = shared.realPrice ?? shared.currentPrice;
-            m = {
-              ...m,
-              priceHistory: shared.priceHistory,
-              ...(typeof sharedPrice === 'number' && sharedPrice > 0
-                ? { currentPrice: sharedPrice }
-                : {}),
-            };
+            if (
+              typeof sharedPrice === 'number' &&
+              sharedPrice > 0 &&
+              sharedPrice !== m.currentPrice
+            ) {
+              m = { ...m, currentPrice: sharedPrice };
+            }
           }
           return m;
         });
