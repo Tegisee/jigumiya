@@ -17,7 +17,9 @@ interface Props {
   html?: string | null;     // HTML 문자열 직접 로드 (Universal Link 우회)
   baseUrl?: string;          // html 사용 시 base URL
   onResult: (data: ScrapedProduct) => void;
-  onError: () => void;
+  // reason='challenge': Akamai BM 챌린지 30s 재시도 후에도 실패. 호출처가 사용자에게 명시 안내.
+  // reason='unknown' / undefined: 일반 실패 (셀렉터 미스 / JS 에러 / timeout).
+  onError: (reason?: 'challenge' | 'unknown') => void;
 }
 
 // 플랫폼별 UserAgent
@@ -166,24 +168,51 @@ const SCRAPE_JS = `
     }
   }
 
+  // Akamai Bot Manager 챌린지 페이지 감지 (2026-05-12 신설).
+  //   - 쿠팡이 봇 디텍션 1차 응답으로 sec-if-cpt-container/behavioral-content 페이지 발사
+  //   - WebView가 cookie 챌린지 통과하면 진짜 페이지로 reload되지만, IP reputation 안 좋으면
+  //     reload 후에도 챌린지 → 빈 DOM에서 셀렉터 폴링 헛수고 → onError. 명시 안내로 전환.
+  function detectChallenge() {
+    if (document.querySelector('#sec-if-cpt-container, .behavioral-content')) return true;
+    var bodyTxt = document.body ? document.body.innerHTML : '';
+    return /Powered and protected by Akamai|sec-if-cpt-container|scf-akamai/i.test(bodyTxt);
+  }
+
   function tick() {
     attempts++;
     try {
+      // 챌린지 검사 우선 — 빈 챌린지 페이지에서 셀렉터 시도해도 모두 MISS만 나옴
+      if (detectChallenge()) {
+        stopPolling();
+        var challengePreview = (document.body ? document.body.innerHTML : '').slice(0, 500);
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'CHALLENGE',
+          url: window.location.href,
+          attempts: attempts,
+          bodyPreview: challengePreview,
+        }));
+        return;
+      }
+
       var r = extractOnce();
       var hasFull = r.price > 0 && r.image;
       var lastTry = attempts >= MAX_ATTEMPTS;
 
       if (hasFull || lastTry) {
         stopPolling();
-        var bodyLen = document.body ? document.body.innerHTML.length : 0;
+        var bodyHtml = document.body ? document.body.innerHTML : '';
+        var bodyLen = bodyHtml.length;
         var metaCount = document.querySelectorAll('meta').length;
         var readyState = document.readyState;
+        // akamai 키워드 매칭 — 챌린지가 detect 빠져나와도 debug에서 식별 가능
+        var akamai = /sec-if-cpt-container|behavioral-content|scf-akamai/i.test(bodyHtml);
         var debug =
           'T:' + r.titleSource + (r.title ? '=' + r.title.slice(0,30) : '=EMPTY') + ' | ' +
           'P:' + r.priceSource + '=' + r.price + ' | ' +
           'I:' + r.imgSource + (r.image ? '=OK' : '=EMPTY') + ' | ' +
           'attempts=' + attempts + '/' + MAX_ATTEMPTS + ' | ' +
           'body=' + bodyLen + ' meta=' + metaCount + ' ready=' + readyState + ' | ' +
+          'akamai=' + akamai + ' | ' +
           'url=' + window.location.href.slice(0,100);
 
         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -193,6 +222,8 @@ const SCRAPE_JS = `
           price: r.price,
           image: r.image,
           debug: debug,
+          // 가격 못 찾고 마지막 시도일 때만 bodyPreview 노출 — 사후 진단용 (셀렉터 미스매치 vs 챌린지 우회 후 빈 페이지)
+          bodyPreview: (lastTry && r.price === 0) ? bodyHtml.slice(0, 500) : null,
         }));
       }
     } catch(e) {
@@ -223,6 +254,8 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   // 단계적 재시도: 2초, 4초, 6초 (sourceKey reset 블록에서 참조하므로 위로 이동)
   const retryDelays = [2000, 4000, 6000];
   const retryIndexRef = useRef(0);
+  // Akamai BM 챌린지 재시도 카운트 (1회만 시도, 30s 대기)
+  const challengeRetryRef = useRef(0);
 
   // iOS/Android 공통: URL 직접 로드
   const activeHtml = html || null;
@@ -236,6 +269,7 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     doneRef.current = false;
     injectedRef.current = false;
     retryIndexRef.current = 0;
+    challengeRetryRef.current = 0;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     console.log('[Scraper] step2: WebView 시작! sourceKey=', typeof sourceKey === 'string' ? sourceKey.slice(0, 80) : sourceKey);
     // 20초 타임아웃
@@ -257,7 +291,39 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
         console.log(`[Scraper] step5: price=${data.price} image=${data.image ? 'OK' : 'EMPTY'} title=${(data.title || '').slice(0, 30)} type=${data.type}`);
         if (data.debug) console.log('[Scraper] 디버그:', data.debug);
 
-        if (data.type === 'SCRAPED' && data.price > 0 && data.image) {
+        if (data.type === 'CHALLENGE') {
+          // Akamai BM 챌린지 페이지 도착 — cookie 챌린지 통과 시간 확보를 위해 30s 후 1회 재인젝션.
+          // reload가 일어났다면 onLoadEnd에서 자동 인젝션, reload 안 일어났다면 30s 후 명시 재시도.
+          console.warn('[Scraper] Akamai 챌린지 감지:', {
+            retry: challengeRetryRef.current,
+            attempts: data.attempts,
+            bodyPreview: (data.bodyPreview ?? '').slice(0, 200),
+          });
+          if (challengeRetryRef.current < 1) {
+            challengeRetryRef.current++;
+            injectedRef.current = false;
+            // 외부 timeout 갱신 — 30s 대기 + 페이지 hydration 여유까지 합산 60s
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            timeoutRef.current = setTimeout(() => {
+              if (!doneRef.current) {
+                console.warn('[Scraper] 챌린지 60s timeout — onError(challenge)');
+                doneRef.current = true;
+                onError('challenge');
+              }
+            }, 60000);
+            setTimeout(() => {
+              if (!doneRef.current && webViewRef.current) {
+                console.log('[Scraper] 챌린지 30s 후 재인젝션');
+                webViewRef.current.injectJavaScript(SCRAPE_JS);
+              }
+            }, 30000);
+          } else {
+            console.warn('[Scraper] 챌린지 재시도 소진 → onError(challenge)');
+            doneRef.current = true;
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            onError('challenge');
+          }
+        } else if (data.type === 'SCRAPED' && data.price > 0 && data.image) {
           // 가격 + 이미지 모두 있어야 성공
           console.log('[Scraper] 성공 — 가격+이미지 완료');
           doneRef.current = true;

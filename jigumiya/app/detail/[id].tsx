@@ -74,9 +74,16 @@ export default function DetailScreen() {
     setScrapeUrl(null);
   }, [item, updateItemPrice]);
 
-  const handleScrapeError = useCallback(() => {
+  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    Alert.alert('실패', '가격 정보를 가져올 수 없습니다');
+    if (reason === 'challenge') {
+      Alert.alert(
+        '쿠팡 봇 차단',
+        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
+      );
+    } else {
+      Alert.alert('실패', '가격 정보를 가져올 수 없습니다');
+    }
     setRefreshing(false);
     setScrapeUrl(null);
   }, []);

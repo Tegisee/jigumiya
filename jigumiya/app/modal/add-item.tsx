@@ -352,10 +352,20 @@ export default function AddItemModal() {
 
   const retryCountRef = useRef(0);
 
-  const handleScrapeError = useCallback(() => {
+  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setScrapeUrl(null);
     setScrapeHtml(null);
+
+    if (reason === 'challenge') {
+      // 챌린지면 자동 재시도 안 함 — CoupangScraper 내부에서 이미 30s 재시도 거친 후 호출됨
+      Alert.alert(
+        '쿠팡 봇 차단',
+        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
+      );
+      setScrapeFailed(true);
+      return;
+    }
 
     // 첫 실패 시 자동 재시도 1회 (WebView 콜드 스타트 대응)
     if (retryCountRef.current === 0 && resolvedUrlRef.current) {

@@ -148,10 +148,18 @@ export default function AdminScreen() {
     r?.({ ok: data.price > 0, price: data.price });
   }, []);
 
-  const handleScrapeError = useCallback(() => {
+  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
     const r = resolverRef.current;
     resolverRef.current = null;
     setScrapeUrl(null);
+    if (reason === 'challenge') {
+      // 챌린지면 순회 자체 중단 — 다음 상품도 동일하게 차단되므로 헛수고
+      stopRef.current = true;
+      Alert.alert(
+        '쿠팡 봇 차단',
+        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
+      );
+    }
     r?.({ ok: false });
   }, []);
 

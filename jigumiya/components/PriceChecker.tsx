@@ -215,7 +215,7 @@ export default function PriceChecker({ active }: { active: boolean }) {
     [updateItemPrice, notificationEnabled, processNext],
   );
 
-  const handleError = useCallback(() => {
+  const handleError = useCallback((_reason?: 'challenge' | 'unknown') => {
     console.log(
       `[PriceChecker] 실패: ${currentItemRef.current?.productName?.slice(0, 20)}`,
     );

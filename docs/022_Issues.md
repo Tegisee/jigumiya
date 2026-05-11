@@ -12,18 +12,41 @@
 
 ---
 
-## Issue 3 — 상품 추가 일시 실패 (쿠팡 IP 차단)
+## Issue 3 — 상품 추가 / 가격 조회 실패 (Akamai Bot Manager 챌린지)
 
-**상태**: 2026-05-12 베타 검증 중 확인. 일시적 차단 — 1시간 후 재시도 시 해소.
+**상태**: 2026-05-12 inspect 스크립트로 진단 — 쿠팡이 Akamai BM 챌린지 페이지를 1차 응답으로 발사. **1.0.17용 fix 코드 적용 완료, 빌드 대기.**
 
-**증상**: 상품 URL 추가 시 CoupangScraper 무한로딩 또는 onError. 5/7 보고된 "AsyncStorage 초기화 후 첫 추가 실패"와는 별개 — 1.0.16 iOS 무한로딩 fix(HTML fetch 폐기 + vp 직접 로드 + SCRAPE_JS 폴링)로 자연 해소된 것으로 보임.
+**증상**: 상품 URL 추가 또는 관리자 모드 가격 조회 시 CoupangScraper 무한로딩 또는 onError. 5/7 보고된 "AsyncStorage 초기화 후 첫 추가 실패"와는 별개.
 
-**원인**: 동일 공인 IP에서 단시간 다수 쿠팡 WebView 호출(특히 관리자 모드 두 기기 동시 실행) → 쿠팡 IP 차단 (5xx / 차단 페이지 응답).
+**원인 (2026-05-12 inspect 검증, `scripts/cleanup/inspect-coupang-html-20260512.mjs`)**:
+- `https://www.coupang.com/vp/products/{id}` 직접 fetch (iPhone/Android UA) → 2606byte Akamai 챌린지 페이지 응답 (`#sec-if-cpt-container`, `Powered and protected by Akamai`, 7개 set-cookie + JS reload script)
+- 데스크톱 UA는 HTTP 403 "Access Denied" — 더 엄격
+- WebView는 정상 IP/장치에서 cookie 챌린지 + JS 실행으로 통과 가능
+- 사용자 IP가 봇으로 분류된 경우(동시 실행 / 단시간 다수 호출) reload 후에도 챌린지 → SCRAPE_JS는 빈 챌린지 DOM에서 모든 셀렉터 MISS → price=0 → 폴링 20회 후 onError (무한로딩처럼 보이는 증상)
 
-**대응**:
-- 즉시: 1시간 후 재시도
-- 운영: 관리자 모드 한 기기씩 순차 실행 + 대기 30분 이상 (운영 주의사항 참조)
-- 1.0.17 검토: 차단 페이지 감지 후 사용자에게 명시적 안내 (현재는 무한로딩으로 보임)
+**1.0.17 fix (코드 적용 완료 2026-05-12, 빌드 대기)**:
+- `components/CoupangScraper.tsx` SCRAPE_JS:
+  - `detectChallenge()` 헬퍼 신설 — `#sec-if-cpt-container` / `.behavioral-content` 또는 akamai 키워드(`Powered and protected by Akamai|sec-if-cpt-container|scf-akamai`) 검사
+  - tick 진입 시 챌린지 감지되면 `type='CHALLENGE'` postMessage + 폴링 중단
+  - debug에 `akamai=` 플래그 + `bodyPreview.slice(0,500)` 추가 (price=0 마지막 시도일 때만) — 실기기 콘솔로 사후 진단
+- `components/CoupangScraper.tsx` handleMessage:
+  - CHALLENGE 첫 수신 시 30s 후 1회 재인젝션 (cookie 챌린지 통과 시간 확보) + 외부 timeout 60s로 갱신
+  - 두 번째도 챌린지면 `onError('challenge')` 호출
+- `onError(reason?: 'challenge' | 'unknown')` 시그니처 확장 — 호출처 4곳(`admin.tsx` / `modal/add-item.tsx` / `detail/[id].tsx` / `components/PriceChecker.tsx`) 모두 reason 처리
+- 호출처에서 `reason === 'challenge'`일 때 명시 안내:
+  - admin: 순회 자체 중단 (`stopRef.current = true`) + Alert "쿠팡 봇 차단"
+  - add-item: 자동 재시도 안 함 + Alert + setScrapeFailed
+  - detail: Alert 메시지 분기 ("쿠팡 봇 차단" vs "가격 정보를 가져올 수 없습니다")
+
+**운영 대응 (현재 1.0.16)**:
+- 1시간 후 재시도 (IP reputation 회복)
+- 다른 Wi-Fi 또는 모바일 데이터로 시도 (다른 공인 IP)
+- 관리자 모드 동시 실행 금지 + 대기 30분 이상 (운영 주의사항 참조)
+
+**1.0.17 빌드 후 모니터링**:
+- CHALLENGE postMessage 빈도 (cron skip 카운터 + Functions 로그 분석)
+- debug `akamai=true` 비율 / `bodyPreview` 키워드 분포 → 챌린지 차단인지 (a) vs 셀렉터 미스매치인지 (b) 구별
+- (b) 비율이 의미 있으면 1.0.18에서 셀렉터 확장 + `__NEXT_DATA__` 추출 적용
 
 ---
 
