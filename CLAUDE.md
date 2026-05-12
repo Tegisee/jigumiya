@@ -22,7 +22,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ---
 
-## 현재 상태 (2026-05-12 기준)
+## 현재 상태 (2026-05-13 기준)
 
 - **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 (bn52/vc52) 빌드 완료 — 베타 검증 완료, 스토어 업로드 대기.**
 - **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix(createdAt → documentId + 78개 백필) + **Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용**(FCM 토큰 정상 발급 확인) + 그래프 스크롤(오늘=오른쪽 끝) + syncFromFirestore realPrice 분리 머지. 상세 [docs/changelog.md](./docs/changelog.md)
@@ -30,20 +30,21 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.16 출시 후 갱신 예정.
 - **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
 - **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + `onSharedProductRealPriceChange` v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
+- **2026-05-13 베타 추가 발견**: Akamai 봇 탐지 **근본 트리거 = 쿠팡 로그인 세션** 확인 (갤럭시 로그아웃 상태에서 추가/순회 성공). 아이패드는 로그아웃 + 다른 IP에서도 실패 → 기기 핑거프린트 단위 차단 의심, 2026-05-14 재테스트 예정. 상세 [022_Issues.md Issue 3](./docs/022_Issues.md)
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- ⚠️ **Issue 3** — 상품 추가 일시 실패 (쿠팡 IP 차단, 1시간 후 재시도로 해소). 1.0.17에서 차단 페이지 감지 + 안내 추가 검토
+- ⚠️ **Issue 3** — Akamai 봇 차단. 1차 트리거(IP)는 1.0.17 detectChallenge로 우회. **근본 트리거(로그인 세션 + 기기 핑거프린트)는 1.0.17 쿠키 자동 초기화 + UA 로테이션으로 추가 대응**
 - 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링)
-- 📦 **Issue 5** — 1.0.17 빌드 정리 항목 (공유 링크 양 스토어, proguard, expo-image 잔여, cron target_reached 정식 삭제, 크라우드소싱, 관리자 3대+ 확장)
+- 📦 **Issue 5** — 1.0.17 빌드 정리 항목 (**Akamai 완화 4종**: 쿠키 자동 초기화 / 관리자 지터 3~8s / 20개 끊고 5분 휴식 / UA 로테이션, **자동 새로고침 2종**: TTL+viewport PriceChecker / 포그라운드 syncFromFirestore, **기타**: 공유 링크 양 스토어, 아이고 resolvedUrl fallback, proguard, expo-image 잔여, cron target_reached 정식 삭제, 크라우드소싱, 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
 
 > Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 
-> ⚠️ **운영 주의**: 관리자 모드는 같은 Wi-Fi에서 두 기기 동시 실행 금지 (쿠팡 IP 차단). 한 기기씩 순차 + 대기 30분 이상. 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
+> ⚠️ **운영 주의 (2026-05-13 갱신)**: ① 관리자 순회 / 상품 추가 전 **쿠팡 로그아웃 필수** (자동화 1.0.17 적용 전까지 수동). ② 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). ③ 아이패드 등 핑거프린트 의심 차단은 시간 경과 후 재시도. 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
 
 ## 다음 할 일
 
@@ -55,9 +56,10 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 **📋 후속**:
 - cron `events.targets.push` / flush target 분기 **정식 삭제** (베타 검증 완료, 코드 제거 단계)
 - Issue 4 잔여 검증 (CF 트리거 token 보유자 실제 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
-- 1.0.17 정리 항목(Issue 5) 착수
+- 1.0.17 정리 항목(Issue 5) 착수 — **Akamai 완화 4종 + 자동 새로고침 2종 우선**
+- 2026-05-14 아이패드 Akamai 차단 시간 경과 재테스트 → 핑거프린트 차단 TTL 확인
 
-**🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) 포함
+**🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
 
 ---
 
