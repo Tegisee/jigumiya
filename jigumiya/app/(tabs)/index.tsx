@@ -328,7 +328,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.background,
   },
   scroll: {
-    paddingBottom: 40,
+    paddingBottom: 0,
   },
   headerRow: {
     flexDirection: 'row',
@@ -350,7 +350,8 @@ const styles = StyleSheet.create({
     color: '#888888',
     fontSize: 11,
     textAlign: 'center',
-    paddingVertical: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
     paddingHorizontal: 20,
   },
 

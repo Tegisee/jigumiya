@@ -40,6 +40,7 @@ export function getAppShareMessage(): string {
     `원하는 가격에 알려주는 스마트 알림 📉`,
     ``,
     `iPhone: ${STORE_LINKS.ios}`,
+    ``,
     `Android: ${STORE_LINKS.android}`,
   ].join('\n');
 }

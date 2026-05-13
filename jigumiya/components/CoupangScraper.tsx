@@ -526,10 +526,13 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
         javaScriptEnabled
         domStorageEnabled
         // 1.0.17 Akamai 완화: 쿠팡 앱 로그인 세션이 WebView로 흘러들어가면 BM이 인증 트래픽으로 분류 → 봇 임계 ↓.
-        // sharedCookies 차단 + incognito(비영속 세션) + cacheEnabled=false 조합으로 매 호출 fresh 게스트 세션 보장.
-        // 동일 효과: 사용자가 매번 쿠팡 로그아웃 + 캐시 삭제. 핑거프린트(canvas/WebGL)는 못 바꾸지만 세션 트리거는 제거.
+        // sharedCookies=false로 NSHTTPCookieStorage(시스템 쿠키) 동기화 차단 → 양 플랫폼 공통 격리 효과.
+        // incognito: Android만 true 유지. iOS는 false — WKWebView의 nonPersistentDataStore에서 Akamai sec_cpt
+        //   Set-Cookie race 의심(reload 시 cookie 헤더 누락) → 상품 추가 실패 5/14 보고. default dataStore로
+        //   전환해 챌린지 1회 통과 후 영속 재사용. 1.0.17 목표(로그인 세션 격리)는 sharedCookies=false가 그대로 처리.
+        // cacheEnabled=false: 양 플랫폼 — iOS는 default dataStore에서 URL cache만 무효화 (cookie는 영속).
         sharedCookiesEnabled={false}
-        incognito
+        incognito={Platform.OS === 'android'}
         cacheEnabled={false}
         injectedJavaScriptBeforeContentLoaded={BLOCK_DEEPLINK_JS}
         userAgent={userAgentRef.current}
