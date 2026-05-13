@@ -764,13 +764,21 @@ async function main() {
       continue;
     }
 
-    const prevPrice = Number(data.currentPrice || 0);
+    // docs/023 RealPrice 아키텍처 + 1.0.17 알림 baseline 전환:
+    //   - prevApiPrice: cron이 매 사이클 mirror한 apiPrice (currentPrice 필드와 동기화). needsCheck 트리거 + 캐시 안정성 비교 용도.
+    //   - prevRealPrice: 앱 WebView가 mirror한 실제 판매가. 가장 정확한 출처.
+    //   - prevPriceForNotif: 알림 dropRate/previousPrice baseline — realPrice 우선, 없으면 apiPrice fallback.
+    //     apiPrice는 search API의 표시가라 즉시할인/이벤트 미반영 false positive가 잦았음. realPrice는 실제 카트 가격이라 정확.
+    const prevApiPrice = Number(data.currentPrice || 0);
+    const prevRealPrice = Number(data.realPrice || 0);
+    const prevPriceForNotif = prevRealPrice > 0 ? prevRealPrice : prevApiPrice;
     let newPrice = 0;
     let usedCache = false;
 
     // vendorItemId 추적 상품은 cache 스킵 — category_best는 productId 단위라 옵션 mismatch 가능.
+    // cache 안정성은 apiPrice 시계열 기준(cron 측정값 연속성)이라 prevApiPrice 사용.
     const cached = vendorItemId ? null : bestCache.get(productId);
-    if (cached && isCacheStablePrice(cached.price, prevPrice)) {
+    if (cached && isCacheStablePrice(cached.price, prevApiPrice)) {
       console.log(
         `[${scanned}] ${productId} ${productName.slice(0, 30)} → cache hit ${cached.price}`,
       );
@@ -781,10 +789,12 @@ async function main() {
       console.log(
         `[${scanned}] ${productId} ${productName.slice(0, 30)} → API`,
       );
+      // fetchCurrentPrice의 prevPrice 인자는 search API 결과 검증/매칭 휴리스틱 기준 (cron 측정 연속성).
+      // 알림 baseline과 별개라 apiPrice 시계열 그대로 전달.
       const r: FetchPriceResult = await fetchCurrentPrice(
         productName,
         productId,
-        prevPrice,
+        prevApiPrice,
         vendorItemId,
       );
       apiCalls++;
@@ -825,10 +835,10 @@ async function main() {
 
     // docs/023: apiPrice 변동 절댓값 >= 10%면 needsCheck:true 박음.
     // CF onUpdate가 realPrice 갱신 시 false로 클리어, 앱/관리자 기기는 needsCheck=true 우선 확인.
-    // dropRate는 아래 알림 분기에서도 재사용 — 위에서 한 번만 계산.
-    const dropRate =
-      prevPrice > 0 ? ((newPrice - prevPrice) / prevPrice) * 100 : 0;
-    const needsCheck = Math.abs(dropRate) >= NEEDS_CHECK_DROPRATE_PCT;
+    // needsCheck는 apiPrice 시계열(cron 측정 연속성) 기준이라 prevApiPrice 사용.
+    const apiDropRate =
+      prevApiPrice > 0 ? ((newPrice - prevApiPrice) / prevApiPrice) * 100 : 0;
+    const needsCheck = Math.abs(apiDropRate) >= NEEDS_CHECK_DROPRATE_PCT;
 
     await item.ref.update({
       currentPrice: newPrice,
@@ -840,44 +850,53 @@ async function main() {
       ...(needsCheck ? { needsCheck: true } : {}),
     });
 
+    // 1.0.17: 알림 baseline은 realPrice 우선 (apiPrice는 표시가라 false positive 잦음).
+    // realPrice가 있으면 그것 기준, 없으면 apiPrice fallback. 변동률/UI previousPrice 모두 동일 출처.
+    const notifDropRate =
+      prevPriceForNotif > 0
+        ? ((newPrice - prevPriceForNotif) / prevPriceForNotif) * 100
+        : 0;
+    const usingRealBaseline = prevRealPrice > 0;
+
     console.log(
-      `  → ${prevPrice.toLocaleString()}원 → ${newPrice.toLocaleString()}원${usedCache ? ' (cache)' : ''}${needsCheck ? ' [needsCheck]' : ''}`,
+      `  → api ${prevApiPrice.toLocaleString()}→${newPrice.toLocaleString()}원${usedCache ? ' (cache)' : ''}${needsCheck ? ' [needsCheck]' : ''} | notif baseline=${usingRealBaseline ? 'real' : 'api'}=${prevPriceForNotif.toLocaleString()} (${notifDropRate.toFixed(1)}%)`,
     );
 
     // 변동 없음 / 비교 baseline 없음 → 알림 이벤트 없음
-    if (newPrice === prevPrice || prevPrice <= 0) continue;
+    if (newPrice === prevPriceForNotif || prevPriceForNotif <= 0) continue;
 
     const brief: ProductBrief = {
       productId,
       productName,
       currentPrice: newPrice,
-      previousPrice: prevPrice,
+      previousPrice: prevPriceForNotif,
     };
 
     // 2026-05-05 B: dropRate 절댓값 가드 — 60%를 넘는 변동은 search API 매칭 휴리스틱 오류
     // (옵션 mismatch / 다른 상품 매칭) 가능성이 매우 높아 알림 차단. 가격 갱신 자체는 위에서 이미 완료.
-    if (Math.abs(dropRate) > 60) {
+    // 1.0.17: realPrice baseline 사용 시 정가↔할인가 차이로 인한 표준 false positive도 함께 컷.
+    if (Math.abs(notifDropRate) > 60) {
       console.warn(
-        `[Skip-DropRateGuard] ${productId} ${productName.slice(0, 30)} dropRate=${dropRate.toFixed(1)}% — 알림 스킵`,
+        `[Skip-DropRateGuard] ${productId} ${productName.slice(0, 30)} dropRate=${notifDropRate.toFixed(1)}% (baseline=${usingRealBaseline ? 'real' : 'api'}) — 알림 스킵`,
       );
       continue;
     }
 
-    if (newPrice < prevPrice) {
-      // price_drops 컬렉션 기록
+    if (newPrice < prevPriceForNotif) {
+      // price_drops 컬렉션 기록 — prevPrice는 사용자가 피드에서 보는 "이전 가격"이라 알림 baseline과 동일하게 realPrice 우선.
       await recordPriceDrop(
         db,
         productId,
         productName,
         (data.thumbnail as string | undefined) || '',
-        prevPrice,
+        prevPriceForNotif,
         newPrice,
         trackerCount,
       );
       priceDrops++;
 
       const trackers = await fetchTrackers(productId);
-      events.drops.push({ ...brief, dropRate, trackers });
+      events.drops.push({ ...brief, dropRate: notifDropRate, trackers });
 
       // 목표가 도달 — docs/023: CF onUpdate 트리거(onSharedProductRealPriceChange)가 인계.
       // cron의 newPrice(=apiPrice)는 정가라 false positive가 많아 비활성.
@@ -889,16 +908,16 @@ async function main() {
       //   }
       // }
 
-      // 브로드캐스트 (10%/20% 이상 하락)
-      if (dropRate <= BROADCAST_TIER20) {
+      // 브로드캐스트 (10%/20% 이상 하락) — 알림 baseline 동일
+      if (notifDropRate <= BROADCAST_TIER20) {
         events.broadcastTier20.push(brief);
-      } else if (dropRate <= BROADCAST_TIER10) {
+      } else if (notifDropRate <= BROADCAST_TIER10) {
         events.broadcastTier10.push(brief);
       }
     } else {
-      // newPrice > prevPrice
+      // newPrice > prevPriceForNotif
       const trackers = await fetchTrackers(productId);
-      events.ups.push({ ...brief, dropRate, trackers });
+      events.ups.push({ ...brief, dropRate: notifDropRate, trackers });
     }
     }
 
