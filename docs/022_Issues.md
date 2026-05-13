@@ -14,48 +14,40 @@
 
 ## Issue 3 — 상품 추가 / 가격 조회 실패 (Akamai Bot Manager 챌린지)
 
-**상태**: 2026-05-12 inspect 스크립트로 진단 — 쿠팡이 Akamai BM 챌린지 페이지를 1차 응답으로 발사. **1.0.17용 fix 코드 적용 완료, 빌드 대기.** 2026-05-13 베타 테스트로 **근본 트리거 = 쿠팡 로그인 세션 + 기기 핑거프린트** 확인.
+**상태 (2026-05-14 갱신)**: **Android는 1.0.17에서 해소 확인** (상품 추가 / 관리자 순회 43개 / 알림 모두 정상). **iOS는 1.0.17에서 incognito race로 실패 → 1.0.18 incognito=false 분기로 fix 완료, 빌드 후 검증 대기.**
 
-**증상**: 상품 URL 추가 또는 관리자 모드 가격 조회 시 CoupangScraper 무한로딩 또는 onError. 5/7 보고된 "AsyncStorage 초기화 후 첫 추가 실패"와는 별개.
+**증상 (이력)**:
+- 1.0.16: 상품 URL 추가 또는 관리자 모드 가격 조회 시 CoupangScraper 무한로딩 또는 onError. Akamai 챌린지 페이지가 1차 응답
+- 1.0.17 Android: 정상화 ✅
+- 1.0.17 iOS: 상품 추가 + 상세 새로고침 + 관리자 순회 전체 실패 (5/14 베타) ❌
 
-**원인 (2026-05-12 inspect 검증, `scripts/cleanup/inspect-coupang-html-20260512.mjs`)**:
-- `https://www.coupang.com/vp/products/{id}` 직접 fetch (iPhone/Android UA) → 2606byte Akamai 챌린지 페이지 응답 (`#sec-if-cpt-container`, `Powered and protected by Akamai`, 7개 set-cookie + JS reload script)
-- 데스크톱 UA는 HTTP 403 "Access Denied" — 더 엄격
-- WebView는 정상 IP/장치에서 cookie 챌린지 + JS 실행으로 통과 가능
-- 사용자 IP가 봇으로 분류된 경우(동시 실행 / 단시간 다수 호출) reload 후에도 챌린지 → SCRAPE_JS는 빈 챌린지 DOM에서 모든 셀렉터 MISS → price=0 → 폴링 20회 후 onError (무한로딩처럼 보이는 증상)
+**근본 원인 (3중 트리거 + iOS race)**:
+- (a) IP 봇 분류 — 단시간 다수 호출 / 동시 실행으로 IP reputation 하락
+- (b) 쿠팡 로그인 세션 — Akamai BM이 인증 세션을 더 엄격하게 검사 (5/13 갤럭시 베타로 확인)
+- (c) 기기 핑거프린트 — UA + canvas + WebGL 단위 차단 (아이패드 5/13 의심)
+- (d) **iOS WKWebView nonPersistentDataStore race** — `incognito={true}` 시 Akamai sec_cpt Set-Cookie 응답을 받아도 디스크 영속화 안 되어 같은 인스턴스 reload 사이에 cookie 헤더 누락 가능성. 매 WebView 인스턴스(자동 재시도 포함)마다 새 챌린지 → timeout 누적 → 100% 실패
 
-**근본 원인 (2026-05-13 베타 테스트 추가 발견)**:
-- **쿠팡 로그인 세션이 봇 탐지 트리거** — Akamai BM은 인증된 세션에 대해 트래픽 패턴(자동화된 sequential 호출)을 엄격하게 검사
-- 갤럭시 단말 검증: 쿠팡 **로그아웃 상태에서 상품 추가 성공 + 관리자 순회 성공**. 로그인 상태에서는 동일 시나리오 실패
-- 아이패드 단말: **로그아웃 상태에서도 실패** → Akamai 기기 핑거프린트(WebView UA + canvas + WebGL fingerprint) 단위 차단 의심. 2026-05-14 재테스트 예정 (시간 경과 후 차단 해제 여부 확인)
-- 즉, Issue 3의 "IP 봇 분류"는 트리거 중 하나일 뿐이고 실제로는 (a) IP + (b) 로그인 세션 + (c) 기기 핑거프린트 다층 판정. 1.0.17 fix(`detectChallenge` + 30s 재시도)는 (a)만 우회하므로 (b)(c)는 별도 대응 필요
+**1.0.17 fix (Android 검증 완료, iOS는 실패)**:
+- `components/CoupangScraper.tsx` SCRAPE_JS: `detectChallenge()` + 30s 재인젝션 + 60s timeout — Android는 챌린지 통과 잘 됨
+- UA 풀(iOS/Android 각 4개) + sharedCookies=false + incognito=true + cacheEnabled=false — 양 플랫폼
+- admin 3~8s 지터 + 20개 5분 휴식 — 양 플랫폼
+- productId fallback URL (`getCoupangProductUrl`) — 양 플랫폼
 
-**1.0.17 fix (코드 적용 완료 2026-05-12, 빌드 대기)**:
-- `components/CoupangScraper.tsx` SCRAPE_JS:
-  - `detectChallenge()` 헬퍼 신설 — `#sec-if-cpt-container` / `.behavioral-content` 또는 akamai 키워드(`Powered and protected by Akamai|sec-if-cpt-container|scf-akamai`) 검사
-  - tick 진입 시 챌린지 감지되면 `type='CHALLENGE'` postMessage + 폴링 중단
-  - debug에 `akamai=` 플래그 + `bodyPreview.slice(0,500)` 추가 (price=0 마지막 시도일 때만) — 실기기 콘솔로 사후 진단
-- `components/CoupangScraper.tsx` handleMessage:
-  - CHALLENGE 첫 수신 시 30s 후 1회 재인젝션 (cookie 챌린지 통과 시간 확보) + 외부 timeout 60s로 갱신
-  - 두 번째도 챌린지면 `onError('challenge')` 호출
-- `onError(reason?: 'challenge' | 'unknown')` 시그니처 확장 — 호출처 4곳(`admin.tsx` / `modal/add-item.tsx` / `detail/[id].tsx` / `components/PriceChecker.tsx`) 모두 reason 처리
-- 호출처에서 `reason === 'challenge'`일 때 명시 안내:
-  - admin: 순회 자체 중단 (`stopRef.current = true`) + Alert "쿠팡 봇 차단"
-  - add-item: 자동 재시도 안 함 + Alert + setScrapeFailed
-  - detail: Alert 메시지 분기 ("쿠팡 봇 차단" vs "가격 정보를 가져올 수 없습니다")
+**1.0.18 fix (iOS race 해소, 빌드 대기 — 2026-05-14)**:
+- `components/CoupangScraper.tsx`: `incognito={Platform.OS === 'android'}` — iOS만 false로 변경
+- iOS는 `incognito=false` + `cacheEnabled=false` + `sharedCookies=false` 조합 → `WKWebsiteDataStore.defaultDataStore` 사용 (앱 프로세스 공유 persistent)
+- 효과: 챌린지 1회 통과 후 cookie 영속 → 다음 호출 / 자동 재시도 / 다음 상품 추가 시 cookie 재사용 → 매번 새 챌린지 부담 제거
+- 1.0.17 목표(쿠팡 로그인 세션 격리)는 `sharedCookiesEnabled=false`가 그대로 처리 — NSHTTPCookieStorage 동기화 차단은 incognito와 무관
 
-**운영 대응 (현재 1.0.16)**:
-- 1시간 후 재시도 (IP reputation 회복)
-- 다른 Wi-Fi 또는 모바일 데이터로 시도 (다른 공인 IP)
-- 관리자 모드 동시 실행 금지 + 대기 30분 이상 (운영 주의사항 참조)
-- **관리자 순회/상품 추가 전 쿠팡 로그아웃 필수** (2026-05-13 확인된 차단 트리거)
-- 아이패드 등 기기 핑거프린트 차단 의심 시 시간 경과 후 재시도 (Akamai TTL 자체 해제 대기)
+**운영 대응 (1.0.18 빌드 전)**:
+- 두 기기 동시 실행 시 네트워크 분리 (Wi-Fi + LTE)
+- iOS는 1.0.16 ipa 유지 권장 (1.0.17 iOS는 실패)
 
-**1.0.17 빌드 후 모니터링**:
-- CHALLENGE postMessage 빈도 (cron skip 카운터 + Functions 로그 분석)
-- debug `akamai=true` 비율 / `bodyPreview` 키워드 분포 → 챌린지 차단인지 (a) vs 셀렉터 미스매치인지 (b) 구별
-- (b) 비율이 의미 있으면 1.0.18에서 셀렉터 확장 + `__NEXT_DATA__` 추출 적용
-- 1.0.17의 쿠키 자동 초기화 / 지터 / UA 로테이션 적용 후 챌린지 비율 감소 폭 측정
+**1.0.18 빌드 후 모니터링**:
+- iOS: 상품 추가 / 상세 새로고침 / 관리자 순회 정상화 확인 (incognito=false 효과)
+- iOS CHALLENGE 60s timeout 0건 목표 — 1회 통과 후 영속 재사용 가정
+- Android: 회귀 없는지 확인 (incognito=true 유지이므로 정상 예상)
+- 양 플랫폼 챌린지 발생 빈도 / UA 분포 / 관리자 완주율
 
 ---
 
@@ -133,16 +125,23 @@
 
 ## 운영 주의사항
 
-### 관리자 모드 — 쿠팡 로그아웃 필수 (2026-05-13 추가)
+### iOS 1.0.17 — 상품 추가 / 새로고침 / 관리자 순회 전체 실패 (2026-05-14 추가)
 
-**증상**: 쿠팡 로그인 상태에서 관리자 순회 시 Akamai BM 차단 임계가 훨씬 낮음. 갤럭시 베타 테스트에서 로그인 상태 = 실패, 로그아웃 상태 = 순회 + 상품 추가 모두 성공.
+**증상**: iOS 1.0.17 (bn53/vc53) 베타에서 상품 추가 + 상세 새로고침 + 관리자 순회 모두 실패.
 
-**원인**: Akamai BM은 인증된 세션에 대해 sequential 자동화 패턴을 엄격히 판정. 로그아웃 게스트 세션은 동일 트래픽도 봇 임계가 더 너그러움.
+**원인**: `incognito={true}` + WKWebView `nonPersistentDataStore` 조합에서 Akamai sec_cpt Set-Cookie 응답이 디스크에 영속화되지 않음. 같은 인스턴스 reload 사이에 cookie 헤더 누락 가능성(WKWebView 알려진 race) + 매 WebView 인스턴스마다 새 dataStore라 자동 재시도 시 매번 새 챌린지 → timeout 누적 → 100% 실패.
 
-**운영 가이드 (1.0.17 자동화 전까지 수동)**:
-- 관리자 순회 / 상품 추가 진입 직전 쿠팡 앱·WebView에서 로그아웃
-- 단순 캐시 삭제로는 부족 — 명시적 로그아웃 (세션 쿠키 무효화 필요)
-- 1.0.17부터는 WebView 쿠키 자동 초기화로 같은 효과 자동 발생 예정
+**fix (1.0.18)**: `CoupangScraper.tsx` `incognito={Platform.OS === 'android'}` — iOS만 false. `defaultDataStore` 사용으로 챌린지 1회 통과 후 영속 재사용. `sharedCookiesEnabled=false`로 NSHTTPCookieStorage 격리는 그대로(쿠팡 앱 로그인 세션 차단).
+
+**운영 가이드 (1.0.18 빌드 전)**:
+- iOS는 1.0.16 ipa로 유지 권장
+- Android 1.0.17은 정상 작동 — 베타 계속
+
+### 관리자 모드 — 쿠팡 로그아웃 (1.0.17 Android 이상 자동화)
+
+**과거 (1.0.16 이하)**: 쿠팡 로그인 상태에서 관리자 순회 시 Akamai BM 차단 임계 ↓. 갤럭시 5/13 베타에서 로그인 = 실패 / 로그아웃 = 성공 확인.
+
+**1.0.17 이상**: `sharedCookiesEnabled=false`로 NSHTTPCookieStorage 동기화 차단 → 쿠팡 앱 로그인 세션이 WebView로 흘러들지 않음. 사용자가 쿠팡 앱에 로그인되어 있어도 무관. Android 1.0.17에서 정상 동작 검증 완료.
 
 ### 관리자 모드 — 기기 핑거프린트 단위 차단 (2026-05-13 추가)
 
@@ -153,8 +152,7 @@
 **운영 가이드**:
 - 차단 의심 기기는 시간 경과 후 재시도 (Akamai TTL 자체 해제 대기, 통상 수 시간~1일)
 - 즉시 복구 필요 시 다른 단말 사용
-- 2026-05-14 아이패드 재테스트로 시간 경과 차단 해제 여부 확인 예정
-- 1.0.17 UA 로테이션 + 쿠키 자동 초기화로 핑거프린트 변동성 확보 시도
+- 1.0.17 UA 로테이션 + 1.0.18 default dataStore로 핑거프린트 변동성/cookie 영속 확보. 효과 검증 진행 중
 
 ### 관리자 모드 — 같은 Wi-Fi에서 두 기기 동시 실행 금지
 

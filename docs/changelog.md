@@ -6,6 +6,52 @@
 
 ---
 
+## 2026-05-14 — 1.0.18 (bn54/vc54) 작업 + 1.0.17 베타 결과
+
+### 1.0.17 베타 결과 (bn53/vc53)
+- **Android ✅**: 상품 추가 / 관리자 순회 43개 성공 / 알림 정상 수신 — Akamai 완화 효과 확인
+- **iOS ❌**: 상품 추가 + 상세 새로고침 + 관리자 순회 전체 실패 → 1.0.18 fix
+- shared_products 93개로 증가 (베타 사용자 추가분)
+- 삭제된 상품 3개 X 표시 정상 동작
+
+### 1.0.18 변경 (코드 작업 완료, 빌드 대기)
+
+**fix(scraper): iOS incognito Platform 분기 (커밋 `7ccebba`)**
+- `components/CoupangScraper.tsx` `incognito={Platform.OS === 'android'}` — iOS만 false로 변경
+- 원인 분석: iOS WKWebView `nonPersistentDataStore`에서 Akamai sec_cpt Set-Cookie 응답이 디스크 영속화 안 됨 → 같은 인스턴스 reload 사이 cookie 헤더 race + 매 WebView 인스턴스마다 새 dataStore라 자동 재시도/다음 호출 모두 새 챌린지 → timeout 누적 100% 실패
+- iOS 새 동작: `defaultDataStore` 사용 → 챌린지 1회 통과 후 cookie 영속 → 다음 호출 재사용. 1.0.17 목표(쿠팡 로그인 세션 격리)는 `sharedCookiesEnabled=false`가 그대로 처리
+- Android 유지: `incognito=true` (1.0.17 베타 정상 작동 확인)
+- 코드 검증: `node_modules/react-native-webview/apple/RNCWebViewImpl.m:462-466` `if (_incognito) ... else if (_cacheEnabled) ...` 분기 확인, props 충돌 없음
+
+**fix(home): 홈 화면 하단 여백 축소 (커밋 `7ccebba`)**
+- `app/(tabs)/index.tsx` `scroll.paddingBottom` 40 → 0
+- `affiliateText.paddingVertical` 16 → `paddingTop:16 + paddingBottom:8` 분리
+- 효과: 파트너스 고지 문구 아래 빈 공간 제거, 탭바 바로 위까지만 노출
+
+**fix(share): 앱 공유 메시지 줄간격 (커밋 `7ccebba`)**
+- `services/config.ts` `getAppShareMessage` — iPhone / Android 링크 사이 빈 줄 1개 추가
+- 효과: 줄간격 없어 잘못 눌릴 가능성 해소
+
+**chore(version): 1.0.18 / bn54 / vc54 bump (커밋 `4e217b9`)**
+- `app.config.js` + `android/app/build.gradle` 4곳 동기화
+
+### 빌드 대기 + 검증 계획
+- 빌드: `eas build --local --profile production --platform ios` / `--platform android`
+- 산출물 예정: `~/jigumiya/builds/{android,ios}/jigumiya-1.0.18-54.{aab,ipa}`
+- iOS 베타 우선: 상품 추가 / 상세 새로고침 / 관리자 순회 정상화 검증
+- Android 베타: 회귀 없는지 (incognito=true 유지)
+- 통과 시 양 스토어 동시 업로드 → `meta/config_jigumiya.minRequiredVersion = "1.0.18"` 갱신
+
+### 궁극적 목표 달성 현황 (2026-05-14 스냅샷)
+
+| 기능 | Android | iOS |
+|------|---------|-----|
+| 상품 추가 | ✅ 1.0.17 정상 | ⏳ 1.0.18 fix 후 검증 예정 |
+| 가격 추적 (관리자 순회) | ✅ 1.0.17 43개 성공 | ⏳ 1.0.18 fix 후 검증 예정 |
+| 알림 발송 (realPrice 기준) | ✅ Android 정상 수신 확인 | ⏳ iOS 1.0.18 베타 후 확인 |
+
+---
+
 ## 2026-05-13~14 — 1.0.17 작업 (Akamai 완화 + 자동 새로고침 + cron baseline + 앱구조 개편)
 
 ### 1단계 — Akamai 봇 차단 완화 (커밋 `cd8b8eb`)
