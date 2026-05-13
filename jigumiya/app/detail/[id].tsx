@@ -27,7 +27,7 @@ import { useFavoriteToggle } from '../../hooks/useFavoriteToggle';
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { trackedItems, removeItem, updateItemPrice } = useAppStore();
+  const { trackedItems, removeItem, updateItemPrice, markChecked } = useAppStore();
 
   // 알림 라우팅은 itemId=productId로 보내므로(notifier.ts) productId fallback 매칭 필수.
   // i.id(클라이언트 UUID) 또는 i.productId(쿠팡 상품 ID) 둘 다 허용.
@@ -73,15 +73,18 @@ export default function DetailScreen() {
 
   const handleScrapeResult = useCallback((data: ScrapedProduct) => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (item && data.price > 0) {
-      updateItemPrice(item.id, data.price);
+    if (item) {
+      // 1.0.17: 성공/실패/차단 무관하게 시도 시점 마킹 → PriceChecker 6h TTL 가드에 즉시 반영
+      markChecked(item.id);
+      if (data.price > 0) updateItemPrice(item.id, data.price);
     }
     setRefreshing(false);
     setScrapeUrl(null);
-  }, [item, updateItemPrice]);
+  }, [item, updateItemPrice, markChecked]);
 
   const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (item) markChecked(item.id);
     if (reason === 'challenge') {
       Alert.alert(
         '쿠팡 봇 차단',
@@ -92,7 +95,7 @@ export default function DetailScreen() {
     }
     setRefreshing(false);
     setScrapeUrl(null);
-  }, []);
+  }, [item, markChecked]);
 
   if (!item) {
     return (

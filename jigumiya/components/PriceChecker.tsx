@@ -119,7 +119,7 @@ function randomJitterMs(): number {
 
 /** 포그라운드 가격 체크 — fetch HTML → WebView 파싱 (Universal Link 우회) */
 export default function PriceChecker({ active }: { active: boolean }) {
-  const { trackedItems, updateItemPrice, notificationEnabled } = useAppStore();
+  const { trackedItems, updateItemPrice, markChecked, notificationEnabled } = useAppStore();
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const [scrapeHtml, setScrapeHtml] = useState<string | null>(null);
   const [scrapeBaseUrl, setScrapeBaseUrl] = useState<string | undefined>(undefined);
@@ -208,18 +208,6 @@ export default function PriceChecker({ active }: { active: boolean }) {
     queueRef.current = queue;
     setTimeout(processNext, 5000);
   }, [active, trackedItems, processNext]);
-
-  // 1.0.17: 처리 끝마다 lastWebViewCheckedAt 마킹 → 6h TTL 가드 활성화.
-  // 성공/실패/차단 무관 (차단 케이스에 즉시 재시도 폭주 방지가 핵심). zustand persist로 AsyncStorage 자동 저장.
-  const markChecked = useCallback((id: string) => {
-    const now = Date.now();
-    const items = useAppStore.getState().trackedItems;
-    useAppStore.setState({
-      trackedItems: items.map((i) =>
-        i.id === id ? { ...i, lastWebViewCheckedAt: now } : i,
-      ),
-    });
-  }, []);
 
   const handleResult = useCallback(
     async (data: ScrapedProduct) => {

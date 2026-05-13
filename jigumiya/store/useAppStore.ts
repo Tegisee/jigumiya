@@ -33,6 +33,8 @@ interface AppState {
   removeItem: (id: string) => void;
   updateTargetPrice: (id: string, price: number) => void;
   updateItemPrice: (id: string, price: number) => void;
+  /** 1.0.17: WebView 가격 체크 시도 시점 기록 (성공/실패/차단 무관). PriceChecker TTL 6h 가드용 */
+  markChecked: (id: string) => void;
   syncFromFirestore: () => Promise<void>;
   backfillProductIds: () => Promise<void>;
   toggleNotification: () => void;
@@ -188,6 +190,17 @@ export const useAppStore = create<AppState>()(
           });
         }
       },
+      markChecked: (id) => {
+        // 1.0.17: WebView 가격 체크 시도 시점 기록 (성공/실패/차단 무관).
+        // PriceChecker TTL 6h 가드 + detail/관리자 수동 새로고침의 차단 폭주 방어.
+        // Firestore 미저장 (클라이언트 전용) — zustand persist로 AsyncStorage 자동 저장.
+        const now = Date.now();
+        set((state) => ({
+          trackedItems: state.trackedItems.map((item) =>
+            item.id === id ? { ...item, lastWebViewCheckedAt: now } : item,
+          ),
+        }));
+      },
       syncFromFirestore: async () => {
         const remote = await fetchItemsFromFirestore();
         if (remote.length === 0) return;
@@ -246,6 +259,13 @@ export const useAppStore = create<AppState>()(
             ) {
               m = { ...m, currentPrice: sharedPrice };
             }
+          }
+
+          // 1.0.17: lastWebViewCheckedAt은 Firestore 미저장 클라이언트 전용 필드 (PriceChecker TTL 가드 baseline).
+          // remote/shared 머지가 baseline이라 손실되면 sync마다 TTL 가드 무력 → Akamai 차단 폭주.
+          // local 값이 있으면 보존 (없으면 미설정 — 신규/미체크 상품으로 자연 처리).
+          if (l?.lastWebViewCheckedAt) {
+            m = { ...m, lastWebViewCheckedAt: l.lastWebViewCheckedAt };
           }
           return m;
         });
