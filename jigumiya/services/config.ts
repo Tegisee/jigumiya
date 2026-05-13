@@ -16,8 +16,8 @@ export function initCoupangApi() {
 
 export { hasCoupangApiKeys };
 
-/** 홈 가격 추적 상품 최대 개수 (Phase 3 §4) */
-export const MAX_TRACKED_ITEMS = 10;
+/** 추적중 탭 가격 추적 상품 최대 개수 (1.0.17 10 → 20 상향, §앱구조 개편) */
+export const MAX_TRACKED_ITEMS = 20;
 
 // 스토어 링크 (출시 후 업데이트)
 export const STORE_LINKS = {

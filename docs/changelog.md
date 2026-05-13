@@ -6,6 +6,47 @@
 
 ---
 
+## 2026-05-13~14 — 1.0.17 작업 (Akamai 완화 + 자동 새로고침 + cron baseline + 앱구조 개편)
+
+### 1단계 — Akamai 봇 차단 완화 (커밋 `cd8b8eb`)
+- **UA 풀**: `components/CoupangScraper.tsx`에 iOS/Android 각 4개 풀 + `pickRandomUserAgent()`. `sourceKey` 변경마다 재선택 → 동일 단말 핑거프린트 분산
+- **쿠키 자동 초기화**: `sharedCookiesEnabled={false} + incognito + cacheEnabled={false}` 조합. 매 호출 fresh 게스트 세션 → 쿠팡 로그인 트래픽으로 분류 회피
+- **관리자 지터**: `app/admin.tsx` `SLEEP_BETWEEN_MS=1500` → `randomJitterMs()` 3~8s. 분당 12~24회 → 8~20회로 봇 임계 회피
+- **20개 단위 + 5분 휴식**: `BATCH_SIZE=20` / `BATCH_REST_MS=5min` + `interruptibleSleep`(500ms 단위 stop 체크) + 카운트다운 UI
+- **productId fallback URL**: `services/coupangApi.ts` `getCoupangProductUrl()` 신설. resolvedUrl 누락 케이스(아이고 공유상품)에 vp URL 폴백 — admin/favorites/detail 호출처 3곳 적용
+
+### 2단계 — 포그라운드 자동 새로고침 + 콜드 스타트 sync (커밋 `8236e01`)
+- **TrackedItem.lastWebViewCheckedAt**: 성공/실패/차단 무관 마킹 → TTL 가드 baseline (성공만 기록하는 `lastRealPriceUpdatedAt`와 분리)
+- **PriceChecker**: TTL 6h 가드 + viewport 우선(첫 6개) + 상품 간 3~8s 지터 + `markChecked` 매 처리
+- **`(tabs)/index.tsx`**: `PriceChecker` 주석 해제 + `checkTrigger` state. mount + AppState active 시 토글 → `key`로 깨끗한 재마운트
+- **`_layout.tsx`**: 콜드 스타트 직후 + AppState active 복귀 시 `syncFromFirestore()` 호출 — 홈 외 라우트(알림 진입 등) 콜드 스타트 누락 보강
+
+### 3단계 — cron 알림 baseline realPrice 우선 전환 (커밋 `b7173d0`)
+- `scripts/shared-price-checker/index.ts`: `prevApiPrice`(cron 측정 연속성용) / `prevRealPrice` / `prevPriceForNotif = realPrice > 0 ? realPrice : apiPrice` 분리
+- `apiDropRate`(needsCheck 트리거) / `notifDropRate`(drops/ups + 60% 가드 + 브로드캐스트) 분리
+- `events.drops/ups.dropRate`, `brief.previousPrice`, `recordPriceDrop` 인자 모두 realPrice baseline 사용 → price_drops 컬렉션 + notify-only flush까지 일관
+- 효과: apiPrice 표시가의 즉시할인 미반영 false positive 컷, 앱 WebView 카트 가격 baseline으로 정확한 변동률
+
+### 빌드 전 fix (커밋 `74f470d`)
+- **`syncFromFirestore` `lastWebViewCheckedAt` 보존**: 머지 baseline이 remote라 클라이언트 전용 필드 손실 → sync 호출마다 TTL 가드 무력 → Akamai 차단 폭주 위험. local 값 머지 결과에 복원
+- **`useAppStore.markChecked` action 승격**: PriceChecker 내부 헬퍼를 store action으로 + `detail/[id].tsx` `handleScrapeResult/Error`에서 호출 — detail 수동 새로고침 직후 PriceChecker viewport 재시도 차단
+
+### 4단계 — 앱 공유 메시지 양쪽 스토어 (커밋 `4504152`)
+- `services/config.ts` `getAppShareMessage`: Platform.OS 기준 단일 링크 → App Store + Google Play 양쪽 동시 포함. iPhone 사용자가 안드로이드 친구에게 공유해도 정상
+
+### 5단계 — 홈 화면 개편 + 추적중 탭 신설
+- **탭 layout**: `price-drops` 탭(`가격변동`, `trending-down` 아이콘) → `tracked` 탭(`추적중`, `pulse` 아이콘) 교체
+- **`tracked.tsx` 신규**: 홈에서 분리된 trackedItems FlatList. `N / 20` 카운트 헤더 + 빈 상태 안내 + 파트너스 고지
+- **`index.tsx` 홈 개편**: 전체 ScrollView 구조로 전환. 추적 현황 박스(N개 추적중 + 잔여 슬롯 안내 + 가격 하락/상승 카운트 + 추적중 탭 진입 버튼) + 쿠팡 바로가기(묻어가는 스타일, 기존 "추적상품 가져오기" 교체) + FAB 제거 + 파트너스 고지
+- **추적 한도 10 → 20**: `services/config.ts` `MAX_TRACKED_ITEMS = 20`. add-item / useAppStore / tracked 모두 자동 반영
+- **알림 라우팅**: `services/notifications.ts` `price-drops` screen 값 → `/tracked` 매핑. cron notifier는 그대로
+
+### 베타 점검 (빌드 전)
+- ✅ Android uid `QBsAA6mAJshIHjWi55qPhMRrtAo2` token/필터/notificationEnabled 정상. 5/11~5/12 priceDrop 3건 + priceUp 1건 발송 이력. 알림 미도달 원인은 가격 변동 부재(7개 동일가)
+- ✅ realPrice baseline 흐름 검증: `admin/순회` 또는 `앱 PriceChecker` → `shared_products.realPrice + lastRealPriceUpdatedAt` 갱신 → cron 사이클이 stale(1h+) realPrice 읽어 search API newPrice와 비교
+
+---
+
 ## 2026-05-12 — 1.0.16 빌드 완료(iOS/Android) + 베타 검증 완료
 
 ### 빌드 산출물

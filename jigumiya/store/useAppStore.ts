@@ -56,7 +56,7 @@ export const useAppStore = create<AppState>()(
               .trackedItems.some((i) => i.productId === item.productId)
           : false;
 
-        // Phase 3 §4: 홈 10개 제한 — 중복 추가는 한도 소모 없음
+        // 추적중 탭 한도 (1.0.17 §앱구조 개편 — 10 → 20) — 중복 추가는 한도 소모 없음
         if (
           !alreadyTracking &&
           useAppStore.getState().trackedItems.length >= MAX_TRACKED_ITEMS

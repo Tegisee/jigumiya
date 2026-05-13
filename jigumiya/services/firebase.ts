@@ -407,7 +407,7 @@ export async function getSharedProduct(
  * 앱은 `users/{uid}/items`만 read해서 그래프가 영원히 안 바뀌던 문제 fix.
  * `syncFromFirestore`가 본 함수로 productId별 shared 본을 read해서 머지에 사용.
  *
- * 호출량: 홈 N=10 (`MAX_TRACKED_ITEMS`)이라 Promise.all로 1 round-trip.
+ * 호출량: 추적 N ≤ `MAX_TRACKED_ITEMS` (1.0.17 기준 20)이라 Promise.all로 1 round-trip.
  */
 export async function fetchSharedProductsByIds(
   productIds: string[],

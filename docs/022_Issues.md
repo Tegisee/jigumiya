@@ -74,22 +74,14 @@
 
 ## Issue 5 — 다음 빌드 (1.0.17) 정리
 
-### Akamai 봇 차단 완화 (2026-05-13 베타 테스트 기반)
+> 2026-05-13~14 5단계 작업으로 다음 항목 모두 완료 — changelog로 이동:
+> Akamai 완화 4종(쿠키 자동 초기화 / 지터 3~8s / 20개 휴식 5분 / UA 로테이션) /
+> 자동 새로고침 2종(TTL 6h + viewport + 콜드 스타트 sync) /
+> 앱 공유 양쪽 링크 / 아이고 productId fallback URL /
+> cron 알림 realPrice baseline 전환 / 앱구조 개편(추적중 탭 + 홈 개편 + 한도 20)
 
-- [ ] **fix** 상품 추가 + 관리자 모드 — WebView 쿠키 자동 초기화 (`CookieManager.clearAll` 또는 `WebView.clearCache` 진입 직전 호출, 로그아웃 효과 자동화)
-- [ ] **fix** 관리자 모드 — 상품 간 랜덤 대기 3~8초 (지터) 도입. 현재 sequential 호출 → 분당 12~24회는 봇 임계 초과
-- [ ] **fix** 관리자 모드 — 20개씩 끊어서 처리 후 5분 휴식 (배치 처리). 현재 84개 연속 처리는 Akamai TTL 갱신 전 차단 유발
-- [ ] **fix** UA 로테이션 (3~5개 iPhone/Android UA 풀에서 랜덤). 동일 UA + 동일 행동 패턴 = 핑거프린트 단위 차단 회피
+### 잔여 — 빌드 검증 후 또는 별도 PR
 
-### 자동 새로고침 (앱 오픈 / 포그라운드 복귀)
-
-- [ ] **feat** 앱 오픈/포그라운드 복귀 시 자동 새로고침 활성화 — `PriceChecker` 주석 해제 + TTL 6~12h 가드(`item.lastWebViewCheckedAt` 추가) + viewport(홈에 보이는 카드) 우선 처리
-- [ ] **fix** 포그라운드 복귀 시 `syncFromFirestore()` 즉시 호출 (현재 `(tabs)/index.tsx`만 처리, `_layout.tsx`에는 누락 — 콜드 스타트 시에도 호출 안 됨)
-
-### 기타
-
-- [ ] **feat** 앱 공유 시 iOS/Android 구분 없이 앱스토어 + 구글플레이 링크 **둘 다** 포함 (현재 한쪽만)
-- [ ] **fix** 아이고 공유상품 `resolvedUrl` 필드 없음 — productId 기반 fallback URL(`https://www.coupang.com/vp/products/{productId}`) 생성 로직 추가. 현재 아이고에서 추가된 shared_products는 url resolve 실패 시 백지
 - [ ] **chore** expo-image 마이그레이션 잔여 사용처 점검
 - [ ] **chore** Android proguard 설정
 - [ ] **cleanup** cron `events.targets.push` / flush target 분기 정식 삭제 (베타 검증 후)

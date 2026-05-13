@@ -24,40 +24,44 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ## 현재 상태 (2026-05-13 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. **1.0.16 (bn52/vc52) 빌드 완료 — 베타 검증 완료, 스토어 업로드 대기.**
-- **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix(createdAt → documentId + 78개 백필) + **Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용**(FCM 토큰 정상 발급 확인) + 그래프 스크롤(오늘=오른쪽 끝) + syncFromFirestore realPrice 분리 머지. 상세 [docs/changelog.md](./docs/changelog.md)
-- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.16-52.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.16-52.aab`
-- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.16 출시 후 갱신 예정.
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. **1.0.17 코드 작업 완료 — 빌드 대기.**
+- **1.0.17 작업 (2026-05-13~14 완료, 빌드 대기)**: Akamai 완화 4종(UA 풀 + 쿠키 자동 초기화 + 관리자 3~8s 지터 + 20개 5분 휴식) + productId fallback URL + 포그라운드 자동 새로고침(TTL 6h + viewport + lastWebViewCheckedAt) + 콜드 스타트 syncFromFirestore + cron 알림 realPrice baseline 전환 + 앱 공유 양쪽 스토어 + **앱구조 개편(추적중 탭 신설 + 홈 ScrollView + 추적 현황 박스 + 한도 10 → 20)**. 상세 [docs/changelog.md](./docs/changelog.md)
+- **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix + Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용(FCM 토큰 정상 발급)
+- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.16-52.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.16-52.aab` (1.0.17 빌드 대기)
+- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.16 또는 1.0.17 출시 후 갱신 예정.
 - **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
 - **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + `onSharedProductRealPriceChange` v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
-- **2026-05-13 베타 추가 발견**: Akamai 봇 탐지 **근본 트리거 = 쿠팡 로그인 세션** 확인 (갤럭시 로그아웃 상태에서 추가/순회 성공). 아이패드는 로그아웃 + 다른 IP에서도 실패 → 기기 핑거프린트 단위 차단 의심, 2026-05-14 재테스트 예정. 상세 [022_Issues.md Issue 3](./docs/022_Issues.md)
+- **2026-05-13 베타 추가 발견**: Akamai 봇 탐지 **근본 트리거 = 쿠팡 로그인 세션** 확인 (갤럭시 로그아웃 상태에서 추가/순회 성공). 1.0.17 incognito + 쿠키 자동 초기화로 자동화. 아이패드 기기 핑거프린트 단위 차단 의심은 2026-05-14 재테스트 예정. 상세 [022_Issues.md Issue 3](./docs/022_Issues.md)
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- ⚠️ **Issue 3** — Akamai 봇 차단. 1차 트리거(IP)는 1.0.17 detectChallenge로 우회. **근본 트리거(로그인 세션 + 기기 핑거프린트)는 1.0.17 쿠키 자동 초기화 + UA 로테이션으로 추가 대응**
+- ⚠️ **Issue 3** — Akamai 봇 차단. 1차 트리거(IP)는 1.0.17 detectChallenge로 우회. 근본 트리거(로그인 세션 + 기기 핑거프린트)는 **1.0.17 빌드 항목으로 코드 적용 완료 — 빌드 후 효과 검증 대기**
 - 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링)
-- 📦 **Issue 5** — 1.0.17 빌드 정리 항목 (**Akamai 완화 4종**: 쿠키 자동 초기화 / 관리자 지터 3~8s / 20개 끊고 5분 휴식 / UA 로테이션, **자동 새로고침 2종**: TTL+viewport PriceChecker / 포그라운드 syncFromFirestore, **기타**: 공유 링크 양 스토어, 아이고 resolvedUrl fallback, proguard, expo-image 잔여, cron target_reached 정식 삭제, 크라우드소싱, 관리자 3대+ 확장)
+- 📦 **Issue 5** — 1.0.17 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
 
 > Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
+> Issue 5의 Akamai 완화 4종 + 자동 새로고침 2종 + 공유 양쪽 링크 + productId fallback + cron baseline + 앱구조 개편은 1.0.17 코드 작업으로 완료되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 
-> ⚠️ **운영 주의 (2026-05-13 갱신)**: ① 관리자 순회 / 상품 추가 전 **쿠팡 로그아웃 필수** (자동화 1.0.17 적용 전까지 수동). ② 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). ③ 아이패드 등 핑거프린트 의심 차단은 시간 경과 후 재시도. 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
+> ⚠️ **운영 주의 (2026-05-13 갱신)**: ① 1.0.17 빌드 전까지는 관리자 순회 / 상품 추가 전 **쿠팡 로그아웃 필수** (1.0.17 incognito로 자동화). ② 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). ③ 아이패드 등 핑거프린트 의심 차단은 시간 경과 후 재시도. 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
 
 ## 다음 할 일
 
-**🔨 우선순위 1 — 1.0.16 스토어 업로드**:
-- iOS: Transporter로 `jigumiya-1.0.16-52.ipa` 수동 업로드 → App Store Connect 심사
+**🔨 우선순위 1 — 1.0.17 빌드 + 스토어 업로드**:
+- `app.config.js` / `android/app/build.gradle` 버전 bump (1.0.17 / bn53 / vc53)
+- `eas build --local --profile production --platform ios` / `--platform android`
+- iOS: Transporter로 ipa 수동 업로드 → App Store Connect 심사
 - Android: Play Console 내부 테스트 → 단계적 출시
-- 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.16"` 갱신
+- 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.17"` 갱신
 
-**📋 후속**:
-- cron `events.targets.push` / flush target 분기 **정식 삭제** (베타 검증 완료, 코드 제거 단계)
-- Issue 4 잔여 검증 (CF 트리거 token 보유자 실제 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
-- 1.0.17 정리 항목(Issue 5) 착수 — **Akamai 완화 4종 + 자동 새로고침 2종 우선**
-- 2026-05-14 아이패드 Akamai 차단 시간 경과 재테스트 → 핑거프린트 차단 TTL 확인
+**📋 후속 검증 (1.0.17 빌드 후)**:
+- Akamai 완화 효과 측정 — `[Scraper] ua=` / 챌린지 빈도 / 관리자 84개 완주율
+- TTL 6h 가드 동작 — `[PriceChecker] 6h TTL 가드 ... 모두 최근 체크, 스킵` 로그 표본
+- cron 알림 baseline 전환 — `[notif baseline=real|api]` 로그 분포 / priceDrop 발송 빈도 변화
+- Issue 4 잔여 검증 (CF 트리거 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
 
 **🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
 

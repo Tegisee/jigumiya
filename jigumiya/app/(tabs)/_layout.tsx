@@ -43,12 +43,12 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="price-drops"
+        name="tracked"
         options={{
-          title: '가격변동',
+          title: '추적중',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'trending-down' : 'trending-down-outline'}
+              name={focused ? 'pulse' : 'pulse-outline'}
               size={size}
               color={color}
             />

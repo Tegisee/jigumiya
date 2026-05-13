@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
-  FlatList,
   TouchableOpacity,
   StyleSheet,
   AppState,
@@ -16,7 +15,6 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
-import { ProductCard } from '../../components/ProductCard';
 import PriceChecker from '../../components/PriceChecker';
 import { hasCoupangApiKeys, generateDeepLink } from '../../services/coupangApi';
 import {
@@ -27,12 +25,15 @@ import type {
   EventBestJigumiya,
   GoldboxProductItem,
 } from '../../types';
-import { getAppShareMessage, STORE_LINKS } from '../../services/config';
+import {
+  getAppShareMessage,
+  STORE_LINKS,
+  MAX_TRACKED_ITEMS,
+} from '../../services/config';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { trackedItems, syncFromFirestore, backfillProductIds } = useAppStore();
-  const items = trackedItems;
   const appStateRef = useRef(AppState.currentState);
   const [goldbox, setGoldbox] = useState<GoldboxProductItem[] | null>(null);
   const [activeEvent, setActiveEvent] = useState<{
@@ -88,6 +89,25 @@ export default function HomeScreen() {
     };
   }, []);
 
+  // 1.0.17: 추적 현황 — 가격 하락/상승 카운트.
+  // 기준: trackedItem.priceHistory의 마지막 vs 이전 항목 비교 (detail/[id]의 hasPriceDrop와 동일 정책).
+  // priceHistory가 1개 이하면 비교 불가 → 무변동으로 처리.
+  const { drops, ups } = useMemo(() => {
+    let d = 0;
+    let u = 0;
+    for (const item of trackedItems) {
+      const hist = item.priceHistory;
+      if (hist.length < 2) continue;
+      const prev = hist[hist.length - 2].price;
+      if (item.currentPrice < prev) d++;
+      else if (item.currentPrice > prev) u++;
+    }
+    return { drops: d, ups: u };
+  }, [trackedItems]);
+
+  const trackedCount = trackedItems.length;
+  const remainingSlots = Math.max(0, MAX_TRACKED_ITEMS - trackedCount);
+
   const handleBuyGoldbox = (item: GoldboxProductItem) => {
     if (!item.deepLink) return;
     try {
@@ -99,6 +119,28 @@ export default function HomeScreen() {
     try {
       await Share.share({ message: getAppShareMessage() });
     } catch {}
+  };
+
+  const handleOpenCoupang = async () => {
+    // 제휴 딥링크로 쿠팡 이동 (수수료 발생)
+    if (hasCoupangApiKeys()) {
+      try {
+        const deepLink = await generateDeepLink('https://www.coupang.com');
+        if (deepLink?.shortenUrl) {
+          Linking.openURL(deepLink.shortenUrl);
+          return;
+        }
+      } catch {}
+    }
+    // fallback: 쿠팡 앱 또는 웹
+    try {
+      const canOpen = await Linking.canOpenURL('coupang://home');
+      if (canOpen) {
+        await Linking.openURL('coupang://home');
+        return;
+      }
+    } catch {}
+    Linking.openURL('https://www.coupang.com');
   };
 
   const renderGoldboxCard = (item: GoldboxProductItem) => (
@@ -135,158 +177,144 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.headerRow}>
-        <Text style={styles.title}>지금이야</Text>
-        {(STORE_LINKS.ios || STORE_LINKS.android) && (
-          <TouchableOpacity
-            onPress={handleShareApp}
-            style={styles.iconBtn}
-            hitSlop={8}
-          >
-            <Ionicons name="share-outline" size={22} color={theme.text} />
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* 상단 버튼 — 이벤트 배너(있을 때) + 오늘의 BEST + 쿠팡 PL */}
-      <View style={styles.topButtons}>
-        {activeEvent && (
-          <TouchableOpacity
-            style={styles.eventBanner}
-            onPress={() =>
-              router.push({
-                pathname: '/event-best',
-                params: { slug: activeEvent.event.slug },
-              })
-            }
-            activeOpacity={0.85}
-          >
-            <Text style={styles.eventEmoji}>🌸</Text>
-            <View style={styles.eventTextWrap}>
-              <Text style={styles.eventName} numberOfLines={1}>
-                {activeEvent.event.eventName}
-              </Text>
-              <Text style={styles.eventDLabel}>
-                {activeEvent.daysUntil === 0
-                  ? 'D-day'
-                  : `D-${activeEvent.daysUntil}`}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={theme.text} />
-          </TouchableOpacity>
-        )}
-        <View style={styles.topButtonRow}>
-          <TouchableOpacity
-            style={[styles.topButton, styles.topButtonBest]}
-            onPress={() => router.push('/today-best')}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.topButtonEmoji}>⚡</Text>
-            <Text style={styles.topButtonText}>오늘의 BEST</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.topButton, styles.topButtonPL]}
-            onPress={() => router.push('/coupang-pl')}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.topButtonEmoji}>🏷️</Text>
-            <Text style={styles.topButtonText}>쿠팡 PL</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* 골드박스 — goldbox/{오늘 KST} (cron 07:30) */}
-      {goldbox !== null && (
-        <View style={styles.goldboxSection}>
-          <View style={styles.goldboxHeader}>
-            <Ionicons name="cube" size={14} color="#FFD700" />
-            <Text style={styles.goldboxTitle}>쿠팡 골드박스</Text>
-          </View>
-          {goldbox.length === 0 ? (
-            <Text style={styles.dealsEmpty}>
-              오늘 골드박스 데이터가 아직 준비되지 않았어요
-            </Text>
-          ) : (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.goldboxScroll}
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>지금이야</Text>
+          {(STORE_LINKS.ios || STORE_LINKS.android) && (
+            <TouchableOpacity
+              onPress={handleShareApp}
+              style={styles.iconBtn}
+              hitSlop={8}
             >
-              {goldbox.map(renderGoldboxCard)}
-            </ScrollView>
+              <Ionicons name="share-outline" size={22} color={theme.text} />
+            </TouchableOpacity>
           )}
         </View>
-      )}
 
-      {/* 추적상품 가져오기 */}
-      <TouchableOpacity
-        style={styles.fetchBtn}
-        onPress={async () => {
-          // 제휴 딥링크로 쿠팡 이동 (수수료 발생)
-          if (hasCoupangApiKeys()) {
-            try {
-              const deepLink = await generateDeepLink('https://www.coupang.com');
-              if (deepLink?.shortenUrl) {
-                Linking.openURL(deepLink.shortenUrl);
-                return;
+        {/* 상단 버튼 — 이벤트 배너(있을 때) + 오늘의 BEST + 쿠팡 PL */}
+        <View style={styles.topButtons}>
+          {activeEvent && (
+            <TouchableOpacity
+              style={styles.eventBanner}
+              onPress={() =>
+                router.push({
+                  pathname: '/event-best',
+                  params: { slug: activeEvent.event.slug },
+                })
               }
-            } catch {}
-          }
-          // fallback: 쿠팡 앱 또는 웹
-          try {
-            const canOpen = await Linking.canOpenURL('coupang://home');
-            if (canOpen) { await Linking.openURL('coupang://home'); return; }
-          } catch {}
-          Linking.openURL('https://www.coupang.com');
-        }}
-        activeOpacity={0.8}
-      >
-        <Ionicons name="cart-outline" size={22} color={theme.primary} />
-        <View style={styles.fetchBtnText}>
-          <Text style={styles.fetchBtnTitle}>추적상품 가져오기</Text>
-          <Text style={styles.fetchBtnSub}>쿠팡에서 마음에 드는 상품을 찾아오세요</Text>
+              activeOpacity={0.85}
+            >
+              <Text style={styles.eventEmoji}>🌸</Text>
+              <View style={styles.eventTextWrap}>
+                <Text style={styles.eventName} numberOfLines={1}>
+                  {activeEvent.event.eventName}
+                </Text>
+                <Text style={styles.eventDLabel}>
+                  {activeEvent.daysUntil === 0
+                    ? 'D-day'
+                    : `D-${activeEvent.daysUntil}`}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.text} />
+            </TouchableOpacity>
+          )}
+          <View style={styles.topButtonRow}>
+            <TouchableOpacity
+              style={[styles.topButton, styles.topButtonBest]}
+              onPress={() => router.push('/today-best')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.topButtonEmoji}>⚡</Text>
+              <Text style={styles.topButtonText}>오늘의 BEST</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.topButton, styles.topButtonPL]}
+              onPress={() => router.push('/coupang-pl')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.topButtonEmoji}>🏷️</Text>
+              <Text style={styles.topButtonText}>쿠팡 PL</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={theme.subtext} />
-      </TouchableOpacity>
 
-      {/* 카테고리 제목 고정 */}
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>가격 추적 중</Text>
-        <Text style={styles.sectionCount}>{items.length}개</Text>
-      </View>
+        {/* 골드박스 — goldbox/{오늘 KST} (cron 07:30) */}
+        {goldbox !== null && (
+          <View style={styles.goldboxSection}>
+            <View style={styles.goldboxHeader}>
+              <Ionicons name="cube" size={14} color="#FFD700" />
+              <Text style={styles.goldboxTitle}>쿠팡 골드박스</Text>
+            </View>
+            {goldbox.length === 0 ? (
+              <Text style={styles.dealsEmpty}>
+                오늘 골드박스 데이터가 아직 준비되지 않았어요
+              </Text>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.goldboxScroll}
+              >
+                {goldbox.map(renderGoldboxCard)}
+              </ScrollView>
+            )}
+          </View>
+        )}
 
-      <FlatList
-        data={items}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ProductCard item={item} />}
-        contentContainerStyle={styles.list}
-        removeClippedSubviews
-        initialNumToRender={6}
-        maxToRenderPerBatch={6}
-        windowSize={5}
-        updateCellsBatchingPeriod={50}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>
-              쿠팡에서 상품 공유하기를 눌러보세요
+        {/* 1.0.17 §앱구조 개편 — 추적 현황 박스 (추적중 탭 진입 동선) */}
+        <View style={styles.statusCard}>
+          <View style={styles.statusHeader}>
+            <Text style={styles.statusTitle}>
+              {trackedCount}개 추적중
+            </Text>
+            <Text style={styles.statusSub}>
+              {remainingSlots > 0
+                ? `앞으로 ${remainingSlots}개 상품을 추가로 추적할 수 있어요`
+                : `한도 ${MAX_TRACKED_ITEMS}개 도달 — 기존 상품을 삭제하면 추가할 수 있어요`}
             </Text>
           </View>
-        }
-        ListFooterComponent={
-          items.length > 0 ? (
-            <Text style={styles.affiliateText}>
-              이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+          <View style={styles.statusStats}>
+            <View style={[styles.statusStat, styles.statusStatDown]}>
+              <Ionicons name="trending-down" size={16} color="#FF6B6B" />
+              <Text style={styles.statusStatText}>가격 하락 {drops}개</Text>
+            </View>
+            <View style={[styles.statusStat, styles.statusStatUp]}>
+              <Ionicons name="trending-up" size={16} color="#FFB02E" />
+              <Text style={styles.statusStatText}>가격 상승 {ups}개</Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.statusLink}
+            onPress={() => router.push('/tracked')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.statusLinkText}>추적중인 상품 보기</Text>
+            <Ionicons name="chevron-forward" size={16} color={theme.primary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* 1.0.17 §앱구조 개편 — 쿠팡 바로가기 (묻어가는 스타일, 추적상품 가져오기 교체) */}
+        <TouchableOpacity
+          style={styles.coupangLinkBtn}
+          onPress={handleOpenCoupang}
+          activeOpacity={0.7}
+        >
+          <View style={styles.coupangLinkText}>
+            <Text style={styles.coupangLinkTitle}>🛍️ 쿠팡 바로가기</Text>
+            <Text style={styles.coupangLinkSub}>
+              눌러서 상품을 공유하면 가격 추적이 시작돼요
             </Text>
-          ) : null
-        }
-      />
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push('/modal/add-item')}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={theme.subtext} />
+        </TouchableOpacity>
+
+        <Text style={styles.affiliateText}>
+          이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
+        </Text>
+      </ScrollView>
 
       {/* 1.0.17 포그라운드 자동 새로고침 — TTL 6h + viewport 우선 + 3~8s 지터 (Akamai 완화) */}
       <PriceChecker active={checkTrigger > 0} key={checkTrigger} />
@@ -298,6 +326,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.background,
+  },
+  scroll: {
+    paddingBottom: 40,
   },
   headerRow: {
     flexDirection: 'row',
@@ -314,20 +345,6 @@ const styles = StyleSheet.create({
   },
   iconBtn: {
     padding: 6,
-  },
-  list: {
-    paddingHorizontal: 16,
-    paddingBottom: 100,
-  },
-  empty: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 200,
-  },
-  emptyText: {
-    color: theme.subtext,
-    fontSize: 16,
   },
   affiliateText: {
     color: '#888888',
@@ -406,49 +423,100 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── 추적상품 가져오기 ──
-  fetchBtn: {
+  // ── 추적 현황 박스 ──
+  statusCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 16,
+    borderRadius: 14,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 12,
+  },
+  statusHeader: {
+    gap: 4,
+  },
+  statusTitle: {
+    color: theme.text,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  statusSub: {
+    color: theme.subtext,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  statusStats: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  statusStat: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  statusStatDown: {
+    backgroundColor: 'rgba(255, 107, 107, 0.08)',
+    borderColor: 'rgba(255, 107, 107, 0.30)',
+  },
+  statusStatUp: {
+    backgroundColor: 'rgba(255, 176, 46, 0.08)',
+    borderColor: 'rgba(255, 176, 46, 0.30)',
+  },
+  statusStatText: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  statusLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0, 229, 204, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 204, 0.35)',
+  },
+  statusLinkText: {
+    color: theme.primary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  // ── 쿠팡 바로가기 (묻어가는 스타일) ──
+  coupangLinkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     marginHorizontal: 16,
-    marginVertical: 8,
+    marginTop: 10,
     padding: 14,
-    backgroundColor: 'rgba(0, 229, 204, 0.08)',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(0, 229, 204, 0.25)',
-    borderRadius: 14,
+    borderColor: theme.border,
+    backgroundColor: theme.card,
   },
-  fetchBtnText: {
+  coupangLinkText: {
     flex: 1,
   },
-  fetchBtnTitle: {
+  coupangLinkTitle: {
     color: theme.text,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
   },
-  fetchBtnSub: {
+  coupangLinkSub: {
     color: theme.subtext,
     fontSize: 12,
     marginTop: 2,
-  },
-
-  // ── 섹션 헤더 ──
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.text,
-  },
-  sectionCount: {
-    fontSize: 13,
-    color: theme.subtext,
+    lineHeight: 16,
   },
 
   // ── 오늘의 특가 (가격 하락 + 카테고리 베스트 fallback, 상단 고정 컴팩트) ──
@@ -514,27 +582,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     lineHeight: 18,
-  },
-
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 30,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: theme.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  fabText: {
-    fontSize: 28,
-    color: theme.text,
-    lineHeight: 30,
   },
 });

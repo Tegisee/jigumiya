@@ -57,12 +57,12 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
 /**
  * 알림 클릭 시 라우팅할 경로를 결정.
- *  - data.screen === 'price-drops' / 'price_change' → /price-drops 탭 (가격변동)
+ *  - data.screen === 'price-drops' / 'price_change' → /tracked 탭 (1.0.17 §앱구조 개편)
+ *    cron notifier는 여전히 'price-drops' screen 값으로 발송하지만, 추적중 탭이 가격 변동
+ *    확인 동선을 대체하므로 같은 경로로 처리. 'price_change'는 카테고리 베스트 broadcast.
  *  - data.screen === 'home'        → 홈 (/)
  *  - data.screen === 'detail' + itemId → /detail/{itemId}
  *  - 하위 호환: screen 없이 itemId만 → /detail/{itemId}
- *
- *  'price_change'는 카테고리 베스트 broadcast 알림용 (G v2, 2026-05-04). 가격변동 탭과 동일 처리.
  */
 export function resolveNotificationRoute(
   response: Notifications.NotificationResponse,
@@ -71,7 +71,7 @@ export function resolveNotificationRoute(
   const screen = data.screen as string | undefined;
   const itemId = data.itemId as string | undefined;
 
-  if (screen === 'price-drops' || screen === 'price_change') return '/price-drops';
+  if (screen === 'price-drops' || screen === 'price_change') return '/tracked';
   if (screen === 'home') return '/';
   if (screen === 'detail' && itemId) return `/detail/${itemId}`;
   if (itemId) return `/detail/${itemId}`;
