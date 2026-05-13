@@ -105,6 +105,18 @@ async function fetchProductHtml(url: string): Promise<string | null> {
   }
 }
 
+// 1.0.17 자동 새로고침 정책:
+//   - TTL 6h: lastWebViewCheckedAt이 6h 이내면 스킵 (차단 폭주 방지 + 불필요 호출 절약)
+//   - viewport 우선: 홈 FlatList initialNumToRender=6 기준 — 첫 N개 먼저 처리하고 나머지는 후순위
+//   - 상품 간 3~8s 랜덤 지터 (관리자 모드와 동일 패턴, BM 봇 임계 회피)
+const TTL_MS = 6 * 60 * 60 * 1000;
+const VIEWPORT_PRIORITY_COUNT = 6;
+const JITTER_MIN_MS = 3000;
+const JITTER_MAX_MS = 8000;
+function randomJitterMs(): number {
+  return Math.floor(JITTER_MIN_MS + Math.random() * (JITTER_MAX_MS - JITTER_MIN_MS));
+}
+
 /** 포그라운드 가격 체크 — fetch HTML → WebView 파싱 (Universal Link 우회) */
 export default function PriceChecker({ active }: { active: boolean }) {
   const { trackedItems, updateItemPrice, notificationEnabled } = useAppStore();
@@ -166,19 +178,55 @@ export default function PriceChecker({ active }: { active: boolean }) {
   useEffect(() => {
     if (!active || runningRef.current || trackedItems.length === 0) return;
 
+    const now = Date.now();
     const realItems = trackedItems.filter((i) => !i.id.startsWith('mock-'));
     if (realItems.length === 0) return;
 
-    console.log(`[PriceChecker] 시작: ${realItems.length}개 상품 (5초 후)`);
+    // 1.0.17 TTL 6h 가드 — lastWebViewCheckedAt이 최근(6h 이내)이면 스킵.
+    // 신규/미체크 항목은 lastWebViewCheckedAt 없음 → 항상 대상.
+    const dueItems = realItems.filter(
+      (i) => !i.lastWebViewCheckedAt || now - i.lastWebViewCheckedAt > TTL_MS,
+    );
+    if (dueItems.length === 0) {
+      console.log(`[PriceChecker] 6h TTL 가드 — ${realItems.length}개 모두 최근 체크, 스킵`);
+      return;
+    }
+
+    // 1.0.17 viewport 우선 — 홈 FlatList 첫 6개를 먼저 큐 앞쪽에 배치.
+    // trackedItems는 홈 표시 순서와 동일 (store에 저장된 순서). due 안에서 그 순서를 보존.
+    const visibleIds = new Set(
+      realItems.slice(0, VIEWPORT_PRIORITY_COUNT).map((i) => i.id),
+    );
+    const viewportDue = dueItems.filter((i) => visibleIds.has(i.id));
+    const offscreenDue = dueItems.filter((i) => !visibleIds.has(i.id));
+    const queue = [...viewportDue, ...offscreenDue];
+
+    console.log(
+      `[PriceChecker] 시작: due ${queue.length}/${realItems.length}개 (viewport ${viewportDue.length}, offscreen ${offscreenDue.length}, 5초 후)`,
+    );
     runningRef.current = true;
-    queueRef.current = [...realItems];
+    queueRef.current = queue;
     setTimeout(processNext, 5000);
   }, [active, trackedItems, processNext]);
+
+  // 1.0.17: 처리 끝마다 lastWebViewCheckedAt 마킹 → 6h TTL 가드 활성화.
+  // 성공/실패/차단 무관 (차단 케이스에 즉시 재시도 폭주 방지가 핵심). zustand persist로 AsyncStorage 자동 저장.
+  const markChecked = useCallback((id: string) => {
+    const now = Date.now();
+    const items = useAppStore.getState().trackedItems;
+    useAppStore.setState({
+      trackedItems: items.map((i) =>
+        i.id === id ? { ...i, lastWebViewCheckedAt: now } : i,
+      ),
+    });
+  }, []);
 
   const handleResult = useCallback(
     async (data: ScrapedProduct) => {
       const item = currentItemRef.current;
       if (!item) return;
+
+      markChecked(item.id);
 
       const prevPrice = item.currentPrice;
       const newPrice = data.price;
@@ -195,6 +243,7 @@ export default function PriceChecker({ active }: { active: boolean }) {
       if (
         notificationEnabled &&
         newPrice > 0 &&
+        item.targetPrice &&
         newPrice <= item.targetPrice &&
         prevPrice > item.targetPrice
       ) {
@@ -210,17 +259,20 @@ export default function PriceChecker({ active }: { active: boolean }) {
         });
       }
 
-      setTimeout(processNext, 1000);
+      setTimeout(processNext, randomJitterMs());
     },
-    [updateItemPrice, notificationEnabled, processNext],
+    [updateItemPrice, notificationEnabled, processNext, markChecked],
   );
 
-  const handleError = useCallback((_reason?: 'challenge' | 'unknown') => {
-    console.log(
-      `[PriceChecker] 실패: ${currentItemRef.current?.productName?.slice(0, 20)}`,
-    );
-    setTimeout(processNext, 1000);
-  }, [processNext]);
+  const handleError = useCallback(
+    (_reason?: 'challenge' | 'unknown') => {
+      const item = currentItemRef.current;
+      console.log(`[PriceChecker] 실패: ${item?.productName?.slice(0, 20)}`);
+      if (item) markChecked(item.id);
+      setTimeout(processNext, randomJitterMs());
+    },
+    [processNext, markChecked],
+  );
 
   return (
     <CoupangScraper

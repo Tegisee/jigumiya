@@ -10,6 +10,12 @@ export interface TrackedItem {
   thumbnail: string;
   priceHistory: { date: string; price: number }[];
   createdAt: number;
+  /**
+   * 1.0.17: WebView 가격 체크를 마지막으로 시도한 시점 (성공/실패 무관).
+   * 포그라운드 자동 새로고침의 TTL(기본 6h) 가드용. Akamai 차단 시 즉시 재시도 폭주 방지.
+   * realPrice는 lastRealPriceUpdatedAt에서 추적되지만, 그건 "성공만 기록" → 차단 누적 회피용으로는 부적합.
+   */
+  lastWebViewCheckedAt?: number;
 }
 
 // ──────────────────────────────────────────────────────────

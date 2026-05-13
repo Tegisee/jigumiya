@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { ProductCard } from '../../components/ProductCard';
+import PriceChecker from '../../components/PriceChecker';
 import { hasCoupangApiKeys, generateDeepLink } from '../../services/coupangApi';
 import {
   fetchActiveJigumiyaEvent,
@@ -38,19 +39,29 @@ export default function HomeScreen() {
     event: EventBestJigumiya;
     daysUntil: number;
   } | null>(null);
+  // 1.0.17 자동 새로고침 트리거. mount + 포그라운드 복귀마다 토글링으로 PriceChecker useEffect 재실행.
+  // PriceChecker 내부 runningRef로 중복 실행 방지, TTL 6h 가드로 최근 체크는 자동 스킵.
+  const [checkTrigger, setCheckTrigger] = useState(0);
 
   useEffect(() => {
     // productId 누락 항목 자가 치유 (단축 URL resolve 실패로 하트 버튼 사라진 케이스 복구)
     backfillProductIds();
+    // 콜드 스타트 자동 새로고침 트리거 — sync 후 약간 지연으로 trackedItems 머지 완료 대기
+    const coldStartTimer = setTimeout(() => setCheckTrigger((n) => n + 1), 3000);
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         syncFromFirestore();
+        // sync 머지 완료 + 알림 라우팅 등 안정화 후 트리거
+        setTimeout(() => setCheckTrigger((n) => n + 1), 2000);
       }
       appStateRef.current = nextState;
     });
 
-    return () => sub.remove();
+    return () => {
+      clearTimeout(coldStartTimer);
+      sub.remove();
+    };
   }, [syncFromFirestore, backfillProductIds]);
 
   // 활성 이벤트(D-7 이내): event_best_jigumiya 1회 조회. 활성 시 풀-width 배너 노출.
@@ -277,8 +288,8 @@ export default function HomeScreen() {
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
-      {/* PriceChecker 비활성화 — 파트너스 API 승인 후 재활성화 예정 */}
-      {/* <PriceChecker active={checkActive} /> */}
+      {/* 1.0.17 포그라운드 자동 새로고침 — TTL 6h + viewport 우선 + 3~8s 지터 (Akamai 완화) */}
+      <PriceChecker active={checkTrigger > 0} key={checkTrigger} />
     </SafeAreaView>
   );
 }

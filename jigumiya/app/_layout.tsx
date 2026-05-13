@@ -86,17 +86,24 @@ export default function RootLayout() {
       // Functions 컨테이너 워밍업 — fire-and-forget, 쿠팡 공유 첫 호출 cold start 제거
       warmupResolveAffiliate();
       await registerForPushNotifications();
+      // 1.0.17: 콜드 스타트 직후 Firestore 최신값 반영 — 홈 화면(tabs/index)이 mount되기 전에도
+      // realPrice/priceHistory 머지가 끝나야 PriceChecker TTL/가격 비교가 신선한 값으로 동작.
+      // 홈 화면 mount 시 syncFromFirestore 호출이 별도로 있지만, 알림 진입 등 다른 라우트
+      // 콜드 스타트 경로에서는 동기화 누락 → 본 layout에서 1회 보장.
+      useAppStore.getState().syncFromFirestore();
     })();
 
     // 앱 실행 직후 뱃지 초기화
     clearBadgeCount();
 
-    // background → active 전환 시 뱃지 초기화 + Functions warmup 재발사
+    // background → active 전환 시 뱃지 초기화 + Functions warmup 재발사 + 1.0.17 Firestore 동기화
     // (idle timeout으로 인스턴스가 종료된 케이스 보강 — 다음 callResolveAffiliate 콜드 회피)
+    // sync는 홈 화면도 별도 호출하지만, 디테일/이벤트/관리자 등 다른 화면에서 복귀할 때 누락 방지.
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         clearBadgeCount();
         warmupResolveAffiliate();
+        useAppStore.getState().syncFromFirestore();
       }
     });
 
