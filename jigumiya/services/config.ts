@@ -25,13 +25,21 @@ export const STORE_LINKS = {
   android: 'https://play.google.com/store/apps/details?id=com.jigumiya.app',
 };
 
-/** 플랫폼별 단일 스토어 링크 — 공유 메시지에서 한 줄만 노출 */
+/** 플랫폼별 단일 스토어 링크 — 호출처 없을 시 제거 예정. 호환용 유지. */
 export function getStoreLinkForPlatform(): string {
   return Platform.OS === 'ios' ? STORE_LINKS.ios : STORE_LINKS.android;
 }
 
+/**
+ * 앱 공유 메시지 — 1.0.17: 어느 기기에서 공유하든 App Store + Google Play 양쪽 링크 포함.
+ * 받는 사람이 본인 기기에 맞는 링크를 직접 선택. iPhone 사용자가 안드로이드 친구에게 공유해도 정상 동작.
+ */
 export function getAppShareMessage(): string {
-  const link = getStoreLinkForPlatform();
-  const linkText = link ? `\n\n${link}` : '';
-  return `쿠팡 가격 추적 앱 '지금이야'를 써보세요!\n원하는 가격에 알려주는 스마트 알림 📉${linkText}`;
+  return [
+    `쿠팡 가격 추적 앱 '지금이야'를 써보세요!`,
+    `원하는 가격에 알려주는 스마트 알림 📉`,
+    ``,
+    `iPhone: ${STORE_LINKS.ios}`,
+    `Android: ${STORE_LINKS.android}`,
+  ].join('\n');
 }
