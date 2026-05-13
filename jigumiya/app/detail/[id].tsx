@@ -21,6 +21,7 @@ import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
+import { getCoupangProductUrl } from '../../services/coupangApi';
 import { useFavoriteToggle } from '../../hooks/useFavoriteToggle';
 
 export default function DetailScreen() {
@@ -56,8 +57,13 @@ export default function DetailScreen() {
 
   const handleRefresh = useCallback(() => {
     if (!item || refreshing) return;
+    // 1.0.17: resolvedUrl 누락 케이스(아이고 공유상품 등)에서도 productId 기반 vp URL로 동작
+    const targetUrl = getCoupangProductUrl(item);
+    if (!targetUrl || targetUrl.includes('link.coupang.com')) {
+      Alert.alert('새로고침 불가', '이 상품은 자동 새로고침을 지원하지 않습니다');
+      return;
+    }
     setRefreshing(true);
-    const targetUrl = item.resolvedUrl || item.url;
     setScrapeUrl(targetUrl);
     timeoutRef.current = setTimeout(() => {
       setRefreshing(false);

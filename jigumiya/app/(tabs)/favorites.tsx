@@ -22,7 +22,7 @@ import {
   removeFavoriteRef,
   incrementFavoriteCount,
 } from '../../services/firebase';
-import { generateDeepLink } from '../../services/coupangApi';
+import { generateDeepLink, getCoupangProductUrl } from '../../services/coupangApi';
 import type { FavoriteRef, SharedProduct } from '../../types';
 
 type MetadataState = SharedProduct | null; // null = 조회 완료 but 부재 / undefined = 미조회
@@ -89,7 +89,12 @@ export default function FavoritesScreen() {
   }, [favorites]);
 
   const handleBuy = async (product: SharedProduct) => {
-    const targetUrl = product.resolvedUrl || product.url;
+    // 1.0.17: 아이고에서 추가된 shared_products는 resolvedUrl 누락 → productId fallback
+    const targetUrl = getCoupangProductUrl(product);
+    if (!targetUrl) {
+      Alert.alert('오류', '구매 링크가 없습니다');
+      return;
+    }
     try {
       const deepLink = await generateDeepLink(targetUrl);
       if (deepLink?.shortenUrl) {

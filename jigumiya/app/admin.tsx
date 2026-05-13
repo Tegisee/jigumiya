@@ -20,6 +20,7 @@ import {
   fetchAllSharedProducts,
   adminUpdateRealPrice,
 } from '../services/firebase';
+import { getCoupangProductUrl } from '../services/coupangApi';
 import type { SharedProduct } from '../types';
 import CoupangScraper, {
   ScrapedProduct,
@@ -32,7 +33,20 @@ import CoupangScraper, {
 const DEVICE_SLOT = Platform.OS === 'android' ? 1 : 0;
 const DEVICE_LABEL = Platform.OS === 'android' ? 'Android (홀수)' : 'iOS (짝수)';
 
-const SLEEP_BETWEEN_MS = 1500; // 상품 간 sleep — 쿠팡 봇 차단 회피
+// 1.0.17 Akamai 완화: 1.5s 고정 → 3~8s 랜덤 지터. 분당 12~24회 → 8~20회로 낮춰 BM 임계 회피.
+// 사용자 행동(스크롤/탐색) 분포에 가까운 비균등 패턴이 BM 봇 판정에 더 유리.
+const SLEEP_BETWEEN_MIN_MS = 3000;
+const SLEEP_BETWEEN_MAX_MS = 8000;
+function randomJitterMs(): number {
+  return Math.floor(
+    SLEEP_BETWEEN_MIN_MS + Math.random() * (SLEEP_BETWEEN_MAX_MS - SLEEP_BETWEEN_MIN_MS),
+  );
+}
+// 1.0.17 Akamai 완화: 20개씩 처리 후 5분 휴식 — Akamai TTL 자체 해제 윈도우 확보.
+// 84개 sequential 처리 시 약 4번 휴식 → 총 순회 시간 +20분.
+const BATCH_SIZE = 20;
+const BATCH_REST_MS = 5 * 60 * 1000;
+
 const RECENT_RESULT_LIMIT = 15;
 const WAIT_OPTIONS = [10, 15, 30, 60, 120] as const; // 분
 const DEFAULT_WAIT_MIN = 30;
@@ -57,6 +71,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// 정지 가능한 sleep — 500ms 단위로 stopRef 체크. 5분 휴식 중에도 정지 즉시 반응.
+async function interruptibleSleep(
+  ms: number,
+  stopRef: { current: boolean },
+  onTick?: (remainingMs: number) => void,
+): Promise<void> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (stopRef.current) return;
+    const remaining = end - Date.now();
+    onTick?.(remaining);
+    await sleep(Math.min(500, remaining));
+  }
+  onTick?.(0);
+}
+
 export default function AdminScreen() {
   const router = useRouter();
 
@@ -75,6 +105,8 @@ export default function AdminScreen() {
   const [nextRunAt, setNextRunAt] = useState<number | null>(null);
   // UI 표시용 남은 초 — 매 tick마다 (nextRunAt - Date.now()) 재계산.
   const [countdownSec, setCountdownSec] = useState<number | null>(null);
+  // 20개 배치 휴식 카운트다운 (1.0.17). null=휴식 안 함.
+  const [restRemainingSec, setRestRemainingSec] = useState<number | null>(null);
 
   const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const scrapeKeyRef = useRef(0);
@@ -165,7 +197,8 @@ export default function AdminScreen() {
 
   const scrapeOne = useCallback((item: SharedProduct): Promise<ScrapeResult> => {
     return new Promise((resolve) => {
-      const targetUrl = item.resolvedUrl || item.url;
+      // 1.0.17: 아이고에서 추가된 shared_products는 resolvedUrl 누락 → productId 기반 vp URL fallback
+      const targetUrl = getCoupangProductUrl(item);
       // link.coupang.com 단축 URL은 스크래핑 불가 — startScrape 정책과 동일
       if (!targetUrl || targetUrl.includes('link.coupang.com')) {
         resolve({ ok: false });
@@ -263,9 +296,28 @@ export default function AdminScreen() {
 
         if (i === myProducts.length - 1) {
           completedFull = true;
+          break; // 마지막 상품 처리 후 sleep/휴식 스킵
         }
 
-        await sleep(SLEEP_BETWEEN_MS);
+        // 1.0.17: 매 BATCH_SIZE 처리 후 5분 휴식 (Akamai TTL 해제 윈도우).
+        // i+1 (다음 idx로 진입 직전)이 BATCH_SIZE 배수일 때 트리거.
+        const processedCount = i - startFrom + 1;
+        const isBatchBoundary = processedCount > 0 && processedCount % BATCH_SIZE === 0;
+        if (isBatchBoundary) {
+          console.log(
+            `[admin] 배치 휴식 진입 — 처리 ${processedCount}개, ${BATCH_REST_MS / 60000}분 대기`,
+          );
+          await interruptibleSleep(BATCH_REST_MS, stopRef, (remainingMs) => {
+            setRestRemainingSec(remainingMs > 0 ? Math.ceil(remainingMs / 1000) : null);
+          });
+          setRestRemainingSec(null);
+          if (stopRef.current) {
+            setResumeIdx(i + 1);
+            break;
+          }
+        } else {
+          await sleep(randomJitterMs());
+        }
       }
 
       setRunning(false);
@@ -363,6 +415,7 @@ export default function AdminScreen() {
     AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
     setRunning(false);
     setCurrentName('');
+    setRestRemainingSec(null);
   };
 
   // 자동 반복 토글 OFF 시 nextRunAt 즉시 정리 (영속화 포함)
@@ -501,6 +554,19 @@ export default function AdminScreen() {
             <View style={styles.progressBarBg}>
               <View style={[styles.progressBarFill, { width: `${progressPct}%` }]} />
             </View>
+          </View>
+        )}
+
+        {/* 배치 휴식 카운트다운 — 20개 처리 후 5분 휴식 중 */}
+        {restRemainingSec !== null && restRemainingSec > 0 && (
+          <View style={[styles.card, styles.countdownCard]}>
+            <Text style={styles.cardLabel}>배치 휴식 (쿠팡 봇 차단 회피)</Text>
+            <Text style={styles.countdownText}>
+              {Math.floor(restRemainingSec / 60)}분 {restRemainingSec % 60}초
+            </Text>
+            <Text style={styles.cardDesc}>
+              20개 처리 후 5분간 대기합니다. 정지를 눌러 즉시 중단할 수 있어요.
+            </Text>
           </View>
         )}
 

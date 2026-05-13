@@ -222,6 +222,30 @@ export function extractProductId(url: string): string | null {
   return null;
 }
 
+/**
+ * 스크래핑/구매 링크 결정 헬퍼 (1.0.17 Akamai 완화 + 아이고 fallback 신설).
+ *
+ * 우선순위:
+ *   1. resolvedUrl이 vp/vm 형태면 그대로 사용 (가장 안정적)
+ *   2. url이 vp/vm 형태면 사용
+ *   3. productId 있으면 `https://www.coupang.com/vp/products/{productId}` fallback
+ *      → 아이고에서 추가된 shared_products처럼 resolvedUrl 필드가 비어있는 케이스 흡수
+ *   4. 마지막 폴백으로 resolvedUrl/url 그대로 반환 (호출처가 link.coupang.com이면 차단)
+ *
+ * 반환값이 null이면 추적 자체 불가능 (productId/URL 모두 없음).
+ */
+export function getCoupangProductUrl(item: {
+  productId?: string;
+  resolvedUrl?: string;
+  url?: string;
+}): string | null {
+  const vpVmRe = /coupang\.com\/(vp|vm)\/products\//;
+  if (item.resolvedUrl && vpVmRe.test(item.resolvedUrl)) return item.resolvedUrl;
+  if (item.url && vpVmRe.test(item.url)) return item.url;
+  if (item.productId) return `https://www.coupang.com/vp/products/${item.productId}`;
+  return item.resolvedUrl || item.url || null;
+}
+
 /** URL에서 vendorItemId 추출 (쿼리 + URL-encoded 변형) */
 export function extractVendorItemId(url: string): string | null {
   if (!url) return null;

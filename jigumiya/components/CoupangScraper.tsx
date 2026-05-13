@@ -22,13 +22,25 @@ interface Props {
   onError: (reason?: 'challenge' | 'unknown') => void;
 }
 
-// 플랫폼별 UserAgent
-const USER_AGENT = Platform.select({
-  android:
-    'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-  default:
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-})!;
+// Akamai 핑거프린트 분산용 UA 풀 (1.0.17 신설).
+// 매 WebView 인스턴스마다 풀에서 1개 랜덤 선택 → 동일 단말이라도 UA 다양성 확보 → BM 단위 차단 회피.
+// 모든 후보는 실재하는 최신~최근 빌드. Chrome 120~123 / iOS 16.6~17.5 등 안전 범위.
+const IOS_UA_POOL = [
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+];
+const ANDROID_UA_POOL = [
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 14; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36',
+];
+function pickRandomUserAgent(): string {
+  const pool = Platform.OS === 'android' ? ANDROID_UA_POOL : IOS_UA_POOL;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 // 페이지 로드 전 coupang:// 딥링크 차단 — window.location 세터 오버라이드
 // Android: intent://, market:// 추가 차단
@@ -262,6 +274,11 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
   const activeBaseUrl = baseUrl || undefined;
   const activeUrl = activeHtml ? null : url;
 
+  // 1.0.17: sourceKey 변경 시마다 UA 풀에서 1개 재선택 → 동일 단말 핑거프린트 분산.
+  // useState/useEffect 사용 시 같은 인스턴스 안에서 변동되지만, WebView source 변경 시
+  // unmount/remount 도는 게 일반적이고, 호출처가 scrapeKey++로 key를 갱신함.
+  const userAgentRef = useRef<string>(pickRandomUserAgent());
+
   const sourceKey = activeHtml ? `html:${activeHtml.length}` : activeUrl;
   const prevKeyRef = useRef(sourceKey);
   if (sourceKey && sourceKey !== prevKeyRef.current) {
@@ -270,8 +287,9 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
     injectedRef.current = false;
     retryIndexRef.current = 0;
     challengeRetryRef.current = 0;
+    userAgentRef.current = pickRandomUserAgent();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    console.log('[Scraper] step2: WebView 시작! sourceKey=', typeof sourceKey === 'string' ? sourceKey.slice(0, 80) : sourceKey);
+    console.log('[Scraper] step2: WebView 시작! sourceKey=', typeof sourceKey === 'string' ? sourceKey.slice(0, 80) : sourceKey, 'ua=', userAgentRef.current.slice(0, 40));
     // 20초 타임아웃
     timeoutRef.current = setTimeout(() => {
       if (!doneRef.current) {
@@ -507,9 +525,14 @@ export default function CoupangScraper({ url, html, baseUrl, onResult, onError }
         suppressesIncrementalRendering={true}
         javaScriptEnabled
         domStorageEnabled
-        sharedCookiesEnabled
+        // 1.0.17 Akamai 완화: 쿠팡 앱 로그인 세션이 WebView로 흘러들어가면 BM이 인증 트래픽으로 분류 → 봇 임계 ↓.
+        // sharedCookies 차단 + incognito(비영속 세션) + cacheEnabled=false 조합으로 매 호출 fresh 게스트 세션 보장.
+        // 동일 효과: 사용자가 매번 쿠팡 로그아웃 + 캐시 삭제. 핑거프린트(canvas/WebGL)는 못 바꾸지만 세션 트리거는 제거.
+        sharedCookiesEnabled={false}
+        incognito
+        cacheEnabled={false}
         injectedJavaScriptBeforeContentLoaded={BLOCK_DEEPLINK_JS}
-        userAgent={USER_AGENT}
+        userAgent={userAgentRef.current}
       />
     </View>
   );
