@@ -166,6 +166,71 @@
 
 **진입 조건**: ~~1.0.18 베타 검증 통과~~ → 1.0.18+1.0.19 통합 빌드로 진행 (bn55/vc55). 베타 검증 통과 시 정식 출시.
 
+> ⚠️ **방향 전환 (2026-05-16)**: 1.0.19 베타 운영 중 Functions OG 파싱이 Akamai에 막혀 이미지/가격 누락 빈발 → realPrice 자체를 폐기하는 [docs/026](./026_ApiPriceOnly_Redesign.md) 채택. Issue 9의 priceStatus 머신 / WebView / 관리자 순회 / CF 트리거는 **bn57에서 전부 제거 예정**. Issue 10 참조.
+
+---
+
+## Issue 10 — apiPrice 단일 출처 전환 (realPrice 제거)
+
+**상태 (2026-05-16 신설)**: 📋 설계 확정, 코드 미착수. bn56 선행 패치 + bn57 본격 전환. 상세 [docs/026_ApiPriceOnly_Redesign.md](./026_ApiPriceOnly_Redesign.md).
+
+**배경**:
+- 1.0.16~1.0.19에 걸쳐 도입한 realPrice(WebView 스크래핑) 방식이 Akamai Bot Manager로 인해 구조적으로 불안정
+- 1.0.19 §1에서 상품 추가 경로의 WebView를 Functions OG 파싱으로 우회했으나 Functions IP 풀도 Akamai에 봇 분류되어 이미지/가격 누락 빈발
+- 관리자 기기 순회 운영 부담 (안드로이드 + 아이패드 상시 + 차단 시 대기)
+- dual-price(apiPrice + realPrice) 정합성 관리 복잡도 (priceStatus 머신 / sync race / 마이그레이션 부채)
+
+**결정**: realPrice 개념 완전 제거 → apiPrice 단일 출처(쿠팡 파트너스 API)로 전환. "기준가격" + "실제 결제가는 쿠팡에서 확인" 안내로 정직하게 운영.
+
+### bn56 선행 패치 (소규모, 즉시 효과)
+- [ ] **fix(add-item)** `searchProducts` fallback — Functions 메타 빈값 시 클라이언트 검색 API로 apiPrice/productImage/productName 채움. 이미지 표시율 80%+ 목표
+- [ ] **fix(home)** 홈 화면 여백 재확인 (1.0.19 §3 효과 검증 + 필요 시 조정)
+
+### bn57 본격 전환
+
+#### Phase A — 마이그레이션
+- [ ] `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성 + dry-run
+- [ ] 기존 shared_products에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` FieldValue.delete
+- [ ] `trackerCount=0 && favoriteCount=0` 문서 일괄 삭제
+
+#### Phase B — cron + Functions
+- [ ] `scripts/shared-price-checker/index.ts` realPrice 로직 제거 + targetReached 부활 + legacy 알림(morning/evening/broadcast_drop10/20) 정식 삭제
+- [ ] `functions/src/index.ts` `onSharedProductRealPriceChange` 트리거 deploy 해제 + 코드 삭제
+- [ ] `notifier.ts` 메시지 템플릿 "기준가격" 라벨 적용
+
+#### Phase C — 앱
+- [ ] `types/index.ts` realPrice/priceStatus 관련 필드 전부 제거
+- [ ] `store/useAppStore.ts` priceStatus 전이 / updateItemPrice / markChecked / syncFromFirestore 머지 단순화
+- [ ] `store/useAppStore.ts removeItem` + `services/firebase.ts deleteSharedIfOrphan` — trackerCount=0 자동 삭제
+- [ ] `app/modal/add-item.tsx` / `app/detail/[id].tsx` / `components/ProductCard.tsx` priceStatus 분기 전부 삭제 + "기준가격" 라벨 적용
+- [ ] `components/CoupangScraper.tsx` + `components/PriceChecker.tsx` 파일 삭제
+- [ ] `app/(tabs)/index.tsx` PriceChecker 렌더 제거
+- [ ] `app/detail/[id].tsx` 새로고침 버튼 제거
+- [ ] `app/admin.tsx` 처리 — **Option A(완전 제거) vs Option B(통계 전용 축소) 결정 필요**
+
+#### Phase D — 마이그레이션 실행 + 출시
+- [ ] dry-run 결과 검토 후 실제 실행
+- [ ] `meta/config_jigumiya.minRequiredVersion` 갱신
+
+### 결정 필요 항목
+- [ ] 관리자 모드 처리 — Option A(완전 제거) vs Option B(통계 전용 축소) — docs/026 §8
+- [ ] `favoriteCount=0` 추가 가드 (자주사는 미사용 상품 보호)
+- [ ] `priceHistory.length` 보존 가드 (가치 있는 시계열 보존)
+
+### 검증 시나리오 (bn57)
+1. 신규 추가 ≤2s + "기준가격 X원" 표시
+2. 첫 cron 갱신 후 그래프 1점 추가
+3. 두 번째 갱신 후 정상 LineChart
+4. 가격 하락 알림 — "기준가격이 내렸어요 ... 실제 결제가는 쿠팡에서 확인하세요"
+5. 목표가 도달 알림 — cron 발송 (CF 트리거 X)
+6. trackerCount=0 자동 삭제 + 재추가 시 새 priceHistory 시작
+7. 상세 라벨 + 안내 문구
+8. WebView 잔재 0 (관리자/상세/PriceChecker/admin)
+
+### 폐기되는 설계 문서
+- [docs/023_RealPrice_Architecture.md](./023_RealPrice_Architecture.md) — dual-price 분리, docs/026로 대체
+- [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md) — priceStatus 머신, docs/026로 폐기
+
 ---
 
 ## Issue 8 — shared_products 컬렉션에 아이고 상품 혼재
