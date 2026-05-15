@@ -2,7 +2,7 @@ import { Alert } from 'react-native';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { TrackedItem } from '../types';
+import { TrackedItem, PriceStatus } from '../types';
 import { MAX_TRACKED_ITEMS } from '../services/config';
 import {
   saveItemToFirestore,
@@ -334,6 +334,40 @@ export const useAppStore = create<AppState>()(
           if (l?.lastWebViewCheckedAt) {
             m = { ...m, lastWebViewCheckedAt: l.lastWebViewCheckedAt };
           }
+
+          // 1.0.19 §2 (docs/025) priceStatus 머지 — "더 진행된 상태 우선" 규칙.
+          //   INIT(0) < SYNCING(1) < TRACKING(2). undefined는 legacy 미마이그 문서로 'TRACKING' 간주.
+          //   네트워크 실패로 local-only 전이가 발생한 경우 remote/shared가 더 낮은 상태로 덮어쓰지 않도록 보호.
+          //   timestamps도 채택된 출처에서 함께 가져옴 — 일부 누락 시 다음 sync에서 자가 회복.
+          const statusRank = (s?: PriceStatus): number =>
+            s === 'TRACKING' || s === undefined ? 2 : s === 'SYNCING' ? 1 : 0;
+          type StatusCand = {
+            status?: PriceStatus;
+            firstRealPriceAt?: number;
+            trackingStartedAt?: number;
+          };
+          const cands: StatusCand[] = [
+            { status: r.priceStatus, firstRealPriceAt: r.firstRealPriceAt, trackingStartedAt: r.trackingStartedAt },
+          ];
+          if (l) {
+            cands.push({ status: l.priceStatus, firstRealPriceAt: l.firstRealPriceAt, trackingStartedAt: l.trackingStartedAt });
+          }
+          if (shared) {
+            cands.push({
+              status: shared.priceStatus,
+              firstRealPriceAt: shared.firstRealPriceAt,
+              trackingStartedAt: shared.trackingStartedAt,
+            });
+          }
+          const best = cands.reduce((acc, c) =>
+            statusRank(c.status) > statusRank(acc.status) ? c : acc,
+          );
+          m = {
+            ...m,
+            ...(best.status ? { priceStatus: best.status } : {}),
+            ...(best.firstRealPriceAt ? { firstRealPriceAt: best.firstRealPriceAt } : {}),
+            ...(best.trackingStartedAt ? { trackingStartedAt: best.trackingStartedAt } : {}),
+          };
           return m;
         });
         set({ trackedItems: merged });

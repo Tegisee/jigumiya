@@ -814,24 +814,37 @@ async function main() {
 
     if (newPrice <= 0) continue;
 
-    // priceHistory: 같은 날 갱신은 덮어쓰기, 새 날은 append. 최근 90일 유지.
-    const today = new Date().toISOString().slice(0, 10);
-    const history: { date: string; price: number }[] = data.priceHistory || [];
-    const last = history[history.length - 1];
-    if (!last || last.date !== today) {
-      history.push({ date: today, price: newPrice });
+    // 1.0.19 §2 (docs/025) — priceHistory/lowest/highest 갱신은 TRACKING 상태에서만 진행.
+    //   - INIT: realPrice 미수신 baseline. 그래프 미표시 단계라 apiPrice 시계열 누적 무의미
+    //   - SYNCING: 앱이 첫 realPrice를 1점으로 reset한 상태. cron이 apiPrice push로 정합성 깨면 안 됨
+    //   - TRACKING: 기존 누적 로직 유지
+    //   - undefined (legacy): 'TRACKING'으로 간주 (마이그레이션 전 호환)
+    // currentPrice/apiPrice mirror + lastCheckedAt + needsCheck는 모든 상태에서 갱신 (cron 측정 연속성).
+    const cronPriceStatus = (data.priceStatus as string | undefined) ?? 'TRACKING';
+    const allowHistoryWrite = cronPriceStatus === 'TRACKING';
+
+    let trimmed: { date: string; price: number }[] = data.priceHistory || [];
+    let lowestPrice = Number(data.lowestPrice || newPrice);
+    let highestPrice = Number(data.highestPrice || newPrice);
+
+    if (allowHistoryWrite) {
+      // priceHistory: 같은 날 갱신은 덮어쓰기, 새 날은 append. 최근 90일 유지.
+      const today = new Date().toISOString().slice(0, 10);
+      const history: { date: string; price: number }[] = [...trimmed];
+      const last = history[history.length - 1];
+      if (!last || last.date !== today) {
+        history.push({ date: today, price: newPrice });
+      } else {
+        last.price = newPrice;
+      }
+      trimmed = history.slice(-PRICE_HISTORY_KEEP);
+      lowestPrice = Math.min(lowestPrice, newPrice);
+      highestPrice = Math.max(highestPrice, newPrice);
     } else {
-      last.price = newPrice;
+      console.log(
+        `[Skip-HistoryWrite] ${productId} priceStatus=${cronPriceStatus} — priceHistory 누적 스킵`,
+      );
     }
-    const trimmed = history.slice(-PRICE_HISTORY_KEEP);
-    const lowestPrice = Math.min(
-      Number(data.lowestPrice || newPrice),
-      newPrice,
-    );
-    const highestPrice = Math.max(
-      Number(data.highestPrice || newPrice),
-      newPrice,
-    );
 
     // docs/023: apiPrice 변동 절댓값 >= 10%면 needsCheck:true 박음.
     // CF onUpdate가 realPrice 갱신 시 false로 클리어, 앱/관리자 기기는 needsCheck=true 우선 확인.
@@ -843,9 +856,9 @@ async function main() {
     await item.ref.update({
       currentPrice: newPrice,
       apiPrice: newPrice, // docs/023: cron은 apiPrice mirror (realPrice는 앱 WebView 출처)
-      priceHistory: trimmed,
-      lowestPrice,
-      highestPrice,
+      ...(allowHistoryWrite
+        ? { priceHistory: trimmed, lowestPrice, highestPrice }
+        : {}),
       lastCheckedAt: Date.now(),
       ...(needsCheck ? { needsCheck: true } : {}),
     });
@@ -868,13 +881,22 @@ async function main() {
     // 1.0.19 §2 (docs/025) — priceStatus 가드. TRACKING 상태에서만 알림 발송.
     //   - INIT: realPrice 미수신 baseline 단계 → 알림 X
     //   - SYNCING: 첫 realPrice가 baseline이라 변동 판정 불가 → 알림 X
-    //   - TRACKING: 정상 변동 → 알림 발송
+    //   - TRACKING: 정상 변동 → 알림 발송 (단 아래 realPrice baseline 추가 가드 통과해야)
     //   - undefined (legacy 미마이그레이션): 'TRACKING'으로 간주
     // priceHistory / apiPrice / currentPrice 갱신은 위에서 이미 완료 — 알림만 차단.
-    const productPriceStatus = (data.priceStatus as string | undefined) ?? 'TRACKING';
-    if (productPriceStatus !== 'TRACKING') {
+    if (cronPriceStatus !== 'TRACKING') {
       console.log(
-        `[Skip-NonTracking] ${productId} priceStatus=${productPriceStatus} — 알림 스킵`,
+        `[Skip-NonTracking] ${productId} priceStatus=${cronPriceStatus} — 알림 스킵`,
+      );
+      continue;
+    }
+
+    // 1.0.19 §2 (docs/025 §알림 푸시 구조 확정) — realPrice 기반 알림 강화.
+    //   prevRealPrice <= 0이면 apiPrice fallback baseline (즉시할인 미반영) → false positive 잦음 → 알림 스킵.
+    //   priceStatus=TRACKING이지만 realPrice 미수집인 경우 = legacy 미마이그 문서 (마이그 후엔 INIT으로 분류되어 위 가드에서 차단).
+    if (prevRealPrice <= 0) {
+      console.log(
+        `[Skip-NoRealBaseline] ${productId} prevRealPrice=0 (api-only baseline) — 알림 스킵`,
       );
       continue;
     }
