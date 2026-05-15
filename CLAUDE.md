@@ -22,9 +22,9 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ---
 
-## 현재 상태 (2026-05-14 기준)
+## 현재 상태 (2026-05-16 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 테스트 완료 — **iOS 실패 발견, 1.0.18 (bn54/vc54) 코드 작업 완료 — 빌드 대기.**
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 테스트 완료 — iOS 실패 발견. 1.0.18 (bn54/vc54) 코드 작업 완료 — 빌드 대기. **1.0.19 작업 계획 확정 (가격 상태 머신 + 상품 추가 WebView 제거, `docs/025` 참조) — 1.0.18 베타 검증 후 진입.**
 - **1.0.18 작업 (2026-05-14 완료, 빌드 대기)**: iOS 한정 incognito 제거 (WKWebView nonPersistentDataStore의 Akamai sec_cpt Set-Cookie race 의심 → default dataStore로 전환, 챌린지 1회 통과 후 영속 재사용. Android는 incognito=true 유지) + 홈 하단 여백 축소(빈 공간 제거) + 앱 공유 메시지 iPhone/Android 줄간격 1줄 추가(잘못 눌림 방지)
 - **1.0.17 베타 결과 (2026-05-14)**: Android = 상품 추가 / 관리자 순회 43개 성공 / 알림 정상 ✅ — iOS = 상품 추가 + 상세 새로고침 + 관리자 순회 전체 실패 ❌ → 1.0.18 fix. shared_products 93개로 증가, 삭제 상품 3개 X 표시 정상.
 - **1.0.17 작업 (2026-05-13~14 완료, 코드만)**: Akamai 완화 4종(UA 풀 + 쿠키 자동 초기화 + 관리자 3~8s 지터 + 20개 5분 휴식) + productId fallback URL + 포그라운드 자동 새로고침(TTL 6h + viewport + lastWebViewCheckedAt) + 콜드 스타트 syncFromFirestore + cron 알림 realPrice baseline 전환 + 앱 공유 양쪽 스토어 + 앱구조 개편(추적중 탭 + 홈 ScrollView + 한도 10 → 20). 상세 [docs/changelog.md](./docs/changelog.md)
@@ -51,6 +51,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - 📦 **Issue 5** — 1.0.18 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
+- 🆕 **Issue 9** — 1.0.19 작업 계획 (가격 상태 머신 + 상품 추가 WebView 제거, [docs/025](./docs/025_PriceStateMachine.md))
 
 > Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 > Issue 5의 Akamai 완화 4종 + 자동 새로고침 2종 + 공유 양쪽 링크 + productId fallback + cron baseline + 앱구조 개편은 1.0.17 코드 작업으로 완료되어 [docs/changelog.md](./docs/changelog.md)로 이동.
@@ -71,6 +72,8 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - TTL 6h 가드 동작 — `[PriceChecker] 6h TTL 가드 ... 모두 최근 체크, 스킵` 로그 표본
 - cron 알림 baseline 전환 — `[notif baseline=real|api]` 로그 분포 / priceDrop 발송 빈도 변화
 - Issue 4 잔여 검증 (CF 트리거 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
+
+**🆕 우선순위 2 — 1.0.19 작업 (1.0.18 베타 검증 통과 후 진입)**: 가격 상태 머신(INIT → SYNCING → TRACKING) 도입 + 상품 추가 WebView 완전 제거(파트너스 API만으로 즉시 저장) + 알림 가드(TRACKING만 발송) + 홈 ScrollView flexGrow + 관리자 순회 옵션(홀수/짝수/전체) + 모니터링(상세 "N시간 전" + price_update_logs). 상세 [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md).
 
 **🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
 
@@ -223,6 +226,7 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - [docs/019_Phase3_SharedProducts.md](./docs/019_Phase3_SharedProducts.md)
 - [docs/020_PriceChecker_CronDesign.md](./docs/020_PriceChecker_CronDesign.md)
 - [docs/023_RealPrice_Architecture.md](./docs/023_RealPrice_Architecture.md) — apiPrice/realPrice 분리 아키텍처 (1.0.16 작업)
+- [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md) — 가격 상태 머신 + 상품 추가 WebView 제거 (1.0.19 계획)
 
 ### 기타
 - 글로벌 지시: `~/.claude/CLAUDE.md`

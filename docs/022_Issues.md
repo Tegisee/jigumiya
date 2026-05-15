@@ -105,6 +105,48 @@
 
 ---
 
+## Issue 9 — 1.0.19 작업 계획 (가격 상태 머신 + 상품 추가 WebView 제거)
+
+**상태**: 📋 설계 확정 (2026-05-15) — 코드 작업 미착수. 1.0.18 베타 검증 통과 후 진입. 상세 [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md).
+
+**배경**:
+- 1.0.16 RealPrice 아키텍처(`docs/023`) 이후에도 상품 추가 시 WebView로 realPrice를 동기 수집 → Akamai 챌린지/iOS race로 추가 자체 실패 사례 발생 (1.0.17 iOS)
+- 첫 realPrice 수신을 변동으로 오탐 → 상세페이지 "가격 하락 감지" 오표시 + false positive 알림
+- cron(apiPrice)/CF 트리거(realPrice) baseline 불일치로 알림 가드 일관성 부재
+
+**작업 항목 (5순위)**:
+
+### 1순위 — 상품 추가 UX 개선 (WebView 제거)
+- [ ] **chore** `app/modal/add-item.tsx`에서 `CoupangScraper` 의존 제거 — `step === 'scraping'` 단계 삭제, `'url' → 'target'` 2단계로 단축
+- [ ] **feat** Functions `resolveAndGenerateAffiliateUrl` 응답 스키마 확장 — `productName/productImage/apiPrice` 포함
+- [ ] **chore** 추가 평균 소요시간 ≤2s 목표 (1.0.18 ~30s 대비)
+
+### 2순위 — 가격 상태 머신 도입
+- [ ] **feat** `shared_products`에 `priceStatus` 필드 추가 (`INIT | SYNCING | TRACKING`) + `firstRealPriceAt` + `trackingStartedAt`
+- [ ] **feat** realPrice write 경로(앱/CF/cron)에 priceStatus 전이 로직 통일
+- [ ] **fix** 상세페이지 INIT/SYNCING/TRACKING별 그래프/배지 분기 — "가격 하락 감지" 오표시 수정
+- [ ] **fix** 현재가 vs 그래프 불일치 — apiPrice는 그래프 미포함 (참고용만)
+- [ ] **feat** 마이그레이션 스크립트 `scripts/migration/2026-05-priceStatus-backfill.mjs` — 기존 93개 문서 dry-run 후 실제 backfill
+
+### 3순위 — 홈 화면 여백
+- [ ] **fix** `app/(tabs)/index.tsx` ScrollView `contentContainerStyle.flexGrow: 1` 추가
+
+### 4순위 — 관리자 모드 순회 옵션
+- [ ] **feat** 분배 모드 chip UI 추가 (전체/홀수/짝수/자동) + AsyncStorage `admin.distributionMode` 저장
+
+### 5순위 — 모니터링
+- [ ] **feat** 상세페이지 "N시간 전 업데이트" 표시 (`lastRealPriceUpdatedAt` 기반, 6h 이상 시 노란색)
+- [ ] **feat** `price_update_logs` 통계 — 관리자 모드 화면에 오늘/어제 succeeded/failed/avgDuration 표시
+
+### 알림 푸시 구조 확정
+- [ ] **fix** cron + CF 트리거 모두 `priceStatus === 'TRACKING'` 가드 추가
+- [ ] **cleanup** apiPrice 기반 알림 fallback 분기 제거 검토 (false positive 원인)
+- [ ] **cleanup** legacy `morning`/`evening`/`broadcast_drop10/20` 코드 정식 삭제
+
+**진입 조건**: 1.0.18 베타 검증 통과 (iOS incognito 분기 효과 확인 + Android 회귀 없음)
+
+---
+
 ## Issue 8 — shared_products 컬렉션에 아이고 상품 혼재
 
 **상태**: 신규 발견 (2026-05-12). 아이고 이식 작업(Issue 6) 시 별도 처리.
