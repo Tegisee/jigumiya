@@ -850,17 +850,39 @@ export async function fetchAllSharedProducts(): Promise<SharedProduct[]> {
 /**
  * 관리자 모드 — realPrice + lastRealPriceUpdatedAt + needsCheck:false 업데이트.
  * 1B(useAppStore.updateItemPrice)와 다른 점: needsCheck를 명시적 클리어 (CF 트리거 부담 감소).
+ *
+ * 1.0.19 §2 (docs/025): priceStatus 전이도 함께 처리.
+ *   - INIT → SYNCING: 첫 realPrice, firstRealPriceAt 기록
+ *   - SYNCING → TRACKING: 두 번째 realPrice, trackingStartedAt 기록
+ *   - TRACKING(or legacy undefined): 그대로 유지
+ * snapshot read 1회 추가 비용. 관리자 순회 빈도는 낮아 무시 가능 + race는 곧 다음 사이클이 수렴.
  */
 export async function adminUpdateRealPrice(
   productId: string,
   realPrice: number,
 ): Promise<void> {
+  const now = Date.now();
+  let transitionFields: Partial<SharedProduct> = {};
+  try {
+    const snap = await getDoc(doc(db, 'shared_products', productId));
+    const before = snap.exists() ? (snap.data() as SharedProduct) : null;
+    const currentStatus = before?.priceStatus ?? 'TRACKING';
+    if (currentStatus === 'INIT') {
+      transitionFields = { priceStatus: 'SYNCING', firstRealPriceAt: now };
+    } else if (currentStatus === 'SYNCING') {
+      transitionFields = { priceStatus: 'TRACKING', trackingStartedAt: now };
+    }
+    // TRACKING / legacy: 전이 없음
+  } catch (e) {
+    console.warn('[admin] priceStatus 전이 read 실패 — 전이 스킵:', e);
+  }
   await setDoc(
     doc(db, 'shared_products', productId),
     {
       realPrice,
-      lastRealPriceUpdatedAt: Date.now(),
+      lastRealPriceUpdatedAt: now,
       needsCheck: false,
+      ...transitionFields,
     },
     { merge: true },
   );

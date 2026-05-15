@@ -162,15 +162,59 @@ export const useAppStore = create<AppState>()(
         updateItemInFirestore(id, { targetPrice: price });
       },
       updateItemPrice: (id, newPrice) => {
+        if (newPrice <= 0) return;
         const today = new Date().toISOString().slice(0, 10);
-        // Firestore에 함께 저장할 최신 priceHistory를 외부 변수로 캡처
-        // (set 콜백 내부에서 만들어지지만 updateItemInFirestore에도 동일 값 전달 필요)
+        const now = Date.now();
+        // 1.0.19 §2 (docs/025) — realPrice write 시 INIT → SYNCING → TRACKING 자동 전이.
+        // 외부 캡처 변수로 set 콜백 결과를 받아 Firestore/shared 쓰기에 동일 값 전달.
         let nextHistory: { date: string; price: number }[] | null = null;
         let productId: string | undefined;
+        let nextStatus: 'INIT' | 'SYNCING' | 'TRACKING' | undefined;
+        let firstRealPriceAt: number | undefined;
+        let trackingStartedAt: number | undefined;
         set((state) => ({
           trackedItems: state.trackedItems.map((item) => {
-            if (item.id !== id || newPrice === 0) return item;
+            if (item.id !== id) return item;
             productId = item.productId;
+            // legacy 호환: priceStatus 미설정 = 마이그레이션 전 기존 상품 → 'TRACKING'으로 간주
+            const currentStatus = item.priceStatus ?? 'TRACKING';
+
+            if (currentStatus === 'INIT') {
+              // SYNCING 전이 — baseline 통일(currentPrice=realPrice), priceHistory 1점 시작
+              nextStatus = 'SYNCING';
+              firstRealPriceAt = now;
+              nextHistory = [{ date: today, price: newPrice }];
+              return {
+                ...item,
+                currentPrice: newPrice,
+                priceHistory: nextHistory,
+                priceStatus: 'SYNCING' as const,
+                firstRealPriceAt: now,
+              };
+            }
+
+            if (currentStatus === 'SYNCING') {
+              // TRACKING 전이 — 두 번째 realPrice 도착. 그래프 누적 시작.
+              nextStatus = 'TRACKING';
+              trackingStartedAt = now;
+              const history = [...item.priceHistory];
+              const last = history[history.length - 1];
+              if (last?.date === today) {
+                last.price = newPrice;
+              } else {
+                history.push({ date: today, price: newPrice });
+              }
+              nextHistory = history.slice(-30);
+              return {
+                ...item,
+                currentPrice: newPrice,
+                priceHistory: nextHistory,
+                priceStatus: 'TRACKING' as const,
+                trackingStartedAt: now,
+              };
+            }
+
+            // TRACKING (또는 legacy fallback) — 기존 동작 유지
             const history = [...item.priceHistory];
             const last = history[history.length - 1];
             if (last?.date === today) {
@@ -178,29 +222,38 @@ export const useAppStore = create<AppState>()(
             } else {
               history.push({ date: today, price: newPrice });
             }
-            const sliced = history.slice(-30);
-            nextHistory = sliced;
+            nextHistory = history.slice(-30);
             return {
               ...item,
               currentPrice: newPrice,
-              priceHistory: sliced,
+              priceHistory: nextHistory,
             };
           }),
         }));
+
+        if (!nextHistory) return;
+
         // priceHistory 누락 시 백그라운드 복귀 후 syncFromFirestore가 store를 덮어쓸 때
         // 누적 그래프가 1개로 리셋되는 사고 방어 (이전: currentPrice만 저장)
         updateItemInFirestore(id, {
           currentPrice: newPrice,
-          ...(nextHistory ? { priceHistory: nextHistory } : {}),
+          priceHistory: nextHistory,
+          ...(nextStatus ? { priceStatus: nextStatus } : {}),
+          ...(firstRealPriceAt ? { firstRealPriceAt } : {}),
+          ...(trackingStartedAt ? { trackingStartedAt } : {}),
         });
         // 1B (docs/023): WebView 결과는 사실상 realPrice → shared_products 역방향 mirror.
         // cron은 lastRealPriceUpdatedAt 확인해 최근 WebView 갱신 있으면 apiPrice 호출 skip.
         // needsCheck는 CF onUpdate 트리거가 알림 검토 후 클리어할 책임이라 미터치.
-        if (productId && nextHistory) {
+        // 1.0.19 §2: priceStatus 전이 시 timestamps도 shared에 mirror (CF 트리거가 후속 알림 가드에 사용).
+        if (productId) {
           upsertSharedProduct({
             productId,
             realPrice: newPrice,
-            lastRealPriceUpdatedAt: Date.now(),
+            lastRealPriceUpdatedAt: now,
+            ...(nextStatus ? { priceStatus: nextStatus } : {}),
+            ...(firstRealPriceAt ? { firstRealPriceAt } : {}),
+            ...(trackingStartedAt ? { trackingStartedAt } : {}),
           });
         }
       },

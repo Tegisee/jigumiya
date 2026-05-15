@@ -105,17 +105,23 @@ export default function DetailScreen() {
     );
   }
 
+  // 1.0.19 §2 (docs/025) — 가격 상태 머신. 미설정(legacy) 시 'TRACKING'으로 간주.
+  const priceStatus = item.priceStatus ?? 'TRACKING';
+  const isInit = priceStatus === 'INIT';
+  const isSyncing = priceStatus === 'SYNCING';
+  const isTracking = priceStatus === 'TRACKING';
+
   const prices = item.priceHistory.map((p) => p.price);
   const maxPrice = Math.max(...prices);
   const minPrice = Math.min(...prices);
-  const hasChartData = item.priceHistory.length > 1;
+  const hasChartData = isTracking && item.priceHistory.length > 1;
   const isAllSamePrice = hasChartData && new Set(prices).size === 1;
   const firstPrice = prices[0] ?? 0;
   const lastPrice = prices[prices.length - 1] ?? 0;
 
-  // 트렌드: 첫값-끝값 비교. 모두 동일하거나 시작=끝이면 flat.
+  // 트렌드: TRACKING 상태에서만 의미 있음. INIT/SYNCING은 'flat'로 고정해 변동 텍스트 노출 차단.
   const trend: 'drop' | 'up' | 'flat' =
-    !hasChartData || isAllSamePrice || lastPrice === firstPrice
+    !isTracking || !hasChartData || isAllSamePrice || lastPrice === firstPrice
       ? 'flat'
       : lastPrice < firstPrice
         ? 'drop'
@@ -126,13 +132,16 @@ export default function DetailScreen() {
   const chartColor =
     trend === 'drop' ? CHART_RED : trend === 'up' ? CHART_BLUE : theme.subtext;
 
-  // 상단 hero용 상태 라벨 + 색
-  const statusText =
-    trend === 'drop'
-      ? '📉 가격 하락 감지'
-      : trend === 'up'
-        ? '📈 가격 상승 감지'
-        : '➡️ 가격 변동 없음';
+  // 상단 hero용 상태 라벨 + 색. INIT/SYNCING은 변동 텍스트 대신 상태 안내.
+  const statusText = isInit
+    ? '⏳ 가격 추적 준비 중'
+    : isSyncing
+      ? '🔄 가격 추적 시작!'
+      : trend === 'drop'
+        ? '📉 가격 하락 감지'
+        : trend === 'up'
+          ? '📈 가격 상승 감지'
+          : '➡️ 가격 변동 없음';
 
   // 추적 기간 계산 (일)
   const trackingDays = item.priceHistory.length >= 2
@@ -179,13 +188,13 @@ export default function DetailScreen() {
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
 
-  // 가격 하락 여부 (이전 가격 대비)
-  const hasPriceDrop = item.priceHistory.length >= 2 &&
+  // 가격 하락 여부 (이전 가격 대비) — TRACKING 상태에서만 의미 있음
+  const hasPriceDrop = isTracking && item.priceHistory.length >= 2 &&
     item.currentPrice < item.priceHistory[item.priceHistory.length - 2]?.price;
 
-  // 가격 인사이트 메시지 생성
+  // 가격 인사이트 메시지 생성 — TRACKING 상태에서만 의미 있음 (INIT/SYNCING은 baseline 단계)
   const priceInsights: { icon: string; text: string; color: string }[] = [];
-  if (item.priceHistory.length >= 2) {
+  if (isTracking && item.priceHistory.length >= 2) {
     // 트렌드 요약 — 그래프 색상과 자동 연동 (drop=red / up=blue / flat=gray)
     if (trend === 'drop') {
       const diff = firstPrice - lastPrice;
@@ -328,12 +337,22 @@ export default function DetailScreen() {
 
         {/* 현재가 + 상태 hero */}
         <View style={styles.priceHero}>
-          <Text style={styles.priceHeroValue}>
+          <Text
+            style={[
+              styles.priceHeroValue,
+              isInit && { color: theme.subtext },
+            ]}
+          >
             {item.currentPrice > 0
-              ? `${item.currentPrice.toLocaleString()}원`
+              ? `${item.currentPrice.toLocaleString()}원${isInit ? ' (예상)' : ''}`
               : '가격 정보 없음'}
           </Text>
-          <Text style={[styles.priceHeroStatus, { color: chartColor }]}>
+          <Text
+            style={[
+              styles.priceHeroStatus,
+              { color: isInit || isSyncing ? theme.primary : chartColor },
+            ]}
+          >
             {statusText}
           </Text>
         </View>
@@ -341,7 +360,29 @@ export default function DetailScreen() {
         {/* Chart */}
         <View style={styles.chartSection}>
           <Text style={styles.sectionTitle}>가격 변동</Text>
-          {hasChartData ? (
+          {isInit ? (
+            // 1.0.19 §2 INIT — 첫 realPrice 미수신, 그래프 표시 안 함
+            <View style={styles.chartEmpty}>
+              <Ionicons name="time-outline" size={32} color={theme.subtext} />
+              <Text style={styles.chartEmptyTitle}>가격 추적 준비 중</Text>
+              <Text style={styles.chartEmptyDesc}>
+                첫 가격 수집 후 그래프가 시작됩니다
+              </Text>
+            </View>
+          ) : isSyncing ? (
+            // 1.0.19 §2 SYNCING — 첫 realPrice baseline 단계, 그래프 1점만 의미 있어 텍스트로 안내
+            <View style={styles.chartEmpty}>
+              <Ionicons name="checkmark-circle-outline" size={32} color={theme.primary} />
+              <Text style={styles.chartEmptyTitle}>
+                {item.currentPrice > 0
+                  ? `현재가 ${item.currentPrice.toLocaleString()}원`
+                  : '가격 수집 완료'}
+              </Text>
+              <Text style={styles.chartEmptyDesc}>
+                최저가 도달 시 알림이 시작됩니다
+              </Text>
+            </View>
+          ) : hasChartData ? (
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}

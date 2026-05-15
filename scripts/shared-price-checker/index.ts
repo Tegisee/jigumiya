@@ -865,6 +865,20 @@ async function main() {
     // 변동 없음 / 비교 baseline 없음 → 알림 이벤트 없음
     if (newPrice === prevPriceForNotif || prevPriceForNotif <= 0) continue;
 
+    // 1.0.19 §2 (docs/025) — priceStatus 가드. TRACKING 상태에서만 알림 발송.
+    //   - INIT: realPrice 미수신 baseline 단계 → 알림 X
+    //   - SYNCING: 첫 realPrice가 baseline이라 변동 판정 불가 → 알림 X
+    //   - TRACKING: 정상 변동 → 알림 발송
+    //   - undefined (legacy 미마이그레이션): 'TRACKING'으로 간주
+    // priceHistory / apiPrice / currentPrice 갱신은 위에서 이미 완료 — 알림만 차단.
+    const productPriceStatus = (data.priceStatus as string | undefined) ?? 'TRACKING';
+    if (productPriceStatus !== 'TRACKING') {
+      console.log(
+        `[Skip-NonTracking] ${productId} priceStatus=${productPriceStatus} — 알림 스킵`,
+      );
+      continue;
+    }
+
     const brief: ProductBrief = {
       productId,
       productName,

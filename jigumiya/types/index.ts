@@ -31,6 +31,10 @@ export interface TrackedItem {
   priceStatus?: PriceStatus;
   /** apiPrice — Functions가 vp HTML OG 태그에서 추출한 best-effort 가격. INIT 상태의 fallback 표시용. */
   apiPrice?: number;
+  /** SYNCING 진입 시각 (첫 realPrice 수신). */
+  firstRealPriceAt?: number;
+  /** TRACKING 진입 시각 (두 번째 realPrice 수신). */
+  trackingStartedAt?: number;
 }
 
 // ──────────────────────────────────────────────────────────

@@ -404,6 +404,24 @@ export const onSharedProductRealPriceChange = onDocumentUpdated(
       return;
     }
 
+    // 1.0.19 §2 (docs/025) — priceStatus 가드. TRACKING 상태에서만 알림 발송.
+    //   - INIT: realPrice 미존재 상태에서 이 트리거에 도달하지 않지만, 만일 도달해도 알림 X
+    //   - SYNCING: 첫 realPrice 수신 baseline 단계라 "변동"이 아님 → 알림 X
+    //   - TRACKING: 정상 변동 → 알림 발송
+    //   - undefined (legacy 미마이그레이션 문서): 'TRACKING'으로 간주
+    const afterStatus = (after.priceStatus as string | undefined) ?? 'TRACKING';
+    if (afterStatus !== 'TRACKING') {
+      logger.info('[realPrice] priceStatus 가드로 알림 스킵', {
+        productId,
+        priceStatus: afterStatus,
+        beforeReal,
+        afterReal,
+      });
+      // needsCheck는 클리어 — 다음 cron 사이클에서 중복 트리거 방지
+      await clearNeedsCheck(productId, after);
+      return;
+    }
+
     const productName = (after.productName as string | undefined) ?? '';
     const previousPrice = beforeReal > 0 ? beforeReal : afterReal;
 
