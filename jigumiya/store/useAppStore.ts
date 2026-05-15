@@ -114,7 +114,12 @@ export const useAppStore = create<AppState>()(
         }
 
         set((state) => ({ trackedItems: [...state.trackedItems, finalItem] }));
-        saveItemToFirestore(finalItem); // 기존 경로 유지 (하위 호환) — 머지된 priceHistory도 함께 저장
+        // 1.0.19 race fix: await로 Firestore 반영 보장.
+        //   1.0.18 이전엔 WebView 스크래핑이 10~60s라 sync와 충돌 없었으나,
+        //   1.0.19 ≤2s 추가 흐름에서는 _layout.tsx의 AppState active sync 또는 홈 sync가
+        //   write 완료 전 발화 시 fetchItemsFromFirestore 결과에서 새 item 누락 → set merged로 사라지는 race 발생.
+        //   await 후 router.replace 진행해 사용자 가시 카드 보장.
+        await saveItemToFirestore(finalItem);
 
         // shared_products 이중 쓰기 (productId 있고 + 첫 추적일 때만)
         if (!alreadyTracking) {

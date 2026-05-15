@@ -36,6 +36,12 @@ function ProductCardImpl({ item }: Props) {
     toggle: toggleFavorite,
   } = useFavoriteToggle(item);
 
+  // 1.0.19 §2 (docs/025) 가격 상태 머신. 미설정 시 'TRACKING'으로 간주 (마이그 전 호환).
+  const priceStatus = item.priceStatus ?? 'TRACKING';
+  const isInit = priceStatus === 'INIT';
+  const isSyncing = priceStatus === 'SYNCING';
+  const isTracking = priceStatus === 'TRACKING';
+
   const hasTarget = item.targetPrice != null && item.targetPrice > 0;
   const gap =
     item.currentPrice > 0 && hasTarget
@@ -44,8 +50,10 @@ function ProductCardImpl({ item }: Props) {
 
   const isAchieved = item.currentPrice > 0 && hasTarget && item.currentPrice <= item.targetPrice!;
 
-  // Trend 뱃지 — priceHistory 첫값 vs 마지막값 비교 (상세페이지와 동일 정책)
+  // Trend 뱃지 — priceHistory 첫값 vs 마지막값 비교 (상세페이지와 동일 정책).
+  // 1.0.19 §2: TRACKING 상태에서만 의미 있음 — INIT/SYNCING은 baseline 단계라 변동 판정 불가.
   const trendBadge: { text: string; color: string } | null = (() => {
+    if (!isTracking) return null;
     if (item.priceHistory.length < 2) return null;
     const first = item.priceHistory[0].price;
     const last = item.priceHistory[item.priceHistory.length - 1].price;
@@ -171,9 +179,16 @@ function ProductCardImpl({ item }: Props) {
                 {item.productName}
               </Text>
               <View style={styles.priceRow}>
-                <Text style={styles.currentPrice}>
-                  {item.currentPrice.toLocaleString()}원
-                </Text>
+                {isInit ? (
+                  // 1.0.19 §2: realPrice 미수신 baseline — 가격 표시 회색 + "추적 준비 중"
+                  <Text style={[styles.currentPrice, styles.currentPriceInit]}>
+                    추적 준비 중
+                  </Text>
+                ) : (
+                  <Text style={styles.currentPrice}>
+                    {item.currentPrice.toLocaleString()}원
+                  </Text>
+                )}
                 {hasTarget && (
                   <Text style={styles.targetPrice}>
                     목표 {item.targetPrice!.toLocaleString()}원
@@ -181,13 +196,16 @@ function ProductCardImpl({ item }: Props) {
                 )}
               </View>
               <View style={styles.bottomRow}>
-                {hasTarget ? (
+                {isInit ? (
+                  <Text style={styles.gap}>가격 수집 중</Text>
+                ) : hasTarget ? (
                   <Text style={[styles.gap, isAchieved && styles.gapAchieved]}>
                     {isAchieved ? '목표 달성!' : `목표까지 -${gap}%`}
                   </Text>
                 ) : (
                   <Text style={styles.gap}>가격 추적 중</Text>
                 )}
+                {/* trendBadge는 trend 변수 자체가 TRACKING 가드되어 SYNCING/INIT은 자동 null */}
                 {trendBadge && (
                   <Text style={[styles.trendBadge, { color: trendBadge.color }]}>
                     {trendBadge.text}
@@ -301,6 +319,10 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
     color: theme.text,
+  },
+  currentPriceInit: {
+    color: theme.subtext,
+    fontWeight: '600',
   },
   targetPrice: {
     fontSize: 13,
