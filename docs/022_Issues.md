@@ -14,7 +14,7 @@
 
 ## Issue 3 — 상품 추가 / 가격 조회 실패 (Akamai Bot Manager 챌린지)
 
-**상태 (2026-05-14 갱신)**: **Android는 1.0.17에서 해소 확인** (상품 추가 / 관리자 순회 43개 / 알림 모두 정상). **iOS는 1.0.17에서 incognito race로 실패 → 1.0.18 incognito=false 분기로 fix 완료, 빌드 후 검증 대기.**
+**상태 (2026-05-16 갱신)**: **Android는 1.0.17에서 해소 확인** (상품 추가 / 관리자 순회 43개 / 알림 모두 정상). iOS는 1.0.17에서 incognito race로 실패 → 1.0.18 incognito=false fix가 **1.0.19 (bn55/vc55) 빌드에 통합되어 TestFlight 배포 완료** → 베타 검증 진행 중.
 
 **증상 (이력)**:
 - 1.0.16: 상품 URL 추가 또는 관리자 모드 가격 조회 시 CoupangScraper 무한로딩 또는 onError. Akamai 챌린지 페이지가 1차 응답
@@ -33,21 +33,18 @@
 - admin 3~8s 지터 + 20개 5분 휴식 — 양 플랫폼
 - productId fallback URL (`getCoupangProductUrl`) — 양 플랫폼
 
-**1.0.18 fix (iOS race 해소, 빌드 대기 — 2026-05-14)**:
+**1.0.18 fix (1.0.19에 통합 배포 — 2026-05-16 TestFlight + Play Console 등록 완료)**:
 - `components/CoupangScraper.tsx`: `incognito={Platform.OS === 'android'}` — iOS만 false로 변경
 - iOS는 `incognito=false` + `cacheEnabled=false` + `sharedCookies=false` 조합 → `WKWebsiteDataStore.defaultDataStore` 사용 (앱 프로세스 공유 persistent)
 - 효과: 챌린지 1회 통과 후 cookie 영속 → 다음 호출 / 자동 재시도 / 다음 상품 추가 시 cookie 재사용 → 매번 새 챌린지 부담 제거
 - 1.0.17 목표(쿠팡 로그인 세션 격리)는 `sharedCookiesEnabled=false`가 그대로 처리 — NSHTTPCookieStorage 동기화 차단은 incognito와 무관
 
-**운영 대응 (1.0.18 빌드 전)**:
-- 두 기기 동시 실행 시 네트워크 분리 (Wi-Fi + LTE)
-- iOS는 1.0.16 ipa 유지 권장 (1.0.17 iOS는 실패)
-
-**1.0.18 빌드 후 모니터링**:
-- iOS: 상품 추가 / 상세 새로고침 / 관리자 순회 정상화 확인 (incognito=false 효과)
+**1.0.19 베타 모니터링 항목** (1.0.18 통합 fix 검증):
+- iOS 상품 추가 / 상세 새로고침 / 관리자 순회 정상화 (incognito=false 효과)
 - iOS CHALLENGE 60s timeout 0건 목표 — 1회 통과 후 영속 재사용 가정
-- Android: 회귀 없는지 확인 (incognito=true 유지이므로 정상 예상)
+- Android 회귀 없는지 확인 (incognito=true 유지이므로 정상 예상)
 - 양 플랫폼 챌린지 발생 빈도 / UA 분포 / 관리자 완주율
+- 1.0.19 추가 모니터링: WebView 제거로 상품 추가 자체는 Akamai 종속 X → 관리자/자동새로고침 경로만 영향
 
 ---
 
@@ -107,14 +104,14 @@
 
 ## Issue 9 — 1.0.19 (가격 상태 머신 + 상품 추가 WebView 제거)
 
-**상태 (2026-05-16 갱신)**: 🔨 §1~§5 코드 작업 완료, 베타 빌드 대기. 상세 [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md).
+**상태 (2026-05-16 갱신)**: 🔨 §1~§5 코드 + 빌드(bn55/vc55) + 베타 배포(TestFlight + Play Console 내부 테스트) 완료. **베타 시나리오 6종 검증 진행 중**. 상세 [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md).
 
 **배경**:
 - 1.0.16 RealPrice 아키텍처(`docs/023`) 이후에도 상품 추가 시 WebView로 realPrice를 동기 수집 → Akamai 챌린지/iOS race로 추가 자체 실패 (1.0.17 iOS)
 - 첫 realPrice 수신을 변동으로 오탐 → 상세페이지 "가격 하락 감지" 오표시 + false positive 알림
 - cron(apiPrice)/CF 트리거(realPrice) baseline 불일치로 알림 가드 일관성 부재
 
-**완료 항목 (커밋 `9c57cbc`, `5d8727b`, `2886f52`, +3~5순위)**:
+**완료 항목 (커밋 `9c57cbc` §1, `5d8727b` §2, `2886f52` §2 보완, `6d38776` §3~§5, `10a8968` version bump)**:
 
 ### 1순위 — 상품 추가 UX 개선 (WebView 제거) ✅
 - [x] `app/modal/add-item.tsx` `CoupangScraper` 의존 완전 제거 — `'url' → 'resolving' → 'target'` 흐름
@@ -145,14 +142,29 @@
 - [x] apiPrice fallback baseline 차단 (`prevRealPrice <= 0`)
 - [ ] legacy `morning`/`evening`/`broadcast_drop10/20` 정식 삭제 — 베타 검증 후
 
-**잔여 항목 (베타 빌드 후)**:
-- [ ] **베타 검증** docs/025 §검증 계획 단위 시나리오 6종 (신규 INIT 확인 → SYNCING 전이 → TRACKING 전이 → 알림 발송 → 목표가 도달 → 상세 N시간 전 표시)
-- [ ] **migration** `scripts/migration/2026-05-priceStatus-backfill.mjs` dry-run + 실행 (기존 ~93개 문서)
+**베타 배포 (2026-05-16)**:
+- iOS: TestFlight 업로드 완료 (`~/jigumiya/builds/ios/jigumiya-1.0.19-55.ipa`)
+- Android: Play Console 내부 테스트 등록 완료 (`~/jigumiya/builds/android/jigumiya-1.0.19-55.aab`)
+- 출시노트 작성 완료
+
+**잔여 항목 (베타 검증 후)**:
+
+### 베타 검증 시나리오 6종 (진행 중)
+- [ ] **시나리오 1** 신규 상품 추가 → Firestore `shared_products/{pid}.priceStatus === 'INIT'` 확인 + 그래프 미표시 + 현재가 "(예상)" 라벨 노출 + 추가 소요 ≤2s
+- [ ] **시나리오 2** 첫 realPrice 수신 (cron 또는 사용자 수동 새로고침) → `SYNCING` 전이 + `firstRealPriceAt` 기록 + 그래프 1점 + 알림 미발송 + 상세 "현재가 X원 / 최저가 도달 시 알림이 시작됩니다"
+- [ ] **시나리오 3** 두 번째 realPrice 수신 → `TRACKING` 전이 + `trackingStartedAt` 기록 + 알림 미발송 (baseline 변동 X)
+- [ ] **시나리오 4** 세 번째+ realPrice (≥10% 하락 또는 lowest 갱신) → 가격 하락 알림 발송 + `lastNotifications.priceDrop[pid]` 가드 박힘
+- [ ] **시나리오 5** 목표가 도달 → CF 트리거 알림 발송 + `lastNotifications.targetReached[pid]` 박힘 + `needsCheck` 클리어 + 24h 가드 효과
+- [ ] **시나리오 6** 상세 "N시간 전 업데이트" 정확 표시 + 6h 이상 노란색 ⚠️ + 관리자 분배 chip 4종(자동/홀수/짝수/전체) 동작 + 순회 중 chip 비활성
+
+### 베타 통과 후 정식 출시 + 후속
+- [ ] **release** 양 스토어 정식 출시 + `meta/config_jigumiya.minRequiredVersion = "1.0.19"` 갱신
+- [ ] **migration** `scripts/migration/2026-05-priceStatus-backfill.mjs` 작성 + dry-run + 실행 (기존 ~93개 문서)
 - [ ] **chore** cron priceHistory에 apiPrice 누적되던 잔여 케이스 완전 정리 (TRACKING 가드 적용 후 잔존 여부 검증)
 - [ ] **feat** price_update_logs 통계 wire (5순위 잔여)
 - [ ] **cleanup** legacy 알림 종류 코드 정식 삭제
 
-**진입 조건**: ~~1.0.18 베타 검증 통과~~ → 사용자 지시로 §1~§5 일괄 진행. 1.0.18+1.0.19 통합 빌드 가능.
+**진입 조건**: ~~1.0.18 베타 검증 통과~~ → 1.0.18+1.0.19 통합 빌드로 진행 (bn55/vc55). 베타 검증 통과 시 정식 출시.
 
 ---
 
@@ -176,15 +188,15 @@
 
 ## 운영 주의사항
 
-### iOS 1.0.17 — 상품 추가 / 새로고침 / 관리자 순회 전체 실패 (2026-05-14 추가)
+### iOS 1.0.17 — 상품 추가 / 새로고침 / 관리자 순회 전체 실패 (2026-05-14 발견 → 1.0.19로 fix 배포 2026-05-16)
 
 **증상**: iOS 1.0.17 (bn53/vc53) 베타에서 상품 추가 + 상세 새로고침 + 관리자 순회 모두 실패.
 
 **원인**: `incognito={true}` + WKWebView `nonPersistentDataStore` 조합에서 Akamai sec_cpt Set-Cookie 응답이 디스크에 영속화되지 않음. 같은 인스턴스 reload 사이에 cookie 헤더 누락 가능성(WKWebView 알려진 race) + 매 WebView 인스턴스마다 새 dataStore라 자동 재시도 시 매번 새 챌린지 → timeout 누적 → 100% 실패.
 
-**fix (1.0.18)**: `CoupangScraper.tsx` `incognito={Platform.OS === 'android'}` — iOS만 false. `defaultDataStore` 사용으로 챌린지 1회 통과 후 영속 재사용. `sharedCookiesEnabled=false`로 NSHTTPCookieStorage 격리는 그대로(쿠팡 앱 로그인 세션 차단).
+**fix (1.0.18 → 1.0.19에 통합 배포, 2026-05-16)**: `CoupangScraper.tsx` `incognito={Platform.OS === 'android'}` — iOS만 false. `defaultDataStore` 사용으로 챌린지 1회 통과 후 영속 재사용. `sharedCookiesEnabled=false`로 NSHTTPCookieStorage 격리는 그대로(쿠팡 앱 로그인 세션 차단). 추가로 1.0.19 §1에서 상품 추가 자체가 WebView를 사용 안 함 → Akamai 종속 X.
 
-**운영 가이드 (1.0.18 빌드 전)**:
+**운영 가이드 (1.0.19 배포 전 기간 참고용)**:
 - iOS는 1.0.16 ipa로 유지 권장
 - Android 1.0.17은 정상 작동 — 베타 계속
 

@@ -24,57 +24,59 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ## 현재 상태 (2026-05-16 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 테스트 완료 — iOS 실패 발견. 1.0.18 (bn54/vc54) 코드 작업 완료 — 빌드 대기. **1.0.19 §1~§5 코드 작업 완료 (`docs/025`) — 베타 빌드 대기.**
-- **1.0.19 작업 (2026-05-16 완료, 코드만)**: §1 상품 추가 WebView 완전 제거 (Functions가 vp HTML OG 태그로 메타데이터 즉시 반환, `priceStatus='INIT'`로 저장) + §2 가격 상태 머신 (INIT→SYNCING→TRACKING 전이, cron + CF 트리거 알림 가드 TRACKING-only, 상세페이지 priceStatus별 UI 분기) + §2 미흡 보완 (syncFromFirestore 머지 + cron priceHistory 누적 가드 + apiPrice baseline 차단) + §3 홈 ScrollView `flexGrow:1` + §4 관리자 분배 모드 옵션 (auto/odd/even/all, AsyncStorage 영속) + §5 상세 "N시간 전 업데이트" 표시 (6h 이상 노란색 강조). 상세 [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md)
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 테스트 완료 — iOS 실패 발견. 1.0.18 (bn54/vc54) 코드 작업 완료 — 1.0.19에 통합. **1.0.19 (bn55/vc55) 빌드 + 베타 배포 완료 — TestFlight + Play Console 내부 테스트 등록. 베타 시나리오 6종 검증 진행 중.**
+- **1.0.19 배포 (2026-05-16)**: TestFlight 업로드 완료(iOS) + Play Console 내부 테스트 등록 완료(Android) + 출시노트 작성 완료. 베타 시나리오 6종 검증 진행 중 (docs/025 §검증 계획)
+- **1.0.19 작업 (2026-05-16 완료)**: §1 상품 추가 WebView 완전 제거 (Functions가 vp HTML OG 태그로 메타데이터 즉시 반환, `priceStatus='INIT'`로 저장) + §2 가격 상태 머신 (INIT→SYNCING→TRACKING 전이, cron + CF 트리거 알림 가드 TRACKING-only, 상세페이지 priceStatus별 UI 분기) + §2 미흡 보완 (syncFromFirestore 머지 + cron priceHistory 누적 가드 + apiPrice baseline 차단) + §3 홈 ScrollView `flexGrow:1` + §4 관리자 분배 모드 옵션 (auto/odd/even/all, AsyncStorage 영속) + §5 상세 "N시간 전 업데이트" 표시 (6h 이상 노란색 강조). 1.0.18 fix(iOS incognito 분기 + 홈 하단 여백 + 공유 메시지 줄간격)도 함께 출시. 상세 [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md)
 - **1.0.18 작업 (2026-05-14 완료, 빌드 대기)**: iOS 한정 incognito 제거 (WKWebView nonPersistentDataStore의 Akamai sec_cpt Set-Cookie race 의심 → default dataStore로 전환, 챌린지 1회 통과 후 영속 재사용. Android는 incognito=true 유지) + 홈 하단 여백 축소(빈 공간 제거) + 앱 공유 메시지 iPhone/Android 줄간격 1줄 추가(잘못 눌림 방지)
 - **1.0.17 베타 결과 (2026-05-14)**: Android = 상품 추가 / 관리자 순회 43개 성공 / 알림 정상 ✅ — iOS = 상품 추가 + 상세 새로고침 + 관리자 순회 전체 실패 ❌ → 1.0.18 fix. shared_products 93개로 증가, 삭제 상품 3개 X 표시 정상.
 - **1.0.17 작업 (2026-05-13~14 완료, 코드만)**: Akamai 완화 4종(UA 풀 + 쿠키 자동 초기화 + 관리자 3~8s 지터 + 20개 5분 휴식) + productId fallback URL + 포그라운드 자동 새로고침(TTL 6h + viewport + lastWebViewCheckedAt) + 콜드 스타트 syncFromFirestore + cron 알림 realPrice baseline 전환 + 앱 공유 양쪽 스토어 + 앱구조 개편(추적중 탭 + 홈 ScrollView + 한도 10 → 20). 상세 [docs/changelog.md](./docs/changelog.md)
 - **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix + Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용(FCM 토큰 정상 발급)
-- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.16-52.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.16-52.aab` (1.0.18 빌드 대기 — 1.0.17 ipa/aab은 베타 단계, 1.0.18로 통합 출시 예정)
-- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.18 출시 후 갱신 예정.
+- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.19-55.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.19-55.aab` (TestFlight + Play Console 내부 테스트 등록 완료. 베타 검증 통과 시 양 스토어 정식 출시)
+- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.19 정식 출시 후 `"1.0.19"`로 갱신 예정.
 - **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
 - **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + `onSharedProductRealPriceChange` v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
 
-## 궁극적 목표 달성 현황 (2026-05-14)
+## 궁극적 목표 달성 현황 (2026-05-16)
 
 | 기능 | Android | iOS |
 |------|---------|-----|
-| 상품 추가 | ✅ 1.0.17 정상 | ⏳ 1.0.18 fix 후 검증 예정 |
-| 가격 추적 (관리자 순회) | ✅ 1.0.17 43개 성공 | ⏳ 1.0.18 fix 후 검증 예정 |
-| 알림 발송 (realPrice 기준) | ✅ Android 정상 수신 확인 | ⏳ iOS 1.0.18 베타 후 확인 |
+| 상품 추가 (WebView 제거 후 ≤2s) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
+| 가격 추적 (관리자 순회 + priceStatus 전이) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
+| 알림 발송 (TRACKING 가드) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- ⚠️ **Issue 3** — Akamai 봇 차단. 1.0.17 Android에서 1차/근본 트리거 모두 우회 검증 완료. **iOS는 incognito race로 1.0.17에서 실패 → 1.0.18 incognito=false 분기로 fix 완료, 빌드 후 검증 대기**
-- 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링)
-- 📦 **Issue 5** — 1.0.18 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
+- ⚠️ **Issue 3** — Akamai 봇 차단. 1.0.17 Android 우회 검증 완료. **1.0.19 베타에서 iOS incognito=false 분기 효과 검증 중** (1.0.18 fix가 1.0.19에 통합 배포됨)
+- 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링) — 1.0.19 베타와 묶어 동시 검증
+- 📦 **Issue 5** — 1.0.19 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
-- 🔨 **Issue 9** — 1.0.19 §1~§5 코드 완료, 베타 빌드 대기 ([docs/025](./docs/025_PriceStateMachine.md)). 잔여: 마이그레이션 스크립트 실행 / price_update_logs 통계 / apiPrice grpah 분리 완전 정리
+- 🔨 **Issue 9** — 1.0.19 §1~§5 코드 + 빌드 + 베타 배포 완료. **베타 시나리오 6종 검증 진행 중** ([docs/025](./docs/025_PriceStateMachine.md)). 잔여: 마이그레이션 스크립트 실행 / price_update_logs 통계 / apiPrice 그래프 분리 완전 정리
 
 > Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 > Issue 5의 Akamai 완화 4종 + 자동 새로고침 2종 + 공유 양쪽 링크 + productId fallback + cron baseline + 앱구조 개편은 1.0.17 코드 작업으로 완료되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 
-> ⚠️ **운영 주의 (2026-05-14 갱신)**: ① iOS 1.0.17 한정 — 상품 추가/새로고침/관리자 순회 전체 실패. **1.0.18 빌드 후 해소 예정**. ② Android 1.0.17은 정상 동작 — 베타 계속. ③ 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
+> ⚠️ **운영 주의 (2026-05-16 갱신)**: ① 1.0.19 (bn55/vc55) TestFlight + Play Console 내부 테스트 배포 완료 — iOS는 incognito=false 분기, Android는 incognito=true 유지. ② 베타 검증 6종 통과 시 양 스토어 정식 출시. ③ 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
 
 ## 다음 할 일
 
-**🔨 우선순위 1 — 1.0.18 빌드 + 베타 검증 (iOS fix 우선)**:
-- 빌드: `eas build --local --profile production --platform ios` / `--platform android`
-- iOS 베타: 상품 추가 / 상세 새로고침 / 관리자 순회 정상화 확인 (incognito=false 효과)
-- Android 베타: 회귀 없는지 확인 (incognito=true 유지이므로 정상 예상)
-- 통과 시 양 스토어 업로드 → 출시 후 `meta/config_jigumiya.minRequiredVersion = "1.0.18"` 갱신
+**🔨 우선순위 1 — 1.0.19 베타 시나리오 6종 검증 (진행 중)**:
+1. **신규 상품 추가** → Firestore `shared_products/{pid}.priceStatus === 'INIT'` 확인 + 그래프 미표시 + "(예상)" 라벨 노출
+2. **첫 realPrice 수신** (cron 또는 사용자 수동 새로고침) → `SYNCING` 전이 + `firstRealPriceAt` 박힘 + 그래프 1점 + 알림 미발송
+3. **두 번째 realPrice 수신** (값 동일/유사) → `TRACKING` 전이 + `trackingStartedAt` 박힘 + 알림 미발송 (baseline 변동 X)
+4. **세 번째+ realPrice** (≥10% 하락 또는 lowest 갱신) → 가격 하락 알림 발송 + `lastNotifications.priceDrop[pid]` 가드 박힘
+5. **목표가 도달** → CF 트리거(`onSharedProductRealPriceChange`) 알림 발송 + `lastNotifications.targetReached[pid]` 박힘 + `needsCheck` 클리어
+6. **상세페이지 "N시간 전 업데이트"** 정확 표시 + 6h 이상 노란색 ⚠️ + 관리자 모드 분배 chip 4종(자동/홀수/짝수/전체) 동작 + 순회 중 chip 비활성
 
-**📋 후속 검증 (1.0.18 빌드 후)**:
-- iOS Akamai 챌린지 통과율 — `[Scraper] step5: type=CHALLENGE` 빈도 / `챌린지 60s timeout` 0건 목표
-- Android 관리자 84개 완주율 / 분당 호출 빈도
-- TTL 6h 가드 동작 — `[PriceChecker] 6h TTL 가드 ... 모두 최근 체크, 스킵` 로그 표본
-- cron 알림 baseline 전환 — `[notif baseline=real|api]` 로그 분포 / priceDrop 발송 빈도 변화
-- Issue 4 잔여 검증 (CF 트리거 push 도달, cron skipRecentRealPrice 카운트, Functions 응답시간 표본)
-
-**🆕 우선순위 2 — 1.0.19 베타 빌드 + 검증**: 1.0.19 §1~§5 코드 완료. 빌드 후 베타 시나리오 6종(`docs/025` §검증 계획): ① 신규 추가 → priceStatus='INIT' 확인 ② 첫 realPrice → SYNCING 전이, 그래프 1점, 알림 X ③ 두 번째 realPrice → TRACKING 전이, 알림 X ④ ≥10% 하락 → 가격 하락 알림 발송 ⑤ 목표가 도달 → CF 트리거 알림 ⑥ 상세 "N시간 전" 표시 + 관리자 분배 모드 chip 동작. 후속: 마이그레이션 스크립트 dry-run + 실행, price_update_logs 통계 wire (5순위 잔여), cron priceHistory apiPrice 누적 완전 정리.
+**📋 베타 통과 후 잔여**:
+- 양 스토어 정식 출시 → `meta/config_jigumiya.minRequiredVersion = "1.0.19"` 갱신
+- 마이그레이션 스크립트 `scripts/migration/2026-05-priceStatus-backfill.mjs` 작성 + dry-run + 실행 (기존 ~93개)
+- `price_update_logs` 통계 wire (5순위 잔여)
+- cron priceHistory apiPrice 누적 잔여 케이스 검증 + 완전 정리
+- legacy `morning`/`evening`/`broadcast_drop10/20` 코드 정식 삭제
+- Issue 4 잔여 (CF 트리거 push 도달 / cron skipRecentRealPrice / Functions 응답시간 표본)
 
 **🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
 
