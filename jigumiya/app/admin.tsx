@@ -26,12 +26,29 @@ import CoupangScraper, {
   ScrapedProduct,
 } from '../components/CoupangScraper';
 
-// docs/023 §관리자 기기 설계
-//   - Android: index % 2 === 1 (홀수)
-//   - iOS(iPad): index % 2 === 0 (짝수)
-//   - 3대 확장 시 modulo 3으로 일반화 — 현재는 2대 가정
-const DEVICE_SLOT = Platform.OS === 'android' ? 1 : 0;
-const DEVICE_LABEL = Platform.OS === 'android' ? 'Android (홀수)' : 'iOS (짝수)';
+// docs/023 §관리자 기기 설계 + docs/025 §4 분배 모드 옵션 (1.0.19)
+//   - 'auto': Platform.OS 기반 자동 (Android=홀수 / iOS=짝수) — 기본값
+//   - 'odd':  index % 2 === 1
+//   - 'even': index % 2 === 0
+//   - 'all':  전체 (분배 없음, 1대 운영 또는 다른 기기 차단 시 대체 순회용)
+type DistributionMode = 'auto' | 'odd' | 'even' | 'all';
+const STORAGE_KEY_DIST_MODE = 'admin.distributionMode';
+
+/** distributionMode → modulo slot (null = 전체 통과) */
+function distSlot(mode: DistributionMode): number | null {
+  if (mode === 'all') return null;
+  if (mode === 'odd') return 1;
+  if (mode === 'even') return 0;
+  return Platform.OS === 'android' ? 1 : 0; // 'auto'
+}
+
+/** 현재 모드 + 기기 정보 라벨 */
+function distLabel(mode: DistributionMode): string {
+  if (mode === 'all') return '전체 (분배 없음)';
+  if (mode === 'odd') return '홀수만 (수동)';
+  if (mode === 'even') return '짝수만 (수동)';
+  return Platform.OS === 'android' ? '자동: Android (홀수)' : '자동: iOS (짝수)';
+}
 
 // 1.0.17 Akamai 완화: 1.5s 고정 → 3~8s 랜덤 지터. 분당 12~24회 → 8~20회로 낮춰 BM 임계 회피.
 // 사용자 행동(스크롤/탐색) 분포에 가까운 비균등 패턴이 BM 봇 판정에 더 유리.
@@ -123,11 +140,23 @@ export default function AdminScreen() {
   // runOnce stale closure 방지 — setInterval/AppState 안에서 항상 최신 클로저 호출
   const runOnceRef = useRef<(startFrom?: number) => void>(() => {});
 
-  // 담당 상품 — Platform.OS 기반 홀수/짝수 분배
-  const myProducts = useMemo(
-    () => products.filter((_, idx) => idx % 2 === DEVICE_SLOT),
-    [products],
-  );
+  // 1.0.19 §4 분배 모드 — chip으로 사용자 선택. AsyncStorage 영속.
+  const [distMode, setDistMode] = useState<DistributionMode>('auto');
+
+  /** 분배 모드 변경 + 영속화 (실패해도 메모리 상태는 반영) */
+  const updateDistMode = useCallback((mode: DistributionMode) => {
+    setDistMode(mode);
+    AsyncStorage.setItem(STORAGE_KEY_DIST_MODE, mode).catch((e) =>
+      console.warn('[admin] distMode 저장 실패:', e),
+    );
+  }, []);
+
+  // 담당 상품 — distMode 기반 동적 분배
+  const myProducts = useMemo(() => {
+    const slot = distSlot(distMode);
+    if (slot === null) return products; // 'all'
+    return products.filter((_, idx) => idx % 2 === slot);
+  }, [products, distMode]);
 
   // mount: shared_products 전체 fetch
   useEffect(() => {
@@ -142,6 +171,18 @@ export default function AdminScreen() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // mount: AsyncStorage에서 distMode 복원. 유효하지 않은 값은 'auto'로 fallback.
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY_DIST_MODE)
+      .then((val) => {
+        if (val === 'auto' || val === 'odd' || val === 'even' || val === 'all') {
+          setDistMode(val);
+          console.log(`[admin] distMode 복원: ${val}`);
+        }
+      })
+      .catch((e) => console.warn('[admin] distMode 복원 실패:', e));
   }, []);
 
   // mount: AsyncStorage에서 nextRunAt 복원 — 앱 완전 종료 후 재실행 시 카운트다운 이어감.
@@ -442,10 +483,36 @@ export default function AdminScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* 기기 상태 */}
+        {/* 기기 상태 + 분배 모드 (1.0.19 §4) */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>이 기기</Text>
-          <Text style={styles.cardValue}>{DEVICE_LABEL}</Text>
+          <Text style={styles.cardValue}>{distLabel(distMode)}</Text>
+
+          <Text style={[styles.waitLabel, { marginTop: 12 }]}>분배 모드</Text>
+          <View style={styles.chipGroup}>
+            {(['auto', 'odd', 'even', 'all'] as const).map((m) => {
+              const active = distMode === m;
+              const label =
+                m === 'auto' ? '자동'
+                : m === 'odd' ? '홀수만'
+                : m === 'even' ? '짝수만'
+                : '전체';
+              return (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => updateDistMode(m)}
+                  disabled={running}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           {loading ? (
             <Text style={styles.cardDesc}>shared_products 로딩 중...</Text>
           ) : (

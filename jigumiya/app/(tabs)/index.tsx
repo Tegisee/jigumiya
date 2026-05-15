@@ -329,6 +329,9 @@ const styles = StyleSheet.create({
   },
   scroll: {
     paddingBottom: 0,
+    // 1.0.19 §3 (docs/025): 콘텐츠가 적을 때 화면 하단까지 배경이 채워지도록.
+    // 많을 때는 자연 스크롤 — flexGrow:1은 최소 높이만 보장.
+    flexGrow: 1,
   },
   headerRow: {
     flexDirection: 'row',

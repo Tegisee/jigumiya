@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,7 +22,29 @@ import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
 import { getCoupangProductUrl } from '../../services/coupangApi';
+import { getSharedProduct } from '../../services/firebase';
 import { useFavoriteToggle } from '../../hooks/useFavoriteToggle';
+
+/**
+ * 1.0.19 §5 (docs/025) — lastRealPriceUpdatedAt 기준 상대시간 + stale 여부.
+ * 6시간 이상 미갱신은 isStale=true로 UI에서 노란색 강조 (TTL 6h 가드와 일치).
+ */
+function formatLastUpdate(ts: number): { text: string; isStale: boolean } {
+  const diffMs = Date.now() - ts;
+  const SIX_HOURS = 6 * 60 * 60 * 1000;
+  const isStale = diffMs >= SIX_HOURS;
+  if (diffMs < 0 || diffMs < 60 * 1000) return { text: '방금', isStale: false };
+  if (diffMs < 60 * 60 * 1000) {
+    return { text: `${Math.floor(diffMs / (60 * 1000))}분 전`, isStale };
+  }
+  if (diffMs < 24 * 60 * 60 * 1000) {
+    return { text: `${Math.floor(diffMs / (60 * 60 * 1000))}시간 전`, isStale };
+  }
+  if (diffMs < 48 * 60 * 60 * 1000) {
+    return { text: '어제', isStale };
+  }
+  return { text: `${Math.floor(diffMs / (24 * 60 * 60 * 1000))}일 전`, isStale };
+}
 
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -38,6 +60,30 @@ export default function DetailScreen() {
   const [showAskModal, setShowAskModal] = useState(false);
   const [customAsk, setCustomAsk] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 1.0.19 §5 (docs/025) — shared_products.lastRealPriceUpdatedAt fetch.
+  // TrackedItem에는 이 필드가 없으므로 mount 시 1회 fetch. updateItemPrice/refresh 후에는 즉시 갱신.
+  // INIT 상태(realPrice 미수신)는 undefined로 두고 UI에서 표시 스킵.
+  const [lastRealPriceUpdatedAt, setLastRealPriceUpdatedAt] = useState<number | null>(null);
+  useEffect(() => {
+    const pid = item?.productId;
+    if (!pid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getSharedProduct(pid);
+        if (cancelled) return;
+        if (snap?.lastRealPriceUpdatedAt) {
+          setLastRealPriceUpdatedAt(snap.lastRealPriceUpdatedAt);
+        }
+      } catch (e) {
+        // 조회 실패 시 표시 미노출 (조용히 fallback)
+        console.warn('[detail] lastRealPriceUpdatedAt 조회 실패:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+    // item.currentPrice 변경 시 (handleScrapeResult 후 updateItemPrice 발화) 재조회 — fresh 시간 반영
+  }, [item?.productId, item?.currentPrice]);
 
   const ASK_MESSAGES = [
     '이거 사줘 🙏',
@@ -355,6 +401,21 @@ export default function DetailScreen() {
           >
             {statusText}
           </Text>
+          {/* 1.0.19 §5 (docs/025) — 마지막 realPrice 갱신 시점. 6h 이상 미갱신은 노란색 강조. */}
+          {lastRealPriceUpdatedAt && (() => {
+            const up = formatLastUpdate(lastRealPriceUpdatedAt);
+            return (
+              <Text
+                style={[
+                  styles.priceHeroUpdate,
+                  up.isStale && styles.priceHeroUpdateStale,
+                ]}
+              >
+                {up.text} 업데이트
+                {up.isStale ? ' ⚠️' : ''}
+              </Text>
+            );
+          })()}
         </View>
 
         {/* Chart */}
@@ -734,6 +795,15 @@ const styles = StyleSheet.create({
   },
   priceHeroStatus: {
     fontSize: 13,
+    fontWeight: '600',
+  },
+  priceHeroUpdate: {
+    fontSize: 11,
+    color: theme.subtext,
+    marginTop: 2,
+  },
+  priceHeroUpdateStale: {
+    color: '#FFC107', // amber 500 — TTL 6h 초과 강조
     fontWeight: '600',
   },
   chartSection: {

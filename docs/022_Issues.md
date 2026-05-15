@@ -105,45 +105,54 @@
 
 ---
 
-## Issue 9 — 1.0.19 작업 계획 (가격 상태 머신 + 상품 추가 WebView 제거)
+## Issue 9 — 1.0.19 (가격 상태 머신 + 상품 추가 WebView 제거)
 
-**상태**: 📋 설계 확정 (2026-05-15) — 코드 작업 미착수. 1.0.18 베타 검증 통과 후 진입. 상세 [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md).
+**상태 (2026-05-16 갱신)**: 🔨 §1~§5 코드 작업 완료, 베타 빌드 대기. 상세 [docs/025_PriceStateMachine.md](./025_PriceStateMachine.md).
 
 **배경**:
-- 1.0.16 RealPrice 아키텍처(`docs/023`) 이후에도 상품 추가 시 WebView로 realPrice를 동기 수집 → Akamai 챌린지/iOS race로 추가 자체 실패 사례 발생 (1.0.17 iOS)
+- 1.0.16 RealPrice 아키텍처(`docs/023`) 이후에도 상품 추가 시 WebView로 realPrice를 동기 수집 → Akamai 챌린지/iOS race로 추가 자체 실패 (1.0.17 iOS)
 - 첫 realPrice 수신을 변동으로 오탐 → 상세페이지 "가격 하락 감지" 오표시 + false positive 알림
 - cron(apiPrice)/CF 트리거(realPrice) baseline 불일치로 알림 가드 일관성 부재
 
-**작업 항목 (5순위)**:
+**완료 항목 (커밋 `9c57cbc`, `5d8727b`, `2886f52`, +3~5순위)**:
 
-### 1순위 — 상품 추가 UX 개선 (WebView 제거)
-- [ ] **chore** `app/modal/add-item.tsx`에서 `CoupangScraper` 의존 제거 — `step === 'scraping'` 단계 삭제, `'url' → 'target'` 2단계로 단축
-- [ ] **feat** Functions `resolveAndGenerateAffiliateUrl` 응답 스키마 확장 — `productName/productImage/apiPrice` 포함
-- [ ] **chore** 추가 평균 소요시간 ≤2s 목표 (1.0.18 ~30s 대비)
+### 1순위 — 상품 추가 UX 개선 (WebView 제거) ✅
+- [x] `app/modal/add-item.tsx` `CoupangScraper` 의존 완전 제거 — `'url' → 'resolving' → 'target'` 흐름
+- [x] Functions `resolveAndGenerateAffiliateUrl` 응답 스키마 확장 — `productName/productImage/apiPrice` 포함, vp HTML OG 태그 정규식 파싱 (5s timeout, Akamai 챌린지 감지 시 빈 결과)
+- [x] `callDeeplinkApi` + `fetchVpMetadata` Promise.all 병렬화
 
-### 2순위 — 가격 상태 머신 도입
-- [ ] **feat** `shared_products`에 `priceStatus` 필드 추가 (`INIT | SYNCING | TRACKING`) + `firstRealPriceAt` + `trackingStartedAt`
-- [ ] **feat** realPrice write 경로(앱/CF/cron)에 priceStatus 전이 로직 통일
-- [ ] **fix** 상세페이지 INIT/SYNCING/TRACKING별 그래프/배지 분기 — "가격 하락 감지" 오표시 수정
-- [ ] **fix** 현재가 vs 그래프 불일치 — apiPrice는 그래프 미포함 (참고용만)
-- [ ] **feat** 마이그레이션 스크립트 `scripts/migration/2026-05-priceStatus-backfill.mjs` — 기존 93개 문서 dry-run 후 실제 backfill
+### 2순위 — 가격 상태 머신 도입 ✅
+- [x] `shared_products` + `TrackedItem`에 `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` 추가
+- [x] realPrice write 경로 priceStatus 전이 — store `updateItemPrice` + `adminUpdateRealPrice`
+- [x] cron + CF 트리거 priceStatus !== 'TRACKING' 알림 가드 + cron priceHistory 누적 가드
+- [x] 상세페이지 INIT/SYNCING/TRACKING별 그래프/배지 분기, "(예상)" 라벨, statusText 분기
+- [x] `syncFromFirestore` priceStatus 머지(TRACKING > SYNCING > INIT)
+- [x] cron `prevRealPrice <= 0` apiPrice fallback baseline 차단
 
-### 3순위 — 홈 화면 여백
-- [ ] **fix** `app/(tabs)/index.tsx` ScrollView `contentContainerStyle.flexGrow: 1` 추가
+### 3순위 — 홈 화면 여백 ✅
+- [x] `app/(tabs)/index.tsx` ScrollView `contentContainerStyle.flexGrow: 1`
 
-### 4순위 — 관리자 모드 순회 옵션
-- [ ] **feat** 분배 모드 chip UI 추가 (전체/홀수/짝수/자동) + AsyncStorage `admin.distributionMode` 저장
+### 4순위 — 관리자 모드 순회 옵션 ✅
+- [x] `app/admin.tsx` 분배 모드 chip (auto/odd/even/all) + AsyncStorage `admin.distributionMode` 영속
+- [x] 동적 라벨 / myProducts useMemo / 순회 중 chip 비활성
 
-### 5순위 — 모니터링
-- [ ] **feat** 상세페이지 "N시간 전 업데이트" 표시 (`lastRealPriceUpdatedAt` 기반, 6h 이상 시 노란색)
-- [ ] **feat** `price_update_logs` 통계 — 관리자 모드 화면에 오늘/어제 succeeded/failed/avgDuration 표시
+### 5순위 — 모니터링 (부분 완료) 🔨
+- [x] `app/detail/[id].tsx` "N시간 전 업데이트" — `getSharedProduct(productId)` mount + currentPrice 변경 시 재조회, 6h 이상 노란색 + ⚠️
+- [ ] `price_update_logs` 컬렉션 통계 (attempted/succeeded/challengeFailed/domFailed/avgDurationMs) — 베타 검증 후 별도 PR
 
-### 알림 푸시 구조 확정
-- [ ] **fix** cron + CF 트리거 모두 `priceStatus === 'TRACKING'` 가드 추가
-- [ ] **cleanup** apiPrice 기반 알림 fallback 분기 제거 검토 (false positive 원인)
-- [ ] **cleanup** legacy `morning`/`evening`/`broadcast_drop10/20` 코드 정식 삭제
+### 알림 푸시 구조 확정 ✅
+- [x] cron + CF 트리거 모두 `priceStatus === 'TRACKING'` 가드
+- [x] apiPrice fallback baseline 차단 (`prevRealPrice <= 0`)
+- [ ] legacy `morning`/`evening`/`broadcast_drop10/20` 정식 삭제 — 베타 검증 후
 
-**진입 조건**: 1.0.18 베타 검증 통과 (iOS incognito 분기 효과 확인 + Android 회귀 없음)
+**잔여 항목 (베타 빌드 후)**:
+- [ ] **베타 검증** docs/025 §검증 계획 단위 시나리오 6종 (신규 INIT 확인 → SYNCING 전이 → TRACKING 전이 → 알림 발송 → 목표가 도달 → 상세 N시간 전 표시)
+- [ ] **migration** `scripts/migration/2026-05-priceStatus-backfill.mjs` dry-run + 실행 (기존 ~93개 문서)
+- [ ] **chore** cron priceHistory에 apiPrice 누적되던 잔여 케이스 완전 정리 (TRACKING 가드 적용 후 잔존 여부 검증)
+- [ ] **feat** price_update_logs 통계 wire (5순위 잔여)
+- [ ] **cleanup** legacy 알림 종류 코드 정식 삭제
+
+**진입 조건**: ~~1.0.18 베타 검증 통과~~ → 사용자 지시로 §1~§5 일괄 진행. 1.0.18+1.0.19 통합 빌드 가능.
 
 ---
 
