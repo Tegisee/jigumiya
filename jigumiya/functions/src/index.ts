@@ -28,7 +28,17 @@ const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 200;
 
 type ResolveResult =
-  | { ok: true; shortenUrl: string; originalUrl: string }
+  | {
+      ok: true;
+      shortenUrl: string;
+      originalUrl: string;
+      // 1.0.19 §1 — 상품 추가 시 WebView 없이도 카드에 표시할 메타데이터.
+      // vp HTML의 OG 태그에서 best-effort 파싱. 추출 실패 시 빈 문자열/0.
+      // 본 값들은 INIT 상태에서만 사용 — cron이 추후 정확한 apiPrice/realPrice로 덮어씀.
+      productName?: string;
+      productImage?: string;
+      apiPrice?: number;
+    }
   | {
       ok: false;
       error:
@@ -178,6 +188,89 @@ async function resolveRedirectChain(startUrl: string): Promise<string | null> {
   const ok = isProductUrl(currentUrl);
   if (!ok) logger.warn('[resolve] exhausted without product URL', { chain, last: currentUrl });
   return ok ? currentUrl : null;
+}
+
+/**
+ * vp URL HTML에서 OG 태그 파싱 — 1.0.19 §1 상품 추가 메타데이터.
+ *
+ * 반환:
+ *   - productName: og:title (가능하면 `| - 쿠팡` suffix 제거)
+ *   - productImage: og:image
+ *   - apiPrice: product:price:amount (정수, 실패 시 0)
+ *
+ * Akamai 챌린지 / 차단 시 빈 결과 반환 (main flow 차단 X).
+ * 5초 timeout — Functions 전체 응답시간 영향 최소화.
+ */
+async function fetchVpMetadata(vpUrl: string): Promise<{
+  productName: string;
+  productImage: string;
+  apiPrice: number;
+}> {
+  const empty = { productName: '', productImage: '', apiPrice: 0 };
+  if (!vpUrl.includes('coupang.com')) return empty;
+
+  try {
+    const res = await fetchWithRetry(
+      vpUrl,
+      {
+        method: 'GET',
+        headers: {
+          'User-Agent': SAFARI_IPHONE_UA,
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
+        },
+      },
+      5000,
+    );
+    if (res.status !== 200) {
+      logger.warn('[vpMeta] non-200', { status: res.status, vpUrl: vpUrl.slice(0, 80) });
+      return empty;
+    }
+    const html = await res.text();
+
+    // Akamai 챌린지 페이지면 OG 태그 없음 → 즉시 포기
+    if (
+      html.includes('sec-if-cpt-container') ||
+      html.includes('behavioral-content') ||
+      html.includes('Powered and protected by Akamai')
+    ) {
+      logger.warn('[vpMeta] Akamai challenge detected', { vpUrl: vpUrl.slice(0, 80) });
+      return empty;
+    }
+
+    const ogTitle = html.match(
+      /<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i,
+    );
+    const ogImage = html.match(
+      /<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i,
+    );
+    const ogPrice = html.match(
+      /<meta\s+property=["']product:price:amount["']\s+content=["']([^"']+)["']/i,
+    );
+
+    const productName = (ogTitle?.[1] ?? '')
+      .replace(/\s*[|\-]\s*쿠팡.*$/, '')
+      .trim();
+    const productImage = ogImage?.[1] ?? '';
+    const apiPrice = ogPrice
+      ? parseInt(String(ogPrice[1]).replace(/[^0-9]/g, ''), 10) || 0
+      : 0;
+
+    logger.info('[vpMeta] parsed', {
+      hasName: !!productName,
+      hasImage: !!productImage,
+      apiPrice,
+      vpUrl: vpUrl.slice(0, 80),
+    });
+    return { productName, productImage, apiPrice };
+  } catch (e) {
+    logger.warn('[vpMeta] fetch/parse failed', {
+      detail: e instanceof Error ? e.message : String(e),
+      vpUrl: vpUrl.slice(0, 80),
+    });
+    return empty;
+  }
 }
 
 async function callDeeplinkApi(
@@ -572,7 +665,12 @@ export const resolveAndGenerateAffiliateUrl = onCall(
     }
 
     try {
-      const deepLink = await callDeeplinkApi(resolvedUrl, accessKey, secretKey);
+      // 1.0.19 §1 — deeplink 호출과 vp 메타데이터 fetch를 병렬화하여 응답시간 절감.
+      // 메타데이터 실패는 main flow를 막지 않음 (fetchVpMetadata 내부에서 empty 반환).
+      const [deepLink, metadata] = await Promise.all([
+        callDeeplinkApi(resolvedUrl, accessKey, secretKey),
+        fetchVpMetadata(resolvedUrl),
+      ]);
       if (!deepLink) {
         return {
           ok: false,
@@ -584,11 +682,18 @@ export const resolveAndGenerateAffiliateUrl = onCall(
         input: sharedUrl,
         resolvedUrl,
         shortenUrl: deepLink.shortenUrl,
+        hasMetadata:
+          !!metadata.productName ||
+          !!metadata.productImage ||
+          metadata.apiPrice > 0,
       });
       return {
         ok: true,
         shortenUrl: deepLink.shortenUrl,
         originalUrl: deepLink.originalUrl,
+        productName: metadata.productName,
+        productImage: metadata.productImage,
+        apiPrice: metadata.apiPrice,
       };
     } catch (e) {
       logger.error('[deeplink] exception', {

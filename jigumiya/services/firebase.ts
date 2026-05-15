@@ -65,7 +65,16 @@ const functions = getFunctions(app, 'asia-northeast3');
 // ─── Cloud Functions Callable ───
 
 export type ResolveAffiliateResult =
-  | { ok: true; shortenUrl: string; originalUrl: string }
+  | {
+      ok: true;
+      shortenUrl: string;
+      originalUrl: string;
+      // 1.0.19 §1 — Functions가 vp HTML OG 태그에서 best-effort 파싱한 메타데이터.
+      // 추출 실패 시 빈 문자열/0 또는 undefined. 상품 추가 INIT 상태에서만 사용.
+      productName?: string;
+      productImage?: string;
+      apiPrice?: number;
+    }
   | { ok: false; error: string; detail?: string };
 
 const resolveAffiliateCallable = httpsCallable<
@@ -382,6 +391,10 @@ export function trackedItemToSharedProduct(
     ...(item.currentPrice > 0
       ? { realPrice: item.currentPrice, lastRealPriceUpdatedAt: now }
       : {}),
+    // 1.0.19 §2 — INIT 신규 상품에 한해 apiPrice / priceStatus 시드.
+    // 기존 shared 문서가 있으면 setDoc(merge)로 동일 값이 다시 쓰임(=noop). cron이 이후 진실 source.
+    ...(item.apiPrice && item.apiPrice > 0 ? { apiPrice: item.apiPrice } : {}),
+    ...(item.priceStatus ? { priceStatus: item.priceStatus } : {}),
     lastCheckedAt: now,
   };
 }

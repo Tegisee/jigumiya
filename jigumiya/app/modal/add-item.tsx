@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
 import { MAX_TRACKED_ITEMS } from '../../services/config';
@@ -26,9 +25,6 @@ import {
   callResolveAffiliate,
   warmupResolveAffiliate,
 } from '../../services/firebase';
-import CoupangScraper, {
-  ScrapedProduct,
-} from '../../components/CoupangScraper';
 
 function extractUrl(text: string): string {
   const coupangMatch = text.match(/https?:\/\/[^\s]*coupang\.com[^\s]*/i);
@@ -122,7 +118,16 @@ function parseProductName(text: string): string {
   return '';
 }
 
-type Step = 'url' | 'scraping' | 'target';
+/** 1.0.19 §1 — WebView 제거 후 Functions 응답이 가진 메타데이터를 그대로 사용. */
+interface ResolvedMeta {
+  resolvedUrl: string;
+  affiliateUrl: string;
+  productName: string;
+  productImage: string;
+  apiPrice: number;
+}
+
+type Step = 'url' | 'resolving' | 'target';
 
 export default function AddItemModal() {
   const router = useRouter();
@@ -135,47 +140,33 @@ export default function AddItemModal() {
   const [url, setUrl] = useState(sharedUrl ?? '');
   const [targetPrice, setTargetPrice] = useState('');
   const [step, setStep] = useState<Step>('url');
-  const [scraped, setScraped] = useState<ScrapedProduct | null>(null);
-  const [scrapeFailed, setScrapeFailed] = useState(false);
-  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
-  const [scrapeHtml, setScrapeHtml] = useState<string | null>(null);
+  const [meta, setMeta] = useState<ResolvedMeta | null>(null);
   const [saving, setSaving] = useState(false);
   const isFromShare = !!sharedUrl;
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scrapeKeyRef = useRef(0);
-  const parsedUrlRef = useRef('');
-  const resolvedUrlRef = useRef('');
-  const affiliateUrlRef = useRef('');
-  // 'url' 외 단계 진행 중에 쿠팡 앱 갔다 돌아올 때 useFocusEffect가 state를 리셋하지 않도록
-  // 최신 step을 ref로 추적 (stale closure 회피)
+  // 'url' 외 단계 진행 중에 expo-router 캐싱으로 인한 state 리셋 방지 (rare)
   const stepRef = useRef<Step>('url');
   stepRef.current = step;
 
   // 모달 mount 시 Functions 워밍업 — 사용자가 URL 확인 + "다음" 누르는 1~2s 동안 컨테이너 init.
-  // _layout.tsx launch 워밍업이 idle timeout/늦은 진입 케이스를 못 잡을 때 보강.
   useEffect(() => {
     warmupResolveAffiliate();
   }, []);
 
-  // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응).
-  // 단, scraping/target 진행 중에는 보존 — 쿠팡 앱 이탈 후 복귀 시 처음부터 다시 시작 방지.
+  // 모달이 다시 열릴 때 state 초기화 (expo-router 캐싱 대응). 진행 중에는 보존.
   useFocusEffect(
     useCallback(() => {
       if (stepRef.current !== 'url') return;
       setUrl(sharedUrl ?? '');
       setTargetPrice('');
       setStep('url');
-      setScraped(null);
-      setScrapeFailed(false);
-      setScrapeUrl(null);
-      setScrapeHtml(null);
+      setMeta(null);
       setSaving(false);
     }, [sharedUrl])
   );
 
-  const suggestedPrice = scraped?.price ? Math.round(scraped.price * 0.9) : null;
+  const suggestedPrice = meta?.apiPrice ? Math.round(meta.apiPrice * 0.9) : null;
 
-  // 1단계: "다음" 버튼 → 사전 검증 + iOS 공유 시 가이드 Alert → proceedFromUrl
+  // 1단계: "다음" 버튼 → 사전 검증 → resolve
   const handleNext = async () => {
     const parsedUrl = extractUrl(url);
     if (!parsedUrl.includes('coupang.com')) {
@@ -189,37 +180,25 @@ export default function AddItemModal() {
       );
       return;
     }
-
-    // iOS + 공유 진입: 쿠팡 앱 잠시 열릴 가능성 안내 (Universal Link 우회 실패 케이스 대비)
-    if (Platform.OS === 'ios' && isFromShare) {
-      Alert.alert(
-        '쿠팡 앱이 잠깐 열릴 수 있어요',
-        '확인 후 지금이야 앱으로 돌아와주세요',
-        [
-          { text: '취소', style: 'cancel' },
-          { text: '확인', onPress: () => proceedFromUrl(parsedUrl) },
-        ],
-      );
-      return;
-    }
-
-    proceedFromUrl(parsedUrl);
+    await resolveFromUrl(parsedUrl);
   };
 
-  // 1단계 본 처리 — URL resolve + 딥링크 생성 → 스크래핑 시작
-  const proceedFromUrl = async (parsedUrl: string) => {
-    parsedUrlRef.current = parsedUrl;
-    retryCountRef.current = 0;
-    setStep('scraping');
-    setScraped(null);
-    setScrapeFailed(false);
+  /**
+   * 1.0.19 §1 — Functions 우선, 실패 시 클라이언트 fallback.
+   * 성공: resolvedUrl + affiliateUrl + 메타데이터(상품명/이미지/apiPrice) 확보 → target 단계
+   * Functions ok=false: 클라이언트가 link.coupang.com을 직접 풀고 affiliate만 확보. 메타데이터는 빈값(cron이 채움)
+   */
+  const resolveFromUrl = async (parsedUrl: string) => {
+    setStep('resolving');
+    setMeta(null);
 
-    // URL resolve + 제휴 딥링크 생성 (Functions 우선 → 실패 시 클라이언트 fallback)
-    let resolved = parsedUrl;
-    let affiliate = parsedUrl;
+    let resolvedUrl = parsedUrl;
+    let affiliateUrl = parsedUrl;
+    let productName = '';
+    let productImage = '';
+    let apiPrice = 0;
 
     const t0 = Date.now();
-    // 8s timeout — 내부 1.5s auth 대기 + Functions 응답. 5s는 너무 빡빡해서 8s로 복원.
     const functionsResult = await withTimeout(
       callResolveAffiliate(parsedUrl),
       8000,
@@ -231,224 +210,104 @@ export default function AddItemModal() {
     console.log(
       `[AddItem] Functions resolve ${Date.now() - t0}ms ok=${functionsResult.ok}`,
     );
+
     if (functionsResult.ok) {
-      resolved = functionsResult.originalUrl;
-      affiliate = functionsResult.shortenUrl;
-      console.log('[AddItem] Functions 성공:', affiliate.slice(0, 60));
+      resolvedUrl = functionsResult.originalUrl;
+      affiliateUrl = functionsResult.shortenUrl;
+      productName = functionsResult.productName ?? '';
+      productImage = functionsResult.productImage ?? '';
+      apiPrice = functionsResult.apiPrice ?? 0;
+      console.log(
+        '[AddItem] Functions 성공:',
+        affiliateUrl.slice(0, 60),
+        `meta(name=${!!productName} img=${!!productImage} price=${apiPrice})`,
+      );
     } else {
-      console.warn('[AddItem] Functions 실패 → client fallback:', functionsResult.error, functionsResult.detail);
-      // link.coupang.com 단축 URL: Coupang은 3xx가 아니라 200 + JS hex-escape redirectWebUrl로 응답.
-      // (1) 30x Location 헤더 시도 → (2) HTML body에서 redirectWebUrl 파싱 → (3) redirect:'follow' 시도.
+      console.warn(
+        '[AddItem] Functions 실패 → client fallback:',
+        functionsResult.error,
+        functionsResult.detail,
+      );
+      // 단축 URL은 200 + JS hex-escape redirectWebUrl 응답. 3단 fallback 시도.
       if (parsedUrl.includes('link.coupang.com')) {
         try {
           const res = await fetchWithTimeout(parsedUrl, { redirect: 'manual' }, 5000);
           const location = res.headers.get('location');
           if (location && location.includes('coupang.com')) {
-            resolved = location;
-            console.log('[AddItem] fallback Location:', resolved.slice(0, 80));
+            resolvedUrl = location;
           } else if (res.status === 200) {
             const html = await res.text();
             const extracted = extractRedirectUrlFromHtml(html);
-            if (extracted) {
-              resolved = extracted;
-              console.log('[AddItem] fallback redirectWebUrl 파싱:', resolved.slice(0, 80));
-            }
+            if (extracted) resolvedUrl = extracted;
           }
-          if (resolved === parsedUrl) {
+          if (resolvedUrl === parsedUrl) {
             const res2 = await fetchWithTimeout(parsedUrl, { redirect: 'follow' }, 5000);
             if (res2.url && res2.url.includes('coupang.com') && res2.url !== parsedUrl) {
-              resolved = res2.url;
-              console.log('[AddItem] fallback follow url:', resolved.slice(0, 80));
+              resolvedUrl = res2.url;
             } else if (res2.status === 200) {
               const html2 = await res2.text();
               const extracted2 = extractRedirectUrlFromHtml(html2);
-              if (extracted2) {
-                resolved = extracted2;
-                console.log('[AddItem] fallback follow redirectWebUrl:', resolved.slice(0, 80));
-              }
+              if (extracted2) resolvedUrl = extracted2;
             }
           }
         } catch (e) {
           console.warn('[AddItem] fallback resolve 실패:', e);
         }
       }
-      if (hasCoupangApiKeys() && resolved.includes('coupang.com') && resolved !== parsedUrl) {
+      // 제휴 딥링크는 클라이언트 키가 있을 때만 fallback
+      if (hasCoupangApiKeys() && resolvedUrl.includes('coupang.com') && resolvedUrl !== parsedUrl) {
         try {
           const deepLink = await withTimeout(
-            generateDeepLink(resolved),
+            generateDeepLink(resolvedUrl),
             5000,
             'deeplink',
           );
           if (deepLink?.shortenUrl) {
-            affiliate = deepLink.shortenUrl;
+            affiliateUrl = deepLink.shortenUrl;
             console.log('[AddItem] client 제휴 링크:', deepLink.shortenUrl.slice(0, 60));
           }
         } catch {}
       }
+      // 메타데이터는 비워둠 — cron이 채워줌. 사용자에겐 임시 라벨로 표시.
     }
 
-    resolvedUrlRef.current = resolved;
-    affiliateUrlRef.current = affiliate;
-    console.log('[AddItem] resolved:', resolved.slice(0, 80));
-
-    // iOS: fetch로 HTML 미리 받아서 WebView에 문자열로 로드 (Universal Link/딥링크 튕김 원천 차단)
-    // Android: resolved URL을 WebView에 직접 로드
-    const scrapeTarget = resolved.includes('coupang.com/vp/') || resolved.includes('coupang.com/vm/')
-      ? resolved : parsedUrl;
-
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      setScrapeUrl(null);
-      setScrapeHtml(null);
-      // 첫 타임아웃 시 자동 재시도 1회
-      if (retryCountRef.current === 0 && parsedUrlRef.current) {
-        retryCountRef.current++;
-        console.log('[AddItem] 타임아웃 → 자동 재시도');
-        setTimeout(() => {
-          scrapeKeyRef.current++;
-          startScrape(scrapeTarget);
-        }, 1000);
-        return;
-      }
-      setScrapeFailed(true);
-    }, 30000);
-
-    scrapeKeyRef.current++;
-    startScrape(scrapeTarget);
-  };
-
-  /**
-   * iOS/Android 공통: vp/vm URL을 WebView uri로 직접 로드.
-   *
-   * iOS HTML fetch 폐기 (1.0.16 무한로딩 fix):
-   *   - 봇 차단(403/429) 시 URL 폴백이 단축 URL 그대로 → Universal Link 흡수
-   *   - html prop 로드 시 window.ReactNativeWebView.postMessage 컨텍스트 불안정 (RN-WebView iOS 알려진 이슈)
-   *   - 내부 setInterval 폴링(SCRAPE_JS 0.5s × 20회)으로 hydration 지연 흡수
-   *
-   * link.coupang.com은 진입 자체 차단 — vp/vm으로 resolve 안 됐다는 신호.
-   * WebView에 단축 URL 넘기면 iOS Universal Link 시스템 가로채기로 쿠팡 앱 강제 실행 → 복귀 시 WebView 멈춤.
-   */
-  const startScrape = (targetUrl: string) => {
-    if (targetUrl.includes('link.coupang.com')) {
-      console.warn('[AddItem] link.coupang.com 차단 — vp URL resolve 실패, 스크래핑 스킵');
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      setScrapeUrl(null);
-      setScrapeHtml(null);
-      setScrapeFailed(true);
-      return;
+    // 메타데이터 fallback — Functions가 빈 응답이면 공유 텍스트에서 상품명 시도
+    if (!productName) {
+      productName = parseProductName(sharedText || '');
     }
-    setScrapeHtml(null);
-    setScrapeUrl(targetUrl);
-  };
 
-  // 스크래핑 성공 → 2단계 진입
-  const handleScrapeResult = useCallback((data: ScrapedProduct) => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    setScraped(data);
-    setScrapeUrl(null);
-    setScrapeHtml(null);
+    setMeta({ resolvedUrl, affiliateUrl, productName, productImage, apiPrice });
     setStep('target');
-  }, []);
+  };
 
-  const retryCountRef = useRef(0);
-
-  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    setScrapeUrl(null);
-    setScrapeHtml(null);
-
-    if (reason === 'challenge') {
-      // 챌린지면 자동 재시도 안 함 — CoupangScraper 내부에서 이미 30s 재시도 거친 후 호출됨
-      Alert.alert(
-        '쿠팡 봇 차단',
-        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
-      );
-      setScrapeFailed(true);
-      return;
-    }
-
-    // 첫 실패 시 자동 재시도 1회 (WebView 콜드 스타트 대응)
-    if (retryCountRef.current === 0 && resolvedUrlRef.current) {
-      retryCountRef.current++;
-      console.log('[AddItem] 첫 실패 → 자동 재시도');
-      const target = resolvedUrlRef.current.includes('coupang.com/vp/') || resolvedUrlRef.current.includes('coupang.com/vm/')
-        ? resolvedUrlRef.current : parsedUrlRef.current;
-      setTimeout(() => {
-        scrapeKeyRef.current++;
-        startScrape(target);
-      }, 1000);
-      return;
-    }
-    setScrapeFailed(true);
-  }, []);
-
-  // 2단계: "저장" 버튼
+  // 2단계: "저장" 버튼 — priceStatus='INIT'으로 즉시 저장 + 모달 종료
   const handleSave = async () => {
+    if (!meta) return;
     setSaving(true);
 
-    // 제휴 딥링크: handleNext에서 미리 생성 또는 scraped.resolvedUrl로 재시도
-    const resolvedUrl = scraped?.resolvedUrl || resolvedUrlRef.current || parsedUrlRef.current;
-    let affiliateUrl = affiliateUrlRef.current || parsedUrlRef.current;
+    const productName = meta.productName || '상품 정보 없음';
+    const apiPrice = meta.apiPrice;
+    const thumbnail = meta.productImage;
 
-    // handleNext에서 제휴 링크 생성 실패했으면 scraped.resolvedUrl로 재시도 (Functions → client fallback)
-    if (affiliateUrl === parsedUrlRef.current && resolvedUrl.includes('coupang.com')) {
-      console.log('[AddItem] Functions 재시도:', resolvedUrl.slice(0, 60));
-      const retryResult = await withTimeout(
-        callResolveAffiliate(resolvedUrl),
-        8000,
-        'resolveAffiliate-retry',
-      ).catch((e) => {
-        console.warn('[AddItem] callResolveAffiliate 재시도 timeout/error:', e);
-        return { ok: false as const, error: 'timeout', detail: String(e) };
-      });
-      if (retryResult.ok) {
-        affiliateUrl = retryResult.shortenUrl;
-        console.log('[AddItem] Functions 재시도 성공:', affiliateUrl.slice(0, 60));
-      } else if (hasCoupangApiKeys()) {
-        try {
-          console.log('[AddItem] client 딥링크 재시도:', resolvedUrl.slice(0, 60));
-          const deepLink = await withTimeout(
-            generateDeepLink(resolvedUrl),
-            5000,
-            'deeplink-retry',
-          );
-          if (deepLink?.shortenUrl) {
-            affiliateUrl = deepLink.shortenUrl;
-            console.log('[AddItem] client 제휴 링크 성공:', affiliateUrl.slice(0, 60));
-          }
-        } catch {}
-      }
-    }
-    console.log('[AddItem] 저장 URL:', affiliateUrl.slice(0, 60));
+    // URL에서 productId/vendorItemId 추출 (다중 후보 시도)
+    const ids = extractIds(meta.resolvedUrl, meta.affiliateUrl, url);
 
-    const nameFromText = parseProductName(sharedText || '');
-    const productName = scraped?.title || nameFromText || '상품 정보 없음';
-    const currentPrice = scraped?.price || 0;
-    const thumbnail = scraped?.image || '';
-
-    // URL에서 productId/vendorItemId 추출 (다중 후보 시도 — 하트 버튼 누락 방지)
-    const ids = extractIds(
-      scraped?.resolvedUrl,
-      resolvedUrl,
-      affiliateUrl,
-      parsedUrlRef.current,
-    );
-
-    // 1A (docs/023): addItem이 shared_products 과거 이력을 머지해서 setState하므로 await 필수.
-    // router.back() 전에 머지 완료되어 홈 화면이 즉시 풍부한 priceHistory를 표시.
+    // 1.0.19 §1 — INIT 상태로 즉시 저장. realPrice는 cron/관리자/자동 새로고침이 백그라운드 갱신.
+    // currentPrice는 표시용 fallback으로 apiPrice를 mirror (그래프엔 사용 안 함 — priceHistory 빔).
+    // priceHistory는 INIT 상태에서 빈 배열 — 첫 realPrice 도착 시 SYNCING으로 전이하며 1점 시작.
     await addItem({
       id: Date.now().toString(),
-      url: affiliateUrl,
-      resolvedUrl,
+      url: meta.affiliateUrl,
+      resolvedUrl: meta.resolvedUrl,
       productId: ids.productId,
       vendorItemId: ids.vendorItemId,
       productName,
-      currentPrice,
+      currentPrice: apiPrice, // INIT fallback. realPrice 도착 시 store의 updateItemPrice가 덮어씀.
+      apiPrice: apiPrice > 0 ? apiPrice : undefined,
       targetPrice: targetPrice.trim() ? Number(targetPrice) : undefined,
       thumbnail,
-      priceHistory: currentPrice
-        ? [{ date: new Date().toISOString().slice(0, 10), price: currentPrice }]
-        : [],
+      priceHistory: [],
+      priceStatus: 'INIT',
       createdAt: Date.now(),
     });
 
@@ -460,35 +319,10 @@ export default function AddItemModal() {
     }
   };
 
-  // 스크래핑 실패 → 정보 없이 저장
-  const handleSaveWithoutScrape = () => {
-    setScraped(null);
-    setScrapeFailed(false);
-    setStep('target');
-  };
-
-  const handleRetry = () => {
-    setScrapeFailed(false);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      setScrapeFailed(true);
-      setScrapeUrl(null);
-      setScrapeHtml(null);
-    }, 20000);
-    const target = resolvedUrlRef.current.includes('coupang.com/vp/') || resolvedUrlRef.current.includes('coupang.com/vm/')
-      ? resolvedUrlRef.current : parsedUrlRef.current;
-    scrapeKeyRef.current++;
-    startScrape(target);
-  };
-
   const goBack = () => {
-    if (step === 'target' || step === 'scraping') {
-      setScrapeUrl(null);
-      setScrapeHtml(null);
-      setScraped(null);
-      setScrapeFailed(false);
+    if (step === 'target' || step === 'resolving') {
+      setMeta(null);
       setStep('url');
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     } else {
       isFromShare ? router.replace('/') : router.back();
     }
@@ -541,47 +375,29 @@ export default function AddItemModal() {
           </>
         )}
 
-        {/* ── 스크래핑 중 ── */}
-        {step === 'scraping' && (
+        {/* ── resolving (Functions 호출 중, 목표 2초 이내) ── */}
+        {step === 'resolving' && (
           <View style={styles.scrapingBox}>
-            {!scrapeFailed ? (
-              <>
-                <ActivityIndicator size="large" color={theme.primary} />
-                <Text style={styles.scrapingText}>상품 정보를 가져오는 중...</Text>
-                {Platform.OS === 'ios' && (
-                  <Text style={styles.iosHintText}>
-                    쿠팡 앱이 열리면 지금이야 앱으로 돌아와서 계속해주세요.
-                  </Text>
-                )}
-              </>
-            ) : (
-              <>
-                <Ionicons name="alert-circle-outline" size={40} color="#FF6666" />
-                <Text style={styles.failedText}>상품 정보를 가져오지 못했습니다</Text>
-                <View style={styles.failedButtons}>
-                  <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} activeOpacity={0.8}>
-                    <Text style={styles.retryBtnText}>다시 시도</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.skipBtn} onPress={handleSaveWithoutScrape} activeOpacity={0.8}>
-                    <Text style={styles.skipBtnText}>정보 없이 진행</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity onPress={goBack} style={styles.backLink}>
-                  <Text style={styles.backLinkText}>← URL 다시 입력</Text>
-                </TouchableOpacity>
-              </>
-            )}
+            <ActivityIndicator size="large" color={theme.primary} />
+            <Text style={styles.scrapingText}>링크 확인 중...</Text>
           </View>
         )}
 
-        {/* ── 2단계: 현재가 표시 + 목표가 입력 ── */}
-        {step === 'target' && (
+        {/* ── 2단계: apiPrice 표시 + 목표가 입력 ── */}
+        {step === 'target' && meta && (
           <>
-            {scraped && (
+            {(meta.productName || meta.apiPrice > 0) && (
               <View style={styles.previewCard}>
-                <Text style={styles.previewName} numberOfLines={2}>{scraped.title}</Text>
-                <Text style={styles.previewPrice}>
-                  현재가 {scraped.price.toLocaleString()}원
+                <Text style={styles.previewName} numberOfLines={2}>
+                  {meta.productName || '상품 정보 없음'}
+                </Text>
+                {meta.apiPrice > 0 && (
+                  <Text style={styles.previewPrice}>
+                    예상가 {meta.apiPrice.toLocaleString()}원
+                  </Text>
+                )}
+                <Text style={styles.previewHint}>
+                  정확한 현재가는 곧 갱신됩니다
                 </Text>
               </View>
             )}
@@ -634,15 +450,6 @@ export default function AddItemModal() {
           </>
         )}
       </KeyboardAvoidingView>
-
-      <CoupangScraper
-        key={scrapeKeyRef.current}
-        url={scrapeUrl}
-        html={scrapeHtml}
-        baseUrl="https://www.coupang.com"
-        onResult={handleScrapeResult}
-        onError={handleScrapeError}
-      />
     </SafeAreaView>
   );
 }
@@ -718,7 +525,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
 
-  // 스크래핑 중
+  // resolving
   scrapingBox: {
     alignItems: 'center',
     gap: 16,
@@ -728,59 +535,8 @@ const styles = StyleSheet.create({
     color: theme.subtext,
     fontSize: 15,
   },
-  iosHintText: {
-    color: theme.primary,
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  // 실패
-  failedText: {
-    color: '#FF6666',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  failedButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    width: '100%',
-    marginTop: 8,
-  },
-  retryBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: theme.primary,
-    alignItems: 'center',
-  },
-  retryBtnText: {
-    color: '#000000',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  skipBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  skipBtnText: {
-    color: theme.subtext,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  backLink: {
-    marginTop: 8,
-    padding: 8,
-  },
-  backLinkText: {
-    color: theme.subtext,
-    fontSize: 13,
-  },
 
-  // 2단계: 현재가 카드
+  // 2단계: 미리보기 카드
   previewCard: {
     backgroundColor: theme.card,
     borderWidth: 1,
@@ -800,6 +556,11 @@ const styles = StyleSheet.create({
     color: theme.primary,
     fontSize: 20,
     fontWeight: 'bold',
+  },
+  previewHint: {
+    color: theme.subtext,
+    fontSize: 12,
+    marginTop: 2,
   },
   skipHint: {
     color: theme.subtext,

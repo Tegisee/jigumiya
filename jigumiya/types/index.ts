@@ -1,3 +1,11 @@
+/**
+ * 1.0.19 가격 상태 머신 (docs/025).
+ *   INIT: apiPrice만 존재 (상품 추가 직후) — 알림/그래프 X
+ *   SYNCING: 첫 realPrice 수신 후 baseline 설정 — 알림 X, 그래프 1점
+ *   TRACKING: 두 번째 realPrice 이후 정상 추적 — 알림 O, 그래프 누적
+ */
+export type PriceStatus = 'INIT' | 'SYNCING' | 'TRACKING';
+
 export interface TrackedItem {
   id: string;
   url: string;
@@ -16,6 +24,13 @@ export interface TrackedItem {
    * realPrice는 lastRealPriceUpdatedAt에서 추적되지만, 그건 "성공만 기록" → 차단 누적 회피용으로는 부적합.
    */
   lastWebViewCheckedAt?: number;
+  /**
+   * 1.0.19 §2 가격 상태 머신. 미설정 시 'TRACKING'으로 간주 (마이그레이션 전 기존 상품 호환).
+   * 신규 상품은 'INIT'으로 시작 — apiPrice만 존재, 알림/그래프 X.
+   */
+  priceStatus?: PriceStatus;
+  /** apiPrice — Functions가 vp HTML OG 태그에서 추출한 best-effort 가격. INIT 상태의 fallback 표시용. */
+  apiPrice?: number;
 }
 
 // ──────────────────────────────────────────────────────────
@@ -53,6 +68,15 @@ export interface SharedProduct {
   lastPriceDropAt?: number;
   lastDropRate?: number; // 음수 %
   createdAt?: number; // ms epoch — 신규 생성 시 기록 (019 §5-2 당일 추가 스킵용)
+  /**
+   * 1.0.19 §2 가격 상태 머신. 신규 상품은 'INIT'으로 시작 → 첫 realPrice 시 SYNCING → 두 번째 realPrice 시 TRACKING.
+   * 마이그레이션 전 기존 문서는 미설정(undefined) → 앱은 'TRACKING'으로 간주. (docs/025)
+   */
+  priceStatus?: PriceStatus;
+  /** SYNCING 진입 시각 (첫 realPrice). */
+  firstRealPriceAt?: number;
+  /** TRACKING 진입 시각 (두 번째 realPrice). */
+  trackingStartedAt?: number;
 }
 
 /** users/{uid}/tracked/{productId} — 홈 추적 참조 (10개 제한) */

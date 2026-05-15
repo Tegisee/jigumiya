@@ -72,26 +72,40 @@ export const useAppStore = create<AppState>()(
         // cron이 누적해온 priceHistory를 신규 사용자도 즉시 보이게 한다. 오늘자 가격은
         // WebView 결과(item.currentPrice)가 더 신선하므로 같은 날짜면 덮어쓰고 아니면 append.
         // lowestPrice/highestPrice는 detail 화면이 priceHistory에서 derive하므로 별도 보존 불필요.
+        //
+        // 1.0.19 §2 (docs/025) priceStatus 상속:
+        //   - 기존 shared 문서 존재 시 → snapshot.priceStatus 그대로 상속 (snapshot 없으면 'TRACKING' legacy fallback)
+        //   - shared 문서 없음 → item.priceStatus 유지 (add-item.tsx가 'INIT'으로 세팅)
         let finalItem = item;
         if (!alreadyTracking && item.productId) {
           try {
             const snapshot = await getSharedProduct(item.productId);
-            const sharedHist = snapshot?.priceHistory ?? [];
-            if (sharedHist.length > 0) {
-              const today = new Date().toISOString().slice(0, 10);
-              const merged = sharedHist.map((p) => ({ ...p }));
-              const last = merged[merged.length - 1];
-              if (item.currentPrice > 0) {
-                if (last?.date === today) {
-                  last.price = item.currentPrice;
-                } else {
-                  merged.push({ date: today, price: item.currentPrice });
+            if (snapshot) {
+              const sharedHist = snapshot.priceHistory ?? [];
+              let mergedHistory = item.priceHistory;
+              if (sharedHist.length > 0) {
+                const today = new Date().toISOString().slice(0, 10);
+                const merged = sharedHist.map((p) => ({ ...p }));
+                const last = merged[merged.length - 1];
+                if (item.currentPrice > 0) {
+                  if (last?.date === today) {
+                    last.price = item.currentPrice;
+                  } else {
+                    merged.push({ date: today, price: item.currentPrice });
+                  }
                 }
+                mergedHistory = merged;
+                console.log(
+                  `[addItem] shared 머지 ${item.productId}: ${sharedHist.length}건 + 오늘 → ${merged.length}건`,
+                );
               }
-              finalItem = { ...item, priceHistory: merged };
-              console.log(
-                `[addItem] shared 머지 ${item.productId}: ${sharedHist.length}건 + 오늘 → ${merged.length}건`,
-              );
+              finalItem = {
+                ...item,
+                priceHistory: mergedHistory,
+                // snapshot에 priceStatus 없으면 'TRACKING'으로 간주 (1.0.18 이전 문서 호환)
+                priceStatus: snapshot.priceStatus ?? 'TRACKING',
+                apiPrice: snapshot.apiPrice ?? item.apiPrice,
+              };
             }
           } catch (e) {
             // 머지 실패해도 단독 진행 (사용자 추가 자체는 막지 않음)
