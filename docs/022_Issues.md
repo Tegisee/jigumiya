@@ -170,9 +170,9 @@
 
 ---
 
-## Issue 10 — apiPrice 단일 출처 전환 (realPrice 제거)
+## Issue 10 — 1.0.20 통합 빌드 (apiPrice 단일 출처 전환)
 
-**상태 (2026-05-16 신설)**: 📋 설계 확정, 코드 미착수. bn56 선행 패치 + bn57 본격 전환. 상세 [docs/026_ApiPriceOnly_Redesign.md](./026_ApiPriceOnly_Redesign.md).
+**상태 (2026-05-16 갱신)**: 📋 설계 확정, 작업 13종 중 P1/P2 선반영 완료. bn56/bn57 분리 계획 취소 후 **1.0.20 (bn56/vc56) 단일 통합 빌드로 진행**. 상세 [docs/026_ApiPriceOnly_Redesign.md](./026_ApiPriceOnly_Redesign.md).
 
 **배경**:
 - 1.0.16~1.0.19에 걸쳐 도입한 realPrice(WebView 스크래핑) 방식이 Akamai Bot Manager로 인해 구조적으로 불안정
@@ -180,44 +180,40 @@
 - 관리자 기기 순회 운영 부담 (안드로이드 + 아이패드 상시 + 차단 시 대기)
 - dual-price(apiPrice + realPrice) 정합성 관리 복잡도 (priceStatus 머신 / sync race / 마이그레이션 부채)
 
-**결정**: realPrice 개념 완전 제거 → apiPrice 단일 출처(쿠팡 파트너스 API)로 전환. "기준가격" + "실제 결제가는 쿠팡에서 확인" 안내로 정직하게 운영.
+**결정**: realPrice 개념 완전 제거 → apiPrice 단일 출처(쿠팡 파트너스 API)로 전환. "기준가격" + "실제 결제가는 쿠팡에서 확인" 안내로 정직하게 운영. 분리 빌드 비용/리스크 대비 통합 빌드가 유리해 1.0.20 단일 출시.
 
-### bn56 선행 패치 (소규모, 즉시 효과)
-- [ ] **fix(add-item)** `searchProducts` fallback — Functions 메타 빈값 시 클라이언트 검색 API로 apiPrice/productImage/productName 채움. 이미지 표시율 80%+ 목표
-- [ ] **fix(home)** 홈 화면 여백 재확인 (1.0.19 §3 효과 검증 + 필요 시 조정)
+### 1.0.20 작업 13종
 
-### bn57 본격 전환
+#### 선반영 (1.0.19 베타 hot-patch, 커밋 `0b029b4`)
+- [x] **1. P1 saveItemToFirestore await** — store/useAppStore.ts addItem에서 await 추가. syncFromFirestore race 차단
+- [x] **2. P2 ProductCard priceStatus 분기** — INIT "추적 준비 중" 회색 + trendBadge 자동 null 가드
 
-#### Phase A — 마이그레이션
-- [ ] `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성 + dry-run
-- [ ] 기존 shared_products에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` FieldValue.delete
-- [ ] `trackerCount=0 && favoriteCount=0` 문서 일괄 삭제
-
-#### Phase B — cron + Functions
-- [ ] `scripts/shared-price-checker/index.ts` realPrice 로직 제거 + targetReached 부활 + legacy 알림(morning/evening/broadcast_drop10/20) 정식 삭제
-- [ ] `functions/src/index.ts` `onSharedProductRealPriceChange` 트리거 deploy 해제 + 코드 삭제
-- [ ] `notifier.ts` 메시지 템플릿 "기준가격" 라벨 적용
-
-#### Phase C — 앱
-- [ ] `types/index.ts` realPrice/priceStatus 관련 필드 전부 제거
-- [ ] `store/useAppStore.ts` priceStatus 전이 / updateItemPrice / markChecked / syncFromFirestore 머지 단순화
-- [ ] `store/useAppStore.ts removeItem` + `services/firebase.ts deleteSharedIfOrphan` — trackerCount=0 자동 삭제
-- [ ] `app/modal/add-item.tsx` / `app/detail/[id].tsx` / `components/ProductCard.tsx` priceStatus 분기 전부 삭제 + "기준가격" 라벨 적용
-- [ ] `components/CoupangScraper.tsx` + `components/PriceChecker.tsx` 파일 삭제
-- [ ] `app/(tabs)/index.tsx` PriceChecker 렌더 제거
-- [ ] `app/detail/[id].tsx` 새로고침 버튼 제거
-- [ ] `app/admin.tsx` 처리 — **Option A(완전 제거) vs Option B(통계 전용 축소) 결정 필요**
-
-#### Phase D — 마이그레이션 실행 + 출시
-- [ ] dry-run 결과 검토 후 실제 실행
-- [ ] `meta/config_jigumiya.minRequiredVersion` 갱신
+#### 1.0.20 통합 작업
+- [ ] **3. searchProducts fallback** — `app/modal/add-item.tsx resolveFromUrl`에서 Functions 메타 빈값 시 `services/coupangApi.ts searchProducts(keyword, 5)` → productId 정확 매칭 → productImage / productPrice / productName 채움. 이미지 표시율 80%+ 목표
+- [ ] **4. 홈 화면 여백 재확인** — `app/(tabs)/index.tsx` 1.0.19 §3 `flexGrow:1` 효과 검증 + 필요 시 추가 조정
+- [ ] **5. 관리자 모드 통계 대시보드** — `app/admin.tsx`를 순회 기능에서 통계 화면으로 전환 (추적상품수 / 가격변동 통계 / 알림발송 통계 / 사용자수). docs/026 §8 Option B 채택
+- [ ] **6. realPrice 완전 제거** — `types/index.ts` SharedProduct/TrackedItem에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` / `lastWebViewCheckedAt` 필드 삭제. `store/useAppStore.ts updateItemPrice` / `markChecked` / `syncFromFirestore priceStatus 머지` 삭제
+- [ ] **7. apiPrice 단일 출처 + "기준가격" 라벨** — ProductCard / 상세 hero / add-item target / 목표가 입력 placeholder / 추천 목표가 / 안내 문구 6개 위치 + "실제 결제가는 쿠팡에서 확인하세요" 안내. docs/026 §3 참조
+- [ ] **8. CoupangScraper / PriceChecker 컴포넌트 제거** — `components/CoupangScraper.tsx` + `components/PriceChecker.tsx` 파일 삭제 + admin/detail/홈 인덱스에서 import / 렌더 / 새로고침 버튼 제거
+- [ ] **9. 관리자 순회 기능 제거** — `services/firebase.ts adminUpdateRealPrice` 삭제 + admin.tsx의 분배 모드 chip / 순회 시작·정지 / 자동 반복 / nextRunAt 카운트다운 / 배치 휴식 전체 제거 (통계 화면 #5와 동시 적용)
+- [ ] **10. priceStatus 머신 제거** — 전이 로직 + UI 분기 전부 삭제 (#6과 통합 작업)
+- [ ] **11. trackerCount=0 자동 삭제** — `store/useAppStore.ts removeItem` + 신규 `services/firebase.ts deleteSharedIfOrphan` 헬퍼. `favoriteCount=0` 가드 + `priceHistory.length` 보존 정책 결정 필요
+- [ ] **12. 알림 메시지 템플릿** — `scripts/shared-price-checker/notifier.ts`에 "기준가격이 내렸어요" / "목표 기준가격 도달" / "기준가격이 올랐어요" 적용. cron `index.ts` realPrice baseline 분기 + priceStatus 가드 삭제 + `events.targets` 발송 부활. legacy `morning`/`evening`/`broadcast_drop10/20` 정식 삭제. CF `functions/src/index.ts onSharedProductRealPriceChange` 트리거 deploy 해제 + 코드 삭제
+- [ ] **13. 마이그레이션 스크립트** — `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성 + dry-run + 실행. 기존 ~93개 shared_products에서 realPrice 관련 필드 unset + `currentPrice` ← `apiPrice ?? realPrice ?? currentPrice` 정합 + `trackerCount=0 && favoriteCount=0` 일괄 삭제
 
 ### 결정 필요 항목
-- [ ] 관리자 모드 처리 — Option A(완전 제거) vs Option B(통계 전용 축소) — docs/026 §8
-- [ ] `favoriteCount=0` 추가 가드 (자주사는 미사용 상품 보호)
-- [ ] `priceHistory.length` 보존 가드 (가치 있는 시계열 보존)
+- [x] 관리자 모드 처리 — **Option B(통계 전용 축소) 채택** (#5)
+- [ ] `favoriteCount=0` 추가 가드 (자주사는 미사용 상품 보호) — #11
+- [ ] `priceHistory.length` 보존 가드 (가치 있는 시계열 보존) — #11
 
-### 검증 시나리오 (bn57)
+### 1.0.20 빌드 + 배포 시퀀스
+- [ ] 버전 bump (app.config.js + android/app/build.gradle: 1.0.20 / bn56 / vc56)
+- [ ] `eas build --local --profile production --platform ios` / `--platform android`
+- [ ] TestFlight + Play Console 내부 테스트 배포
+- [ ] 베타 검증 8종 시나리오 (docs/026 §검증 계획)
+- [ ] 통과 시 양 스토어 정식 출시 + `meta/config_jigumiya.minRequiredVersion = "1.0.20"` 갱신
+
+### 검증 시나리오 (1.0.20 베타)
 1. 신규 추가 ≤2s + "기준가격 X원" 표시
 2. 첫 cron 갱신 후 그래프 1점 추가
 3. 두 번째 갱신 후 정상 LineChart
@@ -225,7 +221,7 @@
 5. 목표가 도달 알림 — cron 발송 (CF 트리거 X)
 6. trackerCount=0 자동 삭제 + 재추가 시 새 priceHistory 시작
 7. 상세 라벨 + 안내 문구
-8. WebView 잔재 0 (관리자/상세/PriceChecker/admin)
+8. WebView 잔재 0 (관리자/상세/PriceChecker/admin) + 관리자 모드는 통계 화면으로만 동작
 
 ### 폐기되는 설계 문서
 - [docs/023_RealPrice_Architecture.md](./023_RealPrice_Architecture.md) — dual-price 분리, docs/026로 대체

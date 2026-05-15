@@ -1,7 +1,9 @@
-# 026. apiPrice 단일 출처 전환 (realPrice 제거)
+# 026. apiPrice 단일 출처 전환 (realPrice 제거) — 1.0.20 통합 빌드
 
-> **상태**: 📋 설계 확정 (2026-05-16) — 코드 작업 미착수. 1.0.19 베타 검증과 병행 진입 결정.
+> **상태**: 📋 설계 확정 (2026-05-16) — P1/P2 선반영 완료(`0b029b4`), 나머지 11종 작업 1.0.20 (bn56/vc56) 통합 빌드로 진행.
 > 관련 문서: [023_RealPrice_Architecture.md](./023_RealPrice_Architecture.md) (이전 dual-price 설계, 본 문서로 대체), [025_PriceStateMachine.md](./025_PriceStateMachine.md) (priceStatus 머신 — 본 문서로 폐기)
+>
+> **2026-05-16 빌드 전략 변경**: bn56(선행 패치) / bn57(본격 전환) 분리 계획을 취소하고 **1.0.20 단일 통합 빌드**로 진행. 분리 빌드의 부가 비용(중간 베타 사이클 + 사용자 혼란 + 마이그레이션 2회)이 통합 비용 대비 높음.
 
 ---
 
@@ -153,7 +155,7 @@ resolvedUrl + affiliateUrl + (메타 best-effort)  클라이언트 fallback (단
 - 응답 스키마 그대로: `productName? / productImage? / apiPrice?`
 - Akamai 차단 시 빈값 반환 (현 동작 유지)
 
-### 클라이언트 측 변경 (bn56 사전 작업)
+### 클라이언트 측 변경 (1.0.20 #3)
 
 `app/modal/add-item.tsx resolveFromUrl`:
 - Functions 응답 후 fallback 블록 추가:
@@ -176,7 +178,7 @@ resolvedUrl + affiliateUrl + (메타 best-effort)  클라이언트 fallback (단
 - `searchProducts`는 이미 `services/coupangApi.ts:92`에 구현되어 있음 (productImage 반환 확인 완료)
 - 검색 API rate limit: 1분/50회 — 신규 추가 빈도(분당 1~2건) 대비 안전 마진
 
-### addItem 변경 (bn57 본격 전환)
+### addItem 변경 (1.0.20 #6 + #10)
 
 `store/useAppStore.ts addItem`:
 - `priceStatus = 'INIT'` 로직 삭제
@@ -396,54 +398,108 @@ resolvedUrl + affiliateUrl + (메타 best-effort)  클라이언트 fallback (단
 
 ---
 
-## 10. bn56 — 선행 작업 (소규모 버그픽스)
+## 10. 1.0.20 (bn56/vc56) 통합 빌드 작업 13종
 
-목적: **1.0.19 베타 사용자 피드백에서 즉시 효과가 보이는 항목만 빠르게 패치**. realPrice 제거는 bn57로 미룸.
+### 선반영 (1.0.19 베타 hot-patch, 커밋 `0b029b4`)
+- [x] **1. P1 saveItemToFirestore await** — store/useAppStore.ts addItem에서 await 추가. syncFromFirestore race 차단 (1.0.19 ≤2s 추가 흐름에서 _layout.tsx의 AppState active sync 또는 홈 sync가 Firestore write 완료 전 발화 시 새 item 누락되던 race)
+- [x] **2. P2 ProductCard priceStatus 분기** — INIT "추적 준비 중" 회색 + 하단 "가격 수집 중" + trendBadge 자동 null (trend 변수에 isTracking 가드). 다음 1.0.20에서 priceStatus 머신 제거 시 분기 자체도 함께 정리 예정
 
-### 작업 항목
-- [ ] **fix(add-item)** searchProducts fallback — Functions 메타 빈값일 때 `services/coupangApi.ts searchProducts(keyword, 5)` 호출 + productId 정확 매칭 + apiPrice/productImage/productName 채움
-- [ ] **fix(home)** 홈화면 여백 재확인 (1.0.19 §3 `flexGrow:1` 효과 검증, 필요 시 추가 조정)
+### 1.0.20 통합 작업
 
-### 비변경 항목 (bn57로 이월)
-- realPrice 필드 / priceStatus 머신 / CoupangScraper / 관리자 모드 / 알림 메시지 라벨
+#### A — 즉시 효과 (이미지/가격 표시 + 홈 UX)
+- [ ] **3. searchProducts fallback** — `app/modal/add-item.tsx resolveFromUrl`에서 Functions 메타(`productImage` / `apiPrice` / `productName`) 중 하나라도 빈값이면 fallback 진입:
+  ```
+  if (ids.productId && (parsedKeyword.length >= 2)) {
+    const products = await searchProducts(parsedKeyword, 5);
+    const match = products.find(p => String(p.productId) === ids.productId);
+    if (match) { meta.productImage ??= match.productImage; meta.apiPrice ??= match.productPrice; meta.productName ??= match.productName; }
+  }
+  ```
+  - `searchProducts`는 이미 `services/coupangApi.ts:92`에 구현 (productImage 반환 확인)
+  - rate limit 1분/50회 — 신규 추가 빈도(분당 1~2건) 대비 안전
+  - 키워드 매칭 실패 시 무영향 (cron이 결국 채움)
+- [ ] **4. 홈 화면 여백 재확인** — `app/(tabs)/index.tsx` 1.0.19 §3 `flexGrow:1` 효과 검증 + 필요 시 추가 조정 (콘텐츠 적을 때 / 많을 때 양극단 모두 정상 동작)
 
-### 검증
-- 베타 1주차 신규 추가 시 이미지/가격 표시율 80%+ 목표
-- 홈 빈 공간 / 콘텐츠 정렬 회귀 0
+#### B — 관리자 모드 통계 대시보드 전환 (§8 Option B 채택)
+- [ ] **5. 관리자 모드 통계 화면** — `app/admin.tsx`를 통계 대시보드로 전환:
+  - **추적상품수**: `fetchAllSharedProducts().length` + `trackerCount > 0` 분포
+  - **가격변동 통계**: 최근 24h `price_drops` 컬렉션 카운트 + 평균 dropRate
+  - **알림발송 통계**: `lastNotifications` 분포 또는 Functions 로그 집계 (또는 별도 `meta/notif_stats` 문서)
+  - **사용자수**: `users` 컬렉션 `app === 'jigumiya'` count + 활성 사용자(`lastActiveAt` 7일 이내)
+  - cron 갱신 시각 / 최근 실행 결과 (`meta/stats` 활용)
+  - 분배 모드 / 순회 시작 / nextRunAt / 배치 휴식 / CoupangScraper 렌더 전부 제거
+- [ ] **9. 관리자 순회 기능 제거** (#5와 동시) — `services/firebase.ts adminUpdateRealPrice` 삭제 + admin.tsx의 순회 로직 전체 (runOnce / handleStop / scrapeKeyRef / resolverRef / stopRef / countdownTimerRef / runOnceRef / 배치 휴식 등) 삭제
 
----
+#### C — realPrice 필드 + priceStatus 머신 + WebView 제거
+- [ ] **6. realPrice 필드 제거** — `types/index.ts`:
+  - `SharedProduct`에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` 삭제
+  - `TrackedItem`에서 `priceStatus` / `apiPrice` / `firstRealPriceAt` / `trackingStartedAt` / `lastWebViewCheckedAt` 삭제 (currentPrice가 단일 가격)
+  - `PriceStatus` 타입 삭제
+- [ ] **10. priceStatus 머신 제거** (#6과 통합):
+  - `store/useAppStore.ts updateItemPrice` 함수 삭제 (realPrice mirror 경로 자체가 없음)
+  - `store/useAppStore.ts addItem` priceStatus 상속 블록 삭제 + 시드 priceStatus='INIT' 삭제
+  - `store/useAppStore.ts markChecked` 삭제 (WebView TTL 가드용이라 무의미)
+  - `store/useAppStore.ts syncFromFirestore` priceStatus 머지 블록 + `lastWebViewCheckedAt` 보존 블록 삭제
+  - `services/firebase.ts trackedItemToSharedProduct` realPrice/lastRealPriceUpdatedAt mirror + priceStatus/apiPrice 시드 분기 전부 삭제
+  - `app/modal/add-item.tsx` handleSave에서 priceStatus='INIT' / apiPrice 저장 분기 삭제 (currentPrice만 저장)
+  - `app/detail/[id].tsx` priceStatus 변수 + isInit/isSyncing/isTracking + 분기 UI (그래프 영역 / hero 라벨 / priceInsights 가드) 전부 삭제
+  - `components/ProductCard.tsx` priceStatus 변수 + 분기 + currentPriceInit 스타일 삭제
+- [ ] **8. CoupangScraper / PriceChecker 컴포넌트 제거**:
+  - `components/CoupangScraper.tsx` 파일 삭제
+  - `components/PriceChecker.tsx` 파일 삭제
+  - `app/(tabs)/index.tsx`에서 `<PriceChecker active={checkTrigger > 0} key={checkTrigger}>` + `checkTrigger` state + 관련 useEffect 제거
+  - `app/detail/[id].tsx`에서 `<CoupangScraper>` + `handleRefresh` + `handleScrapeResult` + `handleScrapeError` + 새로고침 버튼 제거
+  - `app/admin.tsx`에서 CoupangScraper import / 렌더 제거 (#5와 통합)
 
-## 11. bn57 — 본격 전환 (realPrice 제거 + 기준가격 라벨)
+#### D — "기준가격" 라벨 + 안내 문구
+- [ ] **7. apiPrice 단일 출처 + "기준가격" 라벨** — 6개 위치:
+  - **ProductCard 가격 행**: "기준가격" prefix (small font) + `{currentPrice.toLocaleString()}원`
+  - **상세 hero**: "기준가격 28,000원" + 하단에 "할인 / 쿠폰 / 카드 혜택 적용 전 가격이에요. 실제 결제가는 쿠팡에서 확인하세요" 안내
+  - **add-item target 단계 미리보기 카드**: "기준가격 28,000원" + "정확한 결제가는 쿠팡에서 확인하세요"
+  - **목표가 입력 placeholder**: "목표 기준가격 (선택사항)"
+  - **추천 목표가 버튼**: "추천 목표 기준가격: 25,200원 (10% 할인)"
+  - **건너뛰기 안내**: "건너뛰면 최저 기준가격 갱신 시 알림을 보내드려요" + "(실제 결제가는 더 저렴할 수 있어요)"
 
-### 작업 순서 (제안)
+#### E — trackerCount=0 자동 삭제
+- [ ] **11. trackerCount=0 자동 삭제**:
+  - `services/firebase.ts`에 신규 헬퍼 `deleteSharedIfOrphan(productId)` 추가
+  - Firestore transaction으로 `shared_products/{productId}` read → `trackerCount <= 0 && favoriteCount <= 0`이면 `delete` 원자화
+  - `store/useAppStore.ts removeItem`에서 `incrementTrackerCount(productId, -1)` 호출 후 `deleteSharedIfOrphan(productId)` 호출
+  - 결정 필요: `favoriteCount=0` 추가 가드 + `priceHistory.length >= 30` 같은 가치 보존 가드 — 본 작업 진입 시 확정
 
-#### Phase A — 마이그레이션 스크립트 작성 + dry-run
-- [ ] `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성
-  - 기존 `shared_products`에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` FieldValue.delete
-  - `currentPrice` ← `apiPrice ?? realPrice ?? currentPrice` 정합
-  - `trackerCount === 0 && favoriteCount === 0` 문서 일괄 삭제 옵션 (확인 후 실행)
-- [ ] dry-run으로 영향 받는 문서 수 / 삭제 대상 수 확인
+#### F — 알림 메시지 템플릿 + 폐기 코드 정리
+- [ ] **12. 알림 메시지 템플릿 적용**:
+  - `scripts/shared-price-checker/notifier.ts` 메시지 템플릿 변경:
+    - priceDrop: `[상품명] 기준가격이 내렸어요! XX → YY (-Z%) 실제 결제가는 쿠팡에서 확인하세요`
+    - targetReached: `[상품명] 목표 기준가격에 도달했어요! 기준가격 YY (목표 ZZ) 실제 결제가는 쿠팡에서 확인하세요`
+    - priceUp: `[상품명] 기준가격이 올랐어요 XX → YY (+Z%)`
+  - `scripts/shared-price-checker/index.ts`:
+    - `REAL_PRICE_FRESH_MS` 가드 (라인 ~760) 삭제
+    - `prevRealPrice` 변수 + realPrice baseline 분기 삭제
+    - priceStatus 가드 (1.0.19 §2 추가분) 삭제
+    - `events.targets` 발송 코드 부활 (라인 ~904 주석 해제)
+    - legacy `morning` / `evening` / `broadcast_drop10` / `broadcast_drop20` 코드 정식 삭제
+  - `functions/src/index.ts`:
+    - `onSharedProductRealPriceChange` 트리거 export 제거 + deploy 해제
+    - `clearNeedsCheck` 헬퍼 삭제 (needsCheck 필드 자체 폐기)
+    - `resolveAndGenerateAffiliateUrl`은 **유지** — `fetchVpMetadata`도 유지 (cron 호출 절감 효과)
 
-#### Phase B — cron + Functions 측 변경
-- [ ] `scripts/shared-price-checker/index.ts` realPrice 로직 제거 + targetReached 부활 + legacy 알림 코드 삭제
-- [ ] `functions/src/index.ts` `onSharedProductRealPriceChange` 트리거 deploy 해제 + 코드 삭제
-- [ ] `notifier.ts` 메시지 템플릿 "기준가격" 라벨 적용
+#### G — 마이그레이션
+- [ ] **13. 마이그레이션 스크립트** — `scripts/migration/2026-05-realPrice-cleanup.mjs`:
+  - dry-run 모드 우선 (영향 받는 문서 수 / 삭제 대상 수 출력)
+  - 기존 shared_products에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` FieldValue.delete
+  - `currentPrice` ← `apiPrice ?? realPrice ?? currentPrice` 정합 보정
+  - `trackerCount === 0 && favoriteCount === 0`이고 `priceHistory.length < 30` 문서 일괄 삭제 (가치 보존 가드 확정 후)
+  - 결과 로그 검토 후 실 적용
 
-#### Phase C — 앱 측 변경
-- [ ] `types/index.ts` 필드 제거
-- [ ] `store/useAppStore.ts addItem` priceStatus 제거 + `updateItemPrice` 삭제 + `markChecked` 삭제 + `syncFromFirestore` 머지 단순화
-- [ ] `store/useAppStore.ts removeItem` — trackerCount=0 자동 삭제 헬퍼 호출
-- [ ] `services/firebase.ts adminUpdateRealPrice` 삭제 + `trackedItemToSharedProduct` 단순화 + 신규 `deleteSharedIfOrphan` 헬퍼
-- [ ] `app/modal/add-item.tsx` priceStatus='INIT' 저장 분기 제거 + 라벨 "기준가격"으로 변경
-- [ ] `app/detail/[id].tsx` priceStatus 분기 전부 삭제 + 새로고침 버튼 제거 + 라벨 "기준가격"
-- [ ] `components/ProductCard.tsx` priceStatus 분기 삭제 + "기준가격" 라벨 + trendBadge 가드 단순화
-- [ ] `components/CoupangScraper.tsx` + `components/PriceChecker.tsx` 파일 삭제
-- [ ] `app/(tabs)/index.tsx` PriceChecker 렌더 제거
-- [ ] `app/admin.tsx` 제거 또는 통계 화면으로 축소 (§8 결정 사항)
-
-#### Phase D — 마이그레이션 실행
-- [ ] dry-run 결과 검토 후 실제 실행
-- [ ] `meta/config_jigumiya.minRequiredVersion = "1.0.X"` 갱신 (강제 업데이트로 구버전 차단)
+### 1.0.20 빌드 + 배포 시퀀스
+- [ ] 버전 bump: `app.config.js` (1.0.20, ios.buildNumber 56, android.versionCode 56) + `android/app/build.gradle` (versionCode 56 / versionName 1.0.20)
+- [ ] 코드 변경 작업 위 13종 일괄 완료 + tsc 통과
+- [ ] `eas build --local --profile production --platform ios` / `--platform android`
+- [ ] TestFlight + Play Console 내부 테스트 배포
+- [ ] 베타 검증 (§검증 계획)
+- [ ] 통과 시 양 스토어 정식 출시
+- [ ] Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.20"` 갱신 (구버전 강제 업데이트)
 
 ---
 
@@ -503,5 +559,7 @@ CLAUDE.md의 활성 설계 참조에서 023 / 025 링크는 유지하되 "deprec
 | 관리자 모드 처리 | ⏳ Option A vs B 결정 필요 | 사용자 협의 |
 | favoriteCount=0 추가 가드 | ⏳ 검토 | 자주사는 미사용 상품 보호 |
 | priceHistory.length 보존 가드 | ⏳ 검토 | 가치 있는 시계열 보존 |
-| bn56 selective patch | ✅ 확정 | searchProducts fallback + 홈 여백 |
-| bn57 full migration | ✅ 확정 | 베타 검증 후 진입 |
+| **1.0.20 통합 빌드 (bn56/vc56)** | ✅ 확정 | bn56/bn57 분리 취소, 13종 작업 일괄 처리 |
+| 관리자 모드 → 통계 대시보드 | ✅ 확정 (Option B) | 추적상품수 / 가격변동 / 알림발송 / 사용자수 |
+| favoriteCount=0 추가 가드 | ⏳ 검토 | trackerCount=0 자동 삭제 진입 시 결정 |
+| priceHistory.length 보존 가드 | ⏳ 검토 | length ≥ 30 등 가치 시계열 보존 |

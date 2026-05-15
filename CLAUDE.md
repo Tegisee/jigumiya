@@ -24,8 +24,8 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ## 현재 상태 (2026-05-16 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 — iOS 실패. 1.0.18 (bn54/vc54) — 1.0.19에 통합. 1.0.19 (bn55/vc55) 빌드 + 베타 배포 완료. **bn56 선행 패치(searchProducts fallback + 홈 여백) 예정 + bn57 apiPrice 단일 출처 전면 전환 설계 확정([docs/026](./docs/026_ApiPriceOnly_Redesign.md)).**
-- **bn56/bn57 설계 (2026-05-16 확정, 코드 미착수)**: 1.0.19 §1 Functions OG 파싱이 Akamai에 막혀 이미지/가격 누락 → realPrice 자체를 폐기하고 apiPrice 단일 출처로 전환. bn56(선행): add-item.tsx에 searchProducts fallback + 홈 여백 재확인. bn57(본격): realPrice/priceStatus 머신/WebView/관리자 순회/CF 트리거 전부 제거 + "기준가격" 라벨 + "실제 결제가는 쿠팡에서 확인하세요" 안내 + trackerCount=0 자동 삭제. docs/023(RealPrice) + docs/025(priceStatus 머신)는 [docs/026](./docs/026_ApiPriceOnly_Redesign.md)로 대체 (historical record로만 보존)
+- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 — iOS 실패. 1.0.18 (bn54/vc54) — 1.0.19에 통합. 1.0.19 (bn55/vc55) 빌드 + 베타 배포 완료. **1.0.20 (bn56/vc56) apiPrice 단일 출처 전면 전환 — 통합 빌드로 진행 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). P1+P2는 1.0.19 베타 위에 `0b029b4`로 선반영 완료.**
+- **1.0.20 설계 (2026-05-16 확정, 통합 빌드 결정)**: 1.0.19 §1 Functions OG 파싱이 Akamai에 막혀 이미지/가격 누락 → realPrice 자체를 폐기하고 apiPrice 단일 출처로 전환. bn56/bn57 분리 계획을 취소하고 1.0.20 단일 통합 빌드로 진행. 작업 13종 — P1(saveItemToFirestore await ✅) + P2(ProductCard priceStatus 분기 ✅) + searchProducts fallback + 홈 여백 + 관리자 모드 통계 대시보드 + realPrice 완전 제거 + apiPrice 단일 출처 + "기준가격" 라벨 + CoupangScraper/PriceChecker 삭제 + 관리자 순회 제거 + priceStatus 머신 제거 + trackerCount=0 자동 삭제 + 알림 메시지 템플릿 + 마이그레이션 스크립트. docs/023(RealPrice) + docs/025(priceStatus 머신)는 [docs/026](./docs/026_ApiPriceOnly_Redesign.md)로 대체 (historical record로만 보존)
 - **1.0.19 배포 (2026-05-16)**: TestFlight 업로드 완료(iOS) + Play Console 내부 테스트 등록 완료(Android) + 출시노트 작성 완료. 베타 시나리오 6종 검증 진행 중 (docs/025 §검증 계획)
 - **1.0.19 작업 (2026-05-16 완료)**: §1 상품 추가 WebView 완전 제거 (Functions가 vp HTML OG 태그로 메타데이터 즉시 반환, `priceStatus='INIT'`로 저장) + §2 가격 상태 머신 (INIT→SYNCING→TRACKING 전이, cron + CF 트리거 알림 가드 TRACKING-only, 상세페이지 priceStatus별 UI 분기) + §2 미흡 보완 (syncFromFirestore 머지 + cron priceHistory 누적 가드 + apiPrice baseline 차단) + §3 홈 ScrollView `flexGrow:1` + §4 관리자 분배 모드 옵션 (auto/odd/even/all, AsyncStorage 영속) + §5 상세 "N시간 전 업데이트" 표시 (6h 이상 노란색 강조). 1.0.18 fix(iOS incognito 분기 + 홈 하단 여백 + 공유 메시지 줄간격)도 함께 출시. 상세 [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md)
 - **1.0.18 작업 (2026-05-14 완료, 빌드 대기)**: iOS 한정 incognito 제거 (WKWebView nonPersistentDataStore의 Akamai sec_cpt Set-Cookie race 의심 → default dataStore로 전환, 챌린지 1회 통과 후 영속 재사용. Android는 incognito=true 유지) + 홈 하단 여백 축소(빈 공간 제거) + 앱 공유 메시지 iPhone/Android 줄간격 1줄 추가(잘못 눌림 방지)
@@ -54,8 +54,8 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - 📦 **Issue 5** — 1.0.19 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
-- 🔨 **Issue 9** — 1.0.19 §1~§5 코드 + 빌드 + 베타 배포 완료. **베타 시나리오 6종 검증 진행 중** ([docs/025](./docs/025_PriceStateMachine.md), bn57로 폐기 예정). 잔여: bn56 선행 패치(searchProducts fallback) + bn57 전면 전환
-- 🆕 **Issue 10** — apiPrice 단일 출처 전환 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). bn56(searchProducts fallback + 홈 여백) → bn57(realPrice/priceStatus/WebView 전부 제거 + "기준가격" 라벨 + trackerCount=0 자동 삭제)
+- 🔨 **Issue 9** — 1.0.19 §1~§5 코드 + 빌드 + 베타 배포 완료. **1.0.20 통합 빌드에서 priceStatus 머신 폐기** ([docs/025](./docs/025_PriceStateMachine.md)는 deprecated)
+- 🆕 **Issue 10** — 1.0.20 apiPrice 단일 출처 전환 통합 빌드 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). 작업 13종 일괄 진행
 
 > Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
 > Issue 5의 Akamai 완화 4종 + 자동 새로고침 2종 + 공유 양쪽 링크 + productId fallback + cron baseline + 앱구조 개편은 1.0.17 코드 작업으로 완료되어 [docs/changelog.md](./docs/changelog.md)로 이동.
@@ -64,24 +64,31 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ## 다음 할 일
 
-**🔨 우선순위 1 — bn56 선행 패치 (docs/026 §10)**:
-- **fix(add-item)** Functions 메타 빈값 시 `services/coupangApi.ts searchProducts(keyword, 5)` fallback → productId 정확 매칭 → productImage / productPrice / productName 채움
-- **fix(home)** 홈 화면 여백 재확인 (1.0.19 §3 `flexGrow:1` 효과 검증, 필요 시 추가 조정)
-- 베타 1주차 신규 추가 시 이미지/가격 표시율 80%+ 목표
+**🔨 우선순위 1 — 1.0.20 (bn56/vc56) 통합 빌드 작업 13종** ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)):
 
-**🆕 우선순위 2 — bn57 본격 전환 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md))**:
-- realPrice / lastRealPriceUpdatedAt / needsCheck / priceStatus 필드 전부 마이그레이션 unset
-- CoupangScraper / PriceChecker / 관리자 순회 / CF onSharedProductRealPriceChange 트리거 전부 제거
-- cron의 realPrice baseline 분기 + priceStatus 가드 + apiPrice fallback 가드 정리 + targetReached 발송 부활
-- "기준가격" 라벨 (ProductCard / 상세 hero / target 단계 / 목표가 입력 / 추천 / 안내) + "실제 결제가는 쿠팡에서 확인하세요" 안내
-- 알림 메시지 템플릿 "기준가격이 내렸어요" / "목표 기준가격 도달" / "기준가격이 올랐어요"
-- trackerCount=0 자동 삭제 (Firestore 비용 + cron rate limit 절감)
-- 관리자 모드: Option A(완전 제거) vs Option B(통계 전용 축소) 결정 필요
+✅ 선반영 (1.0.19 베타 위에 hot-patch, 커밋 `0b029b4`):
+1. ✅ saveItemToFirestore await — P1 race 차단
+2. ✅ ProductCard priceStatus 분기 — P2
 
-**📋 베타 통과 후 정식 출시 + 잔여**:
-- 양 스토어 정식 출시 → `meta/config_jigumiya.minRequiredVersion = "1.0.19"` 갱신
-- legacy `morning`/`evening`/`broadcast_drop10/20` 코드 정식 삭제 (bn57에 포함)
-- Issue 4 잔여 (Functions 응답시간 표본) — bn57 후 CF 트리거 자체가 없어지므로 일부 무효
+🔨 1.0.20 통합 작업:
+
+3. **searchProducts fallback** — Functions 메타 빈값 시 `services/coupangApi.ts searchProducts(keyword, 5)` → productId 정확 매칭 → productImage / productPrice / productName 채움
+4. **홈 화면 여백** — 1.0.19 §3 `flexGrow:1` 효과 재검증 + 필요 시 추가 조정
+5. **관리자 모드 통계 대시보드** — 순회 기능 제거 후 통계 화면으로 전환 (추적상품수 / 가격변동 통계 / 알림발송 통계 / 사용자수). docs/026 §8 Option B
+6. **realPrice 완전 제거** — `shared_products` / `TrackedItem`에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` / `lastWebViewCheckedAt` 필드 삭제
+7. **apiPrice 단일 출처 + "기준가격" 라벨** — ProductCard / 상세 hero / add-item target 단계 / 목표가 입력 / 추천 / 안내 6개 위치 적용 + "실제 결제가는 쿠팡에서 확인하세요" 안내
+8. **CoupangScraper / PriceChecker 컴포넌트 제거** — 파일 삭제 + admin/detail/홈 인덱스에서 import / 렌더 / 새로고침 버튼 제거
+9. **관리자 순회 기능 제거** — `adminUpdateRealPrice` + 분배 모드 chip + 순회 시작 / 정지 / 자동 반복 / nextRunAt 카운트다운 / 배치 휴식 전체 삭제 (관리 화면은 통계로 전환)
+10. **priceStatus 머신 제거** — 전이 로직 (store/firebase) + UI 분기 (detail / ProductCard / add-item) 전부 삭제
+11. **trackerCount=0 자동 삭제** — `store/useAppStore.ts removeItem` + 신규 `deleteSharedIfOrphan` 헬퍼 (favoriteCount 가드 검토)
+12. **알림 메시지 템플릿** — cron `notifier.ts`에 "기준가격이 내렸어요" / "목표 기준가격 도달" / "기준가격이 올랐어요" 적용 + legacy `morning`/`evening`/`broadcast_drop10/20` 정식 삭제 + CF `onSharedProductRealPriceChange` 트리거 deploy 해제
+13. **마이그레이션 스크립트** — `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성 + dry-run + 실행 (기존 ~93개 shared_products의 realPrice 관련 필드 unset)
+
+**📋 1.0.20 빌드 + 베타 + 출시 시퀀스**:
+- 버전 bump (app.config.js + android/app/build.gradle)
+- `eas build --local --profile production --platform ios` / `--platform android`
+- 베타 검증 8종 시나리오 (docs/026 §검증 계획)
+- 통과 시 양 스토어 정식 출시 + `meta/config_jigumiya.minRequiredVersion = "1.0.20"` 갱신
 
 **🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
 
