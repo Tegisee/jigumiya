@@ -174,6 +174,11 @@ true;
 `;
 
 function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
+  // 1.0.21 디버깅: 컴포넌트 render마다 url prop 추적 (mount/unmount 가시화)
+  console.log(
+    `[AndroidMetaScraper] render: url=${url ? url.slice(0, 100) : '<null>'} platform=${Platform.OS}`,
+  );
+
   const webViewRef = useRef<WebView>(null);
   const doneRef = useRef(false);
   const injectedRef = useRef(false);

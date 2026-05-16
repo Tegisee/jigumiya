@@ -168,6 +168,7 @@ export default function AddItemModal() {
       setStep('url');
       setMeta(null);
       setSaving(false);
+      console.log('[AddItem] setScraperUrl(null) — useFocusEffect reset');
       setScraperUrl(null);
     }, [sharedUrl])
   );
@@ -354,6 +355,7 @@ export default function AddItemModal() {
         `[AddItem] Android WebView fallback 발사 converted=${converted}:`,
         mobileUrl.slice(0, 120),
       );
+      console.log('[AddItem] setScraperUrl(mobileUrl) — fallback 발사');
       setScraperUrl(mobileUrl);
     } else {
       const reason = !isAndroid
@@ -380,11 +382,13 @@ export default function AddItemModal() {
       );
       return merged;
     });
+    console.log('[AddItem] setScraperUrl(null) — handleScraperMeta 결과 도착');
     setScraperUrl(null);
   }, []);
 
   const handleScraperTimeout = useCallback(() => {
     console.warn('[AddItem] WebView fallback timeout — silent');
+    console.log('[AddItem] setScraperUrl(null) — handleScraperTimeout');
     setScraperUrl(null);
   }, []);
 
@@ -416,6 +420,7 @@ export default function AddItemModal() {
       createdAt: Date.now(),
     });
 
+    console.log('[AddItem] setScraperUrl(null) — handleSave (race 결과 무시)');
     setScraperUrl(null); // 저장 완료 시 WebView 강제 unmount (race 결과 무시)
     setSaving(false);
     if (isFromShare) {
@@ -429,6 +434,7 @@ export default function AddItemModal() {
     if (step === 'target' || step === 'resolving') {
       setMeta(null);
       setStep('url');
+      console.log('[AddItem] setScraperUrl(null) — goBack');
       setScraperUrl(null); // WebView fallback 강제 unmount
     } else {
       isFromShare ? router.replace('/') : router.back();
