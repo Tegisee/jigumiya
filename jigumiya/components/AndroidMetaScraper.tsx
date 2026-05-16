@@ -49,56 +49,9 @@ const TIMEOUT_MS = 10_000;
 const USER_AGENT =
   'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
 
-// 페이지 로드 전 주입:
-//   1. navigator.webdriver 우회 — Akamai 봇 분류 회피
-//   2. 딥링크 차단 — coupang://, intent://, market://, itms-appss:// 시도 무력화
-//   3. 앱 다운로드 배너 숨김
-const PRELOAD_JS = `
-(function() {
-  try {
-    Object.defineProperty(navigator, 'webdriver', {
-      configurable: true,
-      get: function() { return undefined; }
-    });
-  } catch(e) {}
-
-  var blocked = ['coupang://', 'coupangapp://', 'itms-appss://', 'intent://', 'market://'];
-  var origLocation = window.location;
-  try {
-    Object.defineProperty(window.__proto__, 'location', {
-      configurable: true,
-      get: function() { return origLocation; },
-      set: function(v) {
-        if (typeof v === 'string') {
-          for (var i = 0; i < blocked.length; i++) {
-            if (v.startsWith(blocked[i])) return;
-          }
-        }
-        origLocation.href = v;
-      }
-    });
-  } catch(e) {}
-
-  document.addEventListener('click', function(e) {
-    var el = e.target;
-    while (el && el.tagName !== 'A') el = el.parentElement;
-    if (el && el.href) {
-      for (var i = 0; i < blocked.length; i++) {
-        if (el.href.startsWith(blocked[i])) {
-          e.preventDefault();
-          e.stopPropagation();
-          return false;
-        }
-      }
-    }
-  }, true);
-
-  var style = document.createElement('style');
-  style.textContent = '[class*="app-banner"], [class*="app-download"], [id*="app-banner"], .top-app-bar, .smart-banner { display: none !important; }';
-  if (document.head) document.head.appendChild(style);
-})();
-true;
-`;
+// 1.0.21 — PRELOAD_JS 제거 (window.location setter 오버라이드가 쿠팡 SPA 동작을 깨고
+//   Akamai 챌린지 루프를 유발하는 가설 검증). 딥링크 차단은 onShouldStartLoadWithRequest로 충분.
+//   navigator.webdriver는 WebView 기본값(false)이라 우회 없어도 가짜 노출 안 됨.
 
 // 1.0.21 — DOM 도착 후 자체 폴링 (0.5s × 최대 8회). bodyLen >= 10000 도달 또는 max 시 1회 postMessage.
 // 쿠팡 SPA hydration이 1.5s 단발 inject보다 늦게 끝나는 케이스 대응. OG/ld+json 우선, 1.0.15 셀렉터 fallback.
@@ -454,7 +407,6 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
         ref={webViewRef}
         source={{ uri: effectiveUrl ?? url }}
         userAgent={USER_AGENT}
-        injectedJavaScriptBeforeContentLoaded={PRELOAD_JS}
         onMessage={handleMessage}
         onNavigationStateChange={handleNavigationChange}
         onLoadStart={handleLoadStart}
