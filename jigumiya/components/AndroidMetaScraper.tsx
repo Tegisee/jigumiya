@@ -100,86 +100,135 @@ const PRELOAD_JS = `
 true;
 `;
 
-// DOM 도착 후 주입 — OG / ld+json 우선 (모바일/데스크탑 공통 SSR 메타), 1.0.15 셀렉터는 fallback
+// 1.0.21 — DOM 도착 후 자체 폴링 (0.5s × 최대 8회). bodyLen >= 10000 도달 또는 max 시 1회 postMessage.
+// 쿠팡 SPA hydration이 1.5s 단발 inject보다 늦게 끝나는 케이스 대응. OG/ld+json 우선, 1.0.15 셀렉터 fallback.
 const SCRAPE_JS = `
 (function() {
-  try {
-    // ── Title ──
-    var title = '';
-    var ogTitle = document.querySelector('meta[property="og:title"]');
-    if (ogTitle) title = ogTitle.getAttribute('content') || '';
-    if (!title) {
-      var h2 = document.querySelector('h2.prod-buy-header__title, h1.prod-buy-header__title, .prod-buy-header__title');
-      if (h2) title = h2.textContent.trim();
-    }
-    if (!title) {
-      var t = document.querySelector('title');
-      if (t) title = t.textContent.trim();
-    }
-    title = title.replace(/\\s*[|\\-]\\s*쿠팡.*$/, '').trim();
+  if (window.__metaPollHandle) {
+    clearInterval(window.__metaPollHandle);
+    window.__metaPollHandle = null;
+  }
+  var attempts = 0;
+  var MAX_ATTEMPTS = 8;
+  var BODY_LEN_THRESHOLD = 10000;
+  var done = false;
 
-    // ── Price ──
-    var price = 0;
-    var ogPrice = document.querySelector('meta[property="product:price:amount"]');
-    if (ogPrice) {
-      price = parseInt((ogPrice.getAttribute('content') || '').replace(/[^0-9]/g, ''), 10) || 0;
-    }
-    if (!price) {
-      var scripts = document.querySelectorAll('script[type="application/ld+json"]');
-      for (var i = 0; i < scripts.length; i++) {
-        try {
-          var ld = JSON.parse(scripts[i].textContent);
-          if (ld && ld.offers && ld.offers.price) {
-            price = parseInt(String(ld.offers.price).replace(/[^0-9]/g, ''), 10) || 0;
-            if (price) break;
-          }
-        } catch(e) {}
+  function extractAndSend() {
+    try {
+      // ── Title ──
+      var title = '';
+      var ogTitle = document.querySelector('meta[property="og:title"]');
+      if (ogTitle) title = ogTitle.getAttribute('content') || '';
+      if (!title) {
+        var h2 = document.querySelector('h2.prod-buy-header__title, h1.prod-buy-header__title, .prod-buy-header__title');
+        if (h2) title = h2.textContent.trim();
       }
-    }
-    if (!price) {
-      var totalPrice = document.querySelector('.total-price strong');
-      if (totalPrice) price = parseInt(totalPrice.textContent.replace(/[^0-9]/g, ''), 10) || 0;
-    }
-    if (!price) {
-      var salePrice = document.querySelector('.prod-sale-price .total-price');
-      if (salePrice) price = parseInt(salePrice.textContent.replace(/[^0-9]/g, ''), 10) || 0;
-    }
+      if (!title) {
+        var t = document.querySelector('title');
+        if (t) title = t.textContent.trim();
+      }
+      title = title.replace(/\\s*[|\\-]\\s*쿠팡.*$/, '').trim();
 
-    // ── Image ──
-    var image = '';
-    var ogImage = document.querySelector('meta[property="og:image"]');
-    if (ogImage) image = ogImage.getAttribute('content') || '';
-    if (!image) {
-      var mainImg = document.querySelector('.prod-image__detail img, .prod-image img');
-      if (mainImg) image = mainImg.getAttribute('src') || '';
-    }
-    if (image && image.startsWith('//')) image = 'https:' + image;
+      // ── Price ──
+      var price = 0;
+      var ogPrice = document.querySelector('meta[property="product:price:amount"]');
+      if (ogPrice) {
+        price = parseInt((ogPrice.getAttribute('content') || '').replace(/[^0-9]/g, ''), 10) || 0;
+      }
+      if (!price) {
+        var scripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (var i = 0; i < scripts.length; i++) {
+          try {
+            var ld = JSON.parse(scripts[i].textContent);
+            if (ld && ld.offers && ld.offers.price) {
+              price = parseInt(String(ld.offers.price).replace(/[^0-9]/g, ''), 10) || 0;
+              if (price) break;
+            }
+          } catch(e) {}
+        }
+      }
+      if (!price) {
+        var totalPrice = document.querySelector('.total-price strong');
+        if (totalPrice) price = parseInt(totalPrice.textContent.replace(/[^0-9]/g, ''), 10) || 0;
+      }
+      if (!price) {
+        var salePrice = document.querySelector('.prod-sale-price .total-price');
+        if (salePrice) price = parseInt(salePrice.textContent.replace(/[^0-9]/g, ''), 10) || 0;
+      }
 
-    var titleTagEl = document.querySelector('title');
-    var h1El = document.querySelector('h1');
-    var bodyHtml = document.body ? document.body.innerHTML : '';
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'META',
-      title: title,
-      price: price,
-      image: image,
-      ready: document.readyState,
-      url: window.location.href.slice(0, 120),
-      debug: {
-        titleTag: titleTagEl ? (titleTagEl.textContent || '').slice(0, 60) : '',
-        metaCount: document.querySelectorAll('meta').length,
-        ogCount: document.querySelectorAll('meta[property^="og:"]').length,
-        ldJsonCount: document.querySelectorAll('script[type="application/ld+json"]').length,
-        bodyLen: bodyHtml.length,
-        h1Text: h1El ? (h1El.textContent || '').slice(0, 60) : '',
-        appBannerPresent: !!document.querySelector('[class*="app-banner"], [class*="app-download"]'),
-      },
-    }));
-  } catch(e) {
-    window.ReactNativeWebView.postMessage(JSON.stringify({
-      type: 'ERROR',
-      message: e.message,
-    }));
+      // ── Image ──
+      var image = '';
+      var ogImage = document.querySelector('meta[property="og:image"]');
+      if (ogImage) image = ogImage.getAttribute('content') || '';
+      if (!image) {
+        var mainImg = document.querySelector('.prod-image__detail img, .prod-image img');
+        if (mainImg) image = mainImg.getAttribute('src') || '';
+      }
+      if (image && image.startsWith('//')) image = 'https:' + image;
+
+      var titleTagEl = document.querySelector('title');
+      var h1El = document.querySelector('h1');
+      var bodyHtml = document.body ? document.body.innerHTML : '';
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'META',
+        title: title,
+        price: price,
+        image: image,
+        ready: document.readyState,
+        url: window.location.href.slice(0, 120),
+        attempts: attempts,
+        debug: {
+          titleTag: titleTagEl ? (titleTagEl.textContent || '').slice(0, 60) : '',
+          metaCount: document.querySelectorAll('meta').length,
+          ogCount: document.querySelectorAll('meta[property^="og:"]').length,
+          ldJsonCount: document.querySelectorAll('script[type="application/ld+json"]').length,
+          bodyLen: bodyHtml.length,
+          h1Text: h1El ? (h1El.textContent || '').slice(0, 60) : '',
+          appBannerPresent: !!document.querySelector('[class*="app-banner"], [class*="app-download"]'),
+        },
+      }));
+    } catch(e) {
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'ERROR',
+        message: e.message,
+        attempts: attempts,
+      }));
+    }
+  }
+
+  function probe() {
+    if (done) return;
+    attempts++;
+    try {
+      var bodyHtml = document.body ? document.body.innerHTML : '';
+      var bodyLen = bodyHtml.length;
+      if (bodyLen >= BODY_LEN_THRESHOLD || attempts >= MAX_ATTEMPTS) {
+        done = true;
+        if (window.__metaPollHandle) {
+          clearInterval(window.__metaPollHandle);
+          window.__metaPollHandle = null;
+        }
+        extractAndSend();
+      }
+      // 아직 부족 → 다음 setInterval 호출 대기
+    } catch(e) {
+      done = true;
+      if (window.__metaPollHandle) {
+        clearInterval(window.__metaPollHandle);
+        window.__metaPollHandle = null;
+      }
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type: 'ERROR',
+        message: e.message,
+        attempts: attempts,
+      }));
+    }
+  }
+
+  // 즉시 1회 시도 (bodyLen 이미 충분하면 첫 호출에 종료)
+  probe();
+  if (!done) {
+    window.__metaPollHandle = setInterval(probe, 500);
   }
 })();
 true;
@@ -240,7 +289,7 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
 
         if (data.debug) {
           console.log(
-            `[AndroidMetaScraper] page debug: ready=${data.ready} url=${data.url} ` +
+            `[AndroidMetaScraper] page debug: attempts=${data.attempts ?? '?'} ready=${data.ready} url=${data.url} ` +
               `titleTag="${data.debug.titleTag}" h1="${data.debug.h1Text}" ` +
               `meta=${data.debug.metaCount} og=${data.debug.ogCount} ldJson=${data.debug.ldJsonCount} ` +
               `bodyLen=${data.debug.bodyLen} appBanner=${data.debug.appBannerPresent}`,
@@ -276,12 +325,12 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
   const tryInject = useCallback(() => {
     if (doneRef.current || injectedRef.current) return;
     injectedRef.current = true;
-    // 페이지 도착 후 약간 지연 — 클라이언트 렌더 가격 등 hydration 대기
+    // 1.0.21: SCRAPE_JS 내부에서 0.5s × 최대 8회 폴링하므로 외부 지연 최소화 (300ms).
     setTimeout(() => {
       if (!doneRef.current && webViewRef.current) {
         webViewRef.current.injectJavaScript(SCRAPE_JS);
       }
-    }, 1500);
+    }, 300);
   }, []);
 
   const handleNavigationChange = useCallback(
