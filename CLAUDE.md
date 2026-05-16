@@ -22,75 +22,65 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 
 ---
 
-## 현재 상태 (2026-05-16 기준)
+## 현재 상태 (2026-05-17 기준)
 
-- **버전**: 1.0.15 (bn50/vc50) 양 스토어 출시. 1.0.16 (bn52/vc52) 빌드 완료 — 스토어 업로드 대기. 1.0.17 (bn53/vc53) 베타 — iOS 실패. 1.0.18 (bn54/vc54) — 1.0.19에 통합. 1.0.19 (bn55/vc55) 빌드 + 베타 배포 완료. **1.0.20 (bn56/vc56) apiPrice 단일 출처 전면 전환 — 통합 빌드로 진행 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). P1+P2는 1.0.19 베타 위에 `0b029b4`로 선반영 완료.**
-- **1.0.20 설계 (2026-05-16 확정, 통합 빌드 결정)**: 1.0.19 §1 Functions OG 파싱이 Akamai에 막혀 이미지/가격 누락 → realPrice 자체를 폐기하고 apiPrice 단일 출처로 전환. bn56/bn57 분리 계획을 취소하고 1.0.20 단일 통합 빌드로 진행. 작업 13종 — P1(saveItemToFirestore await ✅) + P2(ProductCard priceStatus 분기 ✅) + searchProducts fallback + 홈 여백 + 관리자 모드 통계 대시보드 + realPrice 완전 제거 + apiPrice 단일 출처 + "기준가격" 라벨 + CoupangScraper/PriceChecker 삭제 + 관리자 순회 제거 + priceStatus 머신 제거 + trackerCount=0 자동 삭제 + 알림 메시지 템플릿 + 마이그레이션 스크립트. docs/023(RealPrice) + docs/025(priceStatus 머신)는 [docs/026](./docs/026_ApiPriceOnly_Redesign.md)로 대체 (historical record로만 보존)
-- **1.0.19 배포 (2026-05-16)**: TestFlight 업로드 완료(iOS) + Play Console 내부 테스트 등록 완료(Android) + 출시노트 작성 완료. 베타 시나리오 6종 검증 진행 중 (docs/025 §검증 계획)
-- **1.0.19 작업 (2026-05-16 완료)**: §1 상품 추가 WebView 완전 제거 (Functions가 vp HTML OG 태그로 메타데이터 즉시 반환, `priceStatus='INIT'`로 저장) + §2 가격 상태 머신 (INIT→SYNCING→TRACKING 전이, cron + CF 트리거 알림 가드 TRACKING-only, 상세페이지 priceStatus별 UI 분기) + §2 미흡 보완 (syncFromFirestore 머지 + cron priceHistory 누적 가드 + apiPrice baseline 차단) + §3 홈 ScrollView `flexGrow:1` + §4 관리자 분배 모드 옵션 (auto/odd/even/all, AsyncStorage 영속) + §5 상세 "N시간 전 업데이트" 표시 (6h 이상 노란색 강조). 1.0.18 fix(iOS incognito 분기 + 홈 하단 여백 + 공유 메시지 줄간격)도 함께 출시. 상세 [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md)
-- **1.0.18 작업 (2026-05-14 완료, 빌드 대기)**: iOS 한정 incognito 제거 (WKWebView nonPersistentDataStore의 Akamai sec_cpt Set-Cookie race 의심 → default dataStore로 전환, 챌린지 1회 통과 후 영속 재사용. Android는 incognito=true 유지) + 홈 하단 여백 축소(빈 공간 제거) + 앱 공유 메시지 iPhone/Android 줄간격 1줄 추가(잘못 눌림 방지)
-- **1.0.17 베타 결과 (2026-05-14)**: Android = 상품 추가 / 관리자 순회 43개 성공 / 알림 정상 ✅ — iOS = 상품 추가 + 상세 새로고침 + 관리자 순회 전체 실패 ❌ → 1.0.18 fix. shared_products 93개로 증가, 삭제 상품 3개 X 표시 정상.
-- **1.0.17 작업 (2026-05-13~14 완료, 코드만)**: Akamai 완화 4종(UA 풀 + 쿠키 자동 초기화 + 관리자 3~8s 지터 + 20개 5분 휴식) + productId fallback URL + 포그라운드 자동 새로고침(TTL 6h + viewport + lastWebViewCheckedAt) + 콜드 스타트 syncFromFirestore + cron 알림 realPrice baseline 전환 + 앱 공유 양쪽 스토어 + 앱구조 개편(추적중 탭 + 홈 ScrollView + 한도 10 → 20). 상세 [docs/changelog.md](./docs/changelog.md)
-- **1.0.16 작업 (2026-05-11~12 완료)**: RealPrice 아키텍처(docs/023) 8개 + iOS 무한로딩 fix + 관리자 모드 UI + admin `fetchAllSharedProducts` orderBy fix + Android `com.google.gms.google-services:4.4.2` Gradle plugin 적용(FCM 토큰 정상 발급)
-- **빌드 산출물**: `~/jigumiya/builds/ios/jigumiya-1.0.19-55.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.19-55.aab` (TestFlight + Play Console 내부 테스트 등록 완료. 베타 검증 통과 시 양 스토어 정식 출시)
-- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.19 정식 출시 후 `"1.0.19"`로 갱신 예정.
-- **활성 cron**: shared-price-check (`*/10` + lastRealPriceUpdatedAt 1h 가드 + apiPrice mirror + needsCheck 플래그) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00)
-- **Functions**: `resolveAndGenerateAffiliateUrl` `minInstances:1` + `onSharedProductRealPriceChange` v2 Firestore 트리거 (asia-northeast3, 배포 + 발화 검증 완료)
+- **버전**: 1.0.20 (bn56/vc56) **TestFlight + Play Console 내부 테스트 배포 완료** (2026-05-17). 베타 검증 진행 중. **1.0.21 (bn57/vc57)** 코드 작업 + version bump 완료, 정식 빌드 보류 (AndroidMetaScraper 가설 검증 후 결정).
+- **1.0.20 출시**: apiPrice 단일 출처 + WebView/priceStatus 머신/관리자 순회 폐기 + "기준가격" 라벨 + 관리자 통계 대시보드 + cron/Functions 정리 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). 마이그레이션 완료 (shared_products 106개 필드 unset + orphan 29개 삭제).
+- **1.0.21 코드 작업 (2026-05-17 완료)**: shared 머지 확장(thumbnail/productName/currentPrice 상속) + `isInvalidProductName` validation + AndroidMetaScraper 신규 컴포넌트 + 클라이언트 fallback chain 5단계 + 상세 목표가 수정 모달. 14 commits 누적. 상세 [docs/027_AndroidMetaScraper_Investigation.md](./docs/027_AndroidMetaScraper_Investigation.md).
+- **갤럭시 신규 상품 추가 메타 빈값 버그 (2026-05-17 조사 완료)**:
+  - 케이스 1 (다른 사용자 추적 중): ✅ shared 머지로 해결
+  - 케이스 2 (신규 첫 등록): ❌ AndroidMetaScraper로 시도했으나 **쿠팡이 앱 설치 기기 WebView 접근 의도적 차단** 확인 — UA/incognito/PRELOAD 어떤 조합도 우회 불가. 1.0.22+ 대안 검토 ([docs/027](./docs/027_AndroidMetaScraper_Investigation.md) §7)
+- **빌드 산출물**:
+  - `~/jigumiya/builds/ios/jigumiya-1.0.20-56.ipa` / `~/jigumiya/builds/android/jigumiya-1.0.20-56.aab` (양 스토어 배포 완료)
+  - 1.0.21 미빌드 — 코드 + version만 push (commit `170dcf4` 기준)
+- **강제 업데이트 팝업**: Firestore `meta/config_jigumiya.minRequiredVersion = "1.0.15"`. 1.0.20 베타 통과 후 정식 출시 시 `"1.0.20"`으로 갱신 예정.
+- **활성 cron**: shared-price-check (`*/10` + apiPrice 단일 baseline) / category-best (02:00) / event-best-jigumiya (02:35) / goldbox + coupangPL + notify-only (07:30) / notify-only (20:00). legacy realPrice/priceStatus 가드 모두 제거됨.
+- **Functions**: `resolveAndGenerateAffiliateUrl`만 잔존 (minInstances=0). `onSharedProductRealPriceChange` 트리거는 1.0.20에서 삭제됨.
 
-## 궁극적 목표 달성 현황 (2026-05-16)
+## 궁극적 목표 달성 현황 (2026-05-17)
 
 | 기능 | Android | iOS |
 |------|---------|-----|
-| 상품 추가 (WebView 제거 후 ≤2s) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
-| 가격 추적 (관리자 순회 + priceStatus 전이) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
-| 알림 발송 (TRACKING 가드) | ⏳ 1.0.19 베타 검증 진행 | ⏳ 1.0.19 베타 검증 진행 |
+| 상품 추가 케이스 1 (다른 유저 추적 중) | ✅ 1.0.21 shared 머지 | ✅ 1.0.21 shared 머지 |
+| 상품 추가 케이스 2 (신규 첫 등록) | ❌ 쿠팡 WebView 차단 — 대안 검토 중 | ⏳ 동일 (WebView 미사용 환경) |
+| 가격 추적 (cron apiPrice) | ✅ 1.0.20 출시 | ✅ 1.0.20 출시 |
+| 알림 발송 ("기준가격" 라벨) | ⏳ 1.0.20 베타 검증 진행 | ⏳ 1.0.20 베타 검증 진행 |
 
 ## 미해결 이슈
 
 상세는 [docs/022_Issues.md](./docs/022_Issues.md) 참조.
 
-- ⚠️ **Issue 3** — Akamai 봇 차단. 1.0.17 Android 우회 검증 완료. **1.0.19 베타에서 iOS incognito=false 분기 효과 검증 중** (1.0.18 fix가 1.0.19에 통합 배포됨)
-- 📦 **Issue 4** — 1.0.16 검증 잔여 (CF 트리거 token 보유자 push 도달 / cron skipRecentRealPrice 카운트 / Functions 응답시간 모니터링) — 1.0.19 베타와 묶어 동시 검증
-- 📦 **Issue 5** — 1.0.19 빌드 후 검증/잔여 정리 항목 (chore: expo-image / proguard / cron target 분기 정식 삭제, feat: 크라우드소싱 / 관리자 3대+ 확장)
+- 🆕 **Issue 11** — AndroidMetaScraper WebView 차단 (2026-05-17 조사 완료). 케이스 2 대안 검토 중. **우선순위 1**: 갤럭시 쿠팡 앱 삭제 후 WebView 재테스트 (가설 확정). **우선순위 2**: cron Firestore 트리거로 신규 productId 즉시 메타 백필 (옵션 E). 상세 [docs/027](./docs/027_AndroidMetaScraper_Investigation.md)
+- 📦 **Issue 4** — 1.0.16 검증 잔여 (대부분 해결됨, 잔재: Functions 응답시간 모니터링 / category_best.productUrl 형태 확인)
+- 📦 **Issue 5** — 1.0.20 출시 후 검증/잔여 (chore: expo-image / proguard / 미사용 컴포넌트 정리, feat: 크라우드소싱)
 - 🔄 **Issue 6** — 아이고 이식 (`~/aigo/aigo/docs/021_Jigumiya_Migration.md`)
 - 🆕 **Issue 8** — `shared_products`에 아이고 상품 10개 혼재 — 아이고 이식 시 `app` 필드 분리
-- 🔨 **Issue 9** — 1.0.19 §1~§5 코드 + 빌드 + 베타 배포 완료. **1.0.20 통합 빌드에서 priceStatus 머신 폐기** ([docs/025](./docs/025_PriceStateMachine.md)는 deprecated)
-- 🆕 **Issue 10** — 1.0.20 apiPrice 단일 출처 전환 통합 빌드 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)). 작업 13종 일괄 진행
 
-> Issue 1 / Issue 2 / **Issue NEW-A**는 1.0.16 작업으로 해결되어 [docs/changelog.md](./docs/changelog.md)로 이동.
-> Issue 5의 Akamai 완화 4종 + 자동 새로고침 2종 + 공유 양쪽 링크 + productId fallback + cron baseline + 앱구조 개편은 1.0.17 코드 작업으로 완료되어 [docs/changelog.md](./docs/changelog.md)로 이동.
+> Issue 3 (Akamai 챌린지) / Issue 9 (1.0.19 priceStatus 머신) / Issue 10 (1.0.20 apiPrice 단일 출처)은 1.0.20 출시로 해결되어 changelog로 이동 / 부분 이동.
 
-> ⚠️ **운영 주의 (2026-05-16 갱신)**: ① 1.0.19 (bn55/vc55) TestFlight + Play Console 내부 테스트 배포 완료 — iOS는 incognito=false 분기, Android는 incognito=true 유지. ② 베타 검증 6종 통과 시 양 스토어 정식 출시. ③ 두 기기 운영 시 **네트워크 분리** (한 대 Wi-Fi + 다른 한 대 LTE). 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
+> ⚠️ **운영 주의 (2026-05-17 갱신)**: ① 1.0.20 (bn56/vc56) 양 스토어 베타 진행 중. ② 1.0.21 코드는 push됐으나 빌드 미진행. ③ AndroidMetaScraper는 컴포넌트 자체는 잔존 (코드 삭제는 1.0.22+ 결정). 상세 [022_Issues.md 운영 주의사항](./docs/022_Issues.md).
 
 ## 다음 할 일
 
-**🔨 우선순위 1 — 1.0.20 (bn56/vc56) 통합 빌드 작업 13종** ([docs/026](./docs/026_ApiPriceOnly_Redesign.md)):
+**🔍 우선순위 1 — AndroidMetaScraper 가설 검증** ([docs/027](./docs/027_AndroidMetaScraper_Investigation.md) §7):
+- 갤럭시 쿠팡 앱 **삭제 후** WebView 메타 추출 재테스트
+- Chrome에서는 정상 / WebView에서 차단되는 원인이 "앱 설치 검사"인지 확정
+- 결과에 따라 옵션 A(우회) vs E(cron 백필) 결정
 
-✅ 선반영 (1.0.19 베타 위에 hot-patch, 커밋 `0b029b4`):
-1. ✅ saveItemToFirestore await — P1 race 차단
-2. ✅ ProductCard priceStatus 분기 — P2
+**🔨 우선순위 2 — cron 백필 (옵션 E, 권장)**:
+- Firestore 트리거 `onDocumentCreated('shared_products/{id}')` 추가
+- shared 생성 즉시 `searchProducts` / `bestcategories` 매칭으로 메타 백필
+- 사용자는 placeholder 1~2분 본 후 자동 정상화
 
-🔨 1.0.20 통합 작업:
-
-3. **searchProducts fallback** — Functions 메타 빈값 시 `services/coupangApi.ts searchProducts(keyword, 5)` → productId 정확 매칭 → productImage / productPrice / productName 채움
-4. **홈 화면 여백** — 1.0.19 §3 `flexGrow:1` 효과 재검증 + 필요 시 추가 조정
-5. **관리자 모드 통계 대시보드** — 순회 기능 제거 후 통계 화면으로 전환 (추적상품수 / 가격변동 통계 / 알림발송 통계 / 사용자수). docs/026 §8 Option B
-6. **realPrice 완전 제거** — `shared_products` / `TrackedItem`에서 `realPrice` / `lastRealPriceUpdatedAt` / `needsCheck` / `priceStatus` / `firstRealPriceAt` / `trackingStartedAt` / `lastWebViewCheckedAt` 필드 삭제
-7. **apiPrice 단일 출처 + "기준가격" 라벨** — ProductCard / 상세 hero / add-item target 단계 / 목표가 입력 / 추천 / 안내 6개 위치 적용 + "실제 결제가는 쿠팡에서 확인하세요" 안내
-8. **CoupangScraper / PriceChecker 컴포넌트 제거** — 파일 삭제 + admin/detail/홈 인덱스에서 import / 렌더 / 새로고침 버튼 제거
-9. **관리자 순회 기능 제거** — `adminUpdateRealPrice` + 분배 모드 chip + 순회 시작 / 정지 / 자동 반복 / nextRunAt 카운트다운 / 배치 휴식 전체 삭제 (관리 화면은 통계로 전환)
-10. **priceStatus 머신 제거** — 전이 로직 (store/firebase) + UI 분기 (detail / ProductCard / add-item) 전부 삭제
-11. **trackerCount=0 자동 삭제** — `store/useAppStore.ts removeItem` + 신규 `deleteSharedIfOrphan` 헬퍼 (favoriteCount 가드 검토)
-12. **알림 메시지 템플릿** — cron `notifier.ts`에 "기준가격이 내렸어요" / "목표 기준가격 도달" / "기준가격이 올랐어요" 적용 + legacy `morning`/`evening`/`broadcast_drop10/20` 정식 삭제 + CF `onSharedProductRealPriceChange` 트리거 deploy 해제
-13. **마이그레이션 스크립트** — `scripts/migration/2026-05-realPrice-cleanup.mjs` 작성 + dry-run + 실행 (기존 ~93개 shared_products의 realPrice 관련 필드 unset)
-
-**📋 1.0.20 빌드 + 베타 + 출시 시퀀스**:
-- 버전 bump (app.config.js + android/app/build.gradle)
-- `eas build --local --profile production --platform ios` / `--platform android`
-- 베타 검증 8종 시나리오 (docs/026 §검증 계획)
+**📋 1.0.20 베타 검증 + 정식 출시**:
+- 8종 시나리오 ([docs/026](./docs/026_ApiPriceOnly_Redesign.md) §검증 계획)
 - 통과 시 양 스토어 정식 출시 + `meta/config_jigumiya.minRequiredVersion = "1.0.20"` 갱신
 
-**🔄 별도 트랙**: 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8) + 아이고 측 resolvedUrl fallback 포함
+**📦 보류 중인 작업** (별도 트랙):
+- cron `meta/notif_stats` write (admin 통계 알림 섹션 정상화)
+- cron `meta/user_stats` write (admin 통계 사용자 섹션 보안규칙 우회)
+- 1.0.21 정식 빌드 (AAB + IPA) — 위 우선순위 1 결정 후
+- 아이고 이식 (Issue 6) — `shared_products` app 필드 분리 (Issue 8)
 
 ---
 
@@ -242,7 +232,8 @@ CLAUDE.md는 **현재 상태 / 미해결 이슈 1줄 요약 / 다음 할 일 / �
 - [docs/020_PriceChecker_CronDesign.md](./docs/020_PriceChecker_CronDesign.md)
 - [docs/023_RealPrice_Architecture.md](./docs/023_RealPrice_Architecture.md) — apiPrice/realPrice 분리 (1.0.16, **deprecated — docs/026로 대체**)
 - [docs/025_PriceStateMachine.md](./docs/025_PriceStateMachine.md) — 가격 상태 머신 + WebView 제거 (1.0.19, **deprecated — docs/026로 대체**)
-- [docs/026_ApiPriceOnly_Redesign.md](./docs/026_ApiPriceOnly_Redesign.md) — apiPrice 단일 출처 전환 (bn56/bn57 계획, 활성)
+- [docs/026_ApiPriceOnly_Redesign.md](./docs/026_ApiPriceOnly_Redesign.md) — apiPrice 단일 출처 전환 (1.0.20 출시 완료)
+- [docs/027_AndroidMetaScraper_Investigation.md](./docs/027_AndroidMetaScraper_Investigation.md) — 1.0.21 갤럭시 메타 빈값 + WebView 차단 조사 (활성)
 
 ### 기타
 - 글로벌 지시: `~/.claude/CLAUDE.md`

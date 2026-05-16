@@ -170,9 +170,41 @@
 
 ---
 
-## Issue 10 — 1.0.20 통합 빌드 (apiPrice 단일 출처 전환)
+## Issue 11 — AndroidMetaScraper WebView 차단 (1.0.21)
 
-**상태 (2026-05-16 갱신)**: 📋 설계 확정, 작업 13종 중 P1/P2 선반영 완료. bn56/bn57 분리 계획 취소 후 **1.0.20 (bn56/vc56) 단일 통합 빌드로 진행**. 상세 [docs/026_ApiPriceOnly_Redesign.md](./026_ApiPriceOnly_Redesign.md).
+**상태 (2026-05-17)**: 🔍 조사 완료, ⏸ WebView 방식 보류. 상세 [docs/027_AndroidMetaScraper_Investigation.md](./027_AndroidMetaScraper_Investigation.md).
+
+**증상**: 갤럭시에서 신규 상품 추가 시 (`shared_products`에 문서 없는 경우) 이미지/가격 0원 placeholder 카드 저장. Functions OG(Akamai 403) + searchProducts(상품명 키워드 부재) 둘 다 빈값.
+
+**근본 원인 (조사 결과)**: 쿠팡이 앱 설치된 기기에서 WebView 접근을 의도적으로 차단.
+- m.coupang.com: HTTP 403 Akamai (bodyLen=97)
+- www.coupang.com: 200이지만 OG/콘텐츠 비제공 + 앱 유도 페이지 라우팅
+- Chrome 브라우저는 정상 → WebView UA/Client Hints 패턴 + 앱 설치 검사로 식별
+- UA(Galaxy S24)/incognito off/PRELOAD_JS 제거 어떤 조합으로도 우회 불가능
+
+**1.0.21에서 한 작업** (성공한 부분):
+- shared 머지 확장 (thumbnail / productName / currentPrice 상속) — 케이스 1 (다른 사용자 추적 중) 해결 ✅
+- `isInvalidProductName` validation — dead shared 문서 생성 차단 ✅
+- 클라이언트 fallback chain 5단계 + Safari UA + productId 안전망 ✅
+- 상세페이지 목표가 수정 모달 ✅
+
+**남은 케이스 2 대안 옵션** (2026-05-18+ 검토):
+- **F. 갤럭시 쿠팡 앱 삭제 후 WebView 테스트** — 가설 확정용 (우선순위 1)
+- **E. cron 신규 productId 즉시 메타 백필** — Firestore 트리거로 shared 생성 직후 searchProducts/bestcategories 매칭 (우선순위 2)
+- **A. Akamai 우회** — UA/헤더/프록시 — ROI 낮을 가능성
+- **B. Functions에 residential proxy** — 비용/안정성 의문
+- **D. Chrome Custom Tabs** — UX 변화 큼
+
+**보류 중인 작업**:
+- cron `meta/notif_stats` write (admin.tsx 알림 통계 0건 → 정상화)
+- cron `meta/user_stats` write (보안규칙 우회용 — 클라이언트 read는 meta `if true` 통과)
+- 1.0.21 정식 빌드 (AAB + IPA) — 위 검토 후
+
+---
+
+## Issue 10 — 1.0.20 통합 빌드 (apiPrice 단일 출처 전환) ✅ 완료
+
+**상태 (2026-05-17 갱신)**: **빌드 + 배포 완료 + 마이그레이션 완료**. iOS TestFlight + Android Play Console 내부 테스트 배포. shared_products 106개 마이그레이션 + orphan 29개 삭제. 상세 [docs/026_ApiPriceOnly_Redesign.md](./026_ApiPriceOnly_Redesign.md), [changelog.md 2026-05-17](./changelog.md).
 
 **배경**:
 - 1.0.16~1.0.19에 걸쳐 도입한 realPrice(WebView 스크래핑) 방식이 Akamai Bot Manager로 인해 구조적으로 불안정

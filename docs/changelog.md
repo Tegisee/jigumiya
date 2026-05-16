@@ -6,6 +6,66 @@
 
 ---
 
+## 2026-05-17 — 1.0.20 출시 + 마이그레이션 + 1.0.21 (AndroidMetaScraper 조사)
+
+### 1.0.20 (bn56/vc56) 빌드 + 배포 완료
+- iOS `jigumiya-1.0.20-56.ipa` (16MB) — TestFlight 업로드 완료
+- Android `jigumiya-1.0.20-56.aab` (59MB) — Play Console 내부 테스트 등록 완료
+- 13종 작업 모두 반영 — apiPrice 단일 출처 / WebView 제거 / priceStatus 머신 폐기 / "기준가격" 라벨 / 관리자 통계 대시보드 / cron+Functions 정리 ([docs/026](./026_ApiPriceOnly_Redesign.md))
+
+### realPrice/priceStatus 필드 마이그레이션 완료
+- 스크립트: `scripts/migration/2026-05-realPrice-cleanup.mjs`
+- 결과: shared_products 전체 순회, **106개 문서**에서 7개 필드(realPrice / lastRealPriceUpdatedAt / needsCheck / priceStatus / firstRealPriceAt / trackingStartedAt / lastWebViewCheckedAt) unset
+- 부수: trackerCount=0 && favoriteCount=0 **orphan 29개 삭제** (1.0.20 #11 정책)
+- currentPrice ↔ apiPrice 정합 보정 완료
+
+### 갤럭시 신규 상품 추가 이미지/가격 0원 버그 발견
+- 1.0.20 출시 후 잔여 케이스: Functions OG(Akamai 403) + searchProducts(상품명 키워드 부재) 둘 다 빈값
+- 케이스 1 (다른 사용자 추적 중인 상품): shared 머지로 해결 가능
+- 케이스 2 (신규 상품 첫 등록): 별도 우회 필요 → AndroidMetaScraper 시도 (실패)
+
+### 1.0.21 (bn57/vc57) 작업
+- **shared 머지 확장** (commit `1f4741e`) — thumbnail/productName/currentPrice 상속 (케이스 1 해결)
+- **`isInvalidProductName` 헬퍼 + `trackedItemToSharedProduct` validation** — invalid name / 빈 thumbnail 시 shared write 스킵
+- **AndroidMetaScraper 컴포넌트 신설** — Android 전용 hidden WebView 메타 fallback (m. 0×0 background polling)
+- **클라이언트 fallback 강화** (commit `fbc66a7`) — chain 5단계 + Safari UA + productId 안전망
+- **상세페이지 목표가 수정 모달** — 편집/삭제/설정 + 안내 문구
+- 14 commits 누적 (디버깅 로그 + 폴링 + UA 변경 + PRELOAD 제거 + 재주입 fix)
+
+### AndroidMetaScraper 디버깅 — 쿠팡 의도적 차단 확인
+- m.coupang.com: HTTP 403 Akamai (bodyLen=97)
+- www.coupang.com: 200이지만 OG/콘텐츠 비제공 + 앱 유도 페이지 라우팅
+- Chrome 브라우저는 정상 → **쿠팡이 앱 설치된 기기 WebView 접근을 의도적으로 차단**
+- UA/incognito/PRELOAD_JS 어떤 조합으로도 우회 불가능 → **WebView 방식 보류**
+- 상세 분석: [docs/027_AndroidMetaScraper_Investigation.md](./027_AndroidMetaScraper_Investigation.md)
+
+### 1.0.21 빌드 상태
+- 코드 작업 + version bump 완료
+- 정식 빌드 보류 (가설 추가 검증 + 케이스 2 대안 결정 후)
+
+### 보류 중인 작업
+- cron `meta/notif_stats` write (admin.tsx 알림 통계 표시용)
+- cron `meta/user_stats` write (보안규칙 우회용 — 클라이언트 read는 meta `if true` 통과)
+- 1.0.21 정식 빌드 (AAB + IPA)
+
+### 1.0.21 commit 목록 (이 줄까지 push 완료, 2026-05-17 14:00 KST 기준)
+`1f4741e` (갤럭시 메타 보완 + AndroidMetaScraper + 목표가 수정 UI)
+`de752d4` (1.0.21 bump)
+`6c0eb23` (분기 로깅)
+`f4227a3` (eas preview apk)
+`941f4e0` (WebView 라이프사이클 로그)
+`f567751` (setScraperUrl 추적)
+`63e8178` (첫 mount timeout 버그 fix)
+`fbc66a7` (fallback chain 강화)
+`a5043b0` (SCRAPE_JS debug payload)
+`35853a8` (SCRAPE_JS 폴링)
+`134e2ca` (m. 변환 제거 + 403 fallback)
+`20305da` (UA Galaxy S24 + incognito off)
+`c3de9f4` (PRELOAD_JS 제거)
+`170dcf4` (vp reload 시 재주입 허용)
+
+---
+
 ## 2026-05-14 — 1.0.18 (bn54/vc54) 작업 + 1.0.17 베타 결과
 
 ### 1.0.17 베타 결과 (bn53/vc53)
