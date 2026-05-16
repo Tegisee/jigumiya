@@ -155,6 +155,9 @@ const SCRAPE_JS = `
     }
     if (image && image.startsWith('//')) image = 'https:' + image;
 
+    var titleTagEl = document.querySelector('title');
+    var h1El = document.querySelector('h1');
+    var bodyHtml = document.body ? document.body.innerHTML : '';
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'META',
       title: title,
@@ -162,6 +165,15 @@ const SCRAPE_JS = `
       image: image,
       ready: document.readyState,
       url: window.location.href.slice(0, 120),
+      debug: {
+        titleTag: titleTagEl ? (titleTagEl.textContent || '').slice(0, 60) : '',
+        metaCount: document.querySelectorAll('meta').length,
+        ogCount: document.querySelectorAll('meta[property^="og:"]').length,
+        ldJsonCount: document.querySelectorAll('script[type="application/ld+json"]').length,
+        bodyLen: bodyHtml.length,
+        h1Text: h1El ? (h1El.textContent || '').slice(0, 60) : '',
+        appBannerPresent: !!document.querySelector('[class*="app-banner"], [class*="app-download"]'),
+      },
     }));
   } catch(e) {
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -225,6 +237,15 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
           return;
         }
         if (data.type !== 'META') return;
+
+        if (data.debug) {
+          console.log(
+            `[AndroidMetaScraper] page debug: ready=${data.ready} url=${data.url} ` +
+              `titleTag="${data.debug.titleTag}" h1="${data.debug.h1Text}" ` +
+              `meta=${data.debug.metaCount} og=${data.debug.ogCount} ldJson=${data.debug.ldJsonCount} ` +
+              `bodyLen=${data.debug.bodyLen} appBanner=${data.debug.appBannerPresent}`,
+          );
+        }
 
         const price = Number(data.price) || 0;
         const image = String(data.image || '');
