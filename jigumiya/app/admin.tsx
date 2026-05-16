@@ -1,829 +1,358 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
-  Switch,
-  ScrollView,
   StyleSheet,
-  Platform,
+  ScrollView,
+  RefreshControl,
   ActivityIndicator,
-  Alert,
-  AppState,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../constants/theme';
-import {
-  fetchAllSharedProducts,
-  adminUpdateRealPrice,
-} from '../services/firebase';
-import { getCoupangProductUrl } from '../services/coupangApi';
-import type { SharedProduct } from '../types';
-import CoupangScraper, {
-  ScrapedProduct,
-} from '../components/CoupangScraper';
+import { fetchAdminStats, type AdminStats } from '../services/firebase';
 
-// docs/023 §관리자 기기 설계 + docs/025 §4 분배 모드 옵션 (1.0.19)
-//   - 'auto': Platform.OS 기반 자동 (Android=홀수 / iOS=짝수) — 기본값
-//   - 'odd':  index % 2 === 1
-//   - 'even': index % 2 === 0
-//   - 'all':  전체 (분배 없음, 1대 운영 또는 다른 기기 차단 시 대체 순회용)
-type DistributionMode = 'auto' | 'odd' | 'even' | 'all';
-const STORAGE_KEY_DIST_MODE = 'admin.distributionMode';
-
-/** distributionMode → modulo slot (null = 전체 통과) */
-function distSlot(mode: DistributionMode): number | null {
-  if (mode === 'all') return null;
-  if (mode === 'odd') return 1;
-  if (mode === 'even') return 0;
-  return Platform.OS === 'android' ? 1 : 0; // 'auto'
-}
-
-/** 현재 모드 + 기기 정보 라벨 */
-function distLabel(mode: DistributionMode): string {
-  if (mode === 'all') return '전체 (분배 없음)';
-  if (mode === 'odd') return '홀수만 (수동)';
-  if (mode === 'even') return '짝수만 (수동)';
-  return Platform.OS === 'android' ? '자동: Android (홀수)' : '자동: iOS (짝수)';
-}
-
-// 1.0.17 Akamai 완화: 1.5s 고정 → 3~8s 랜덤 지터. 분당 12~24회 → 8~20회로 낮춰 BM 임계 회피.
-// 사용자 행동(스크롤/탐색) 분포에 가까운 비균등 패턴이 BM 봇 판정에 더 유리.
-const SLEEP_BETWEEN_MIN_MS = 3000;
-const SLEEP_BETWEEN_MAX_MS = 8000;
-function randomJitterMs(): number {
-  return Math.floor(
-    SLEEP_BETWEEN_MIN_MS + Math.random() * (SLEEP_BETWEEN_MAX_MS - SLEEP_BETWEEN_MIN_MS),
-  );
-}
-// 1.0.17 Akamai 완화: 20개씩 처리 후 5분 휴식 — Akamai TTL 자체 해제 윈도우 확보.
-// 84개 sequential 처리 시 약 4번 휴식 → 총 순회 시간 +20분.
-const BATCH_SIZE = 20;
-const BATCH_REST_MS = 5 * 60 * 1000;
-
-const RECENT_RESULT_LIMIT = 15;
-const WAIT_OPTIONS = [10, 15, 30, 60, 120] as const; // 분
-const DEFAULT_WAIT_MIN = 30;
-// 자동 반복 nextRunAt 영속화 — 앱 완전 종료 후 재실행해도 카운트다운 복원.
-// setInterval은 백그라운드에서 부정확/멈춤 → wallclock(nextRunAt - Date.now())로 계산.
-const STORAGE_KEY_NEXT_RUN = 'admin_nextRunAt';
-
-interface ScrapeResult {
-  ok: boolean;
-  price?: number;
-}
-
-interface ItemResult {
-  productId: string;
-  productName: string;
-  status: 'ok' | 'fail';
-  price?: number;
-  at: number;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// 정지 가능한 sleep — 500ms 단위로 stopRef 체크. 5분 휴식 중에도 정지 즉시 반응.
-async function interruptibleSleep(
-  ms: number,
-  stopRef: { current: boolean },
-  onTick?: (remainingMs: number) => void,
-): Promise<void> {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (stopRef.current) return;
-    const remaining = end - Date.now();
-    onTick?.(remaining);
-    await sleep(Math.min(500, remaining));
-  }
-  onTick?.(0);
-}
-
+/**
+ * 1.0.20 (docs/026 #5): 관리자 통계 대시보드.
+ * 4섹션: 추적상품수 / 가격변동 / 알림발송 / 사용자수.
+ * meta/notif_stats는 cron 발송 누적 대기 — 현재 없으면 graceful "데이터 없음" 표시.
+ */
 export default function AdminScreen() {
   const router = useRouter();
-
-  const [products, setProducts] = useState<SharedProduct[]>([]);
+  const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [autoLoop, setAutoLoop] = useState(false);
-  const [waitMinutes, setWaitMinutes] = useState<number>(DEFAULT_WAIT_MIN);
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [currentName, setCurrentName] = useState('');
-  const [results, setResults] = useState<ItemResult[]>([]);
-  const [summary, setSummary] = useState<{ ok: number; fail: number; at: number } | null>(null);
-  // 이어서 진행 — 정지/이탈 시 마지막 처리 위치 보존. 1회 순회 완료 시 0으로 리셋.
-  const [resumeIdx, setResumeIdx] = useState(0);
-  // 다음 자동 순회의 절대 wallclock 시각 (ms epoch). null=대기 안 함. AsyncStorage에 영속.
-  const [nextRunAt, setNextRunAt] = useState<number | null>(null);
-  // UI 표시용 남은 초 — 매 tick마다 (nextRunAt - Date.now()) 재계산.
-  const [countdownSec, setCountdownSec] = useState<number | null>(null);
-  // 20개 배치 휴식 카운트다운 (1.0.17). null=휴식 안 함.
-  const [restRemainingSec, setRestRemainingSec] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
-  const scrapeKeyRef = useRef(0);
-
-  // 현재 처리 중인 promise의 resolver — CoupangScraper 콜백을 매번 새로 연결
-  const resolverRef = useRef<((r: ScrapeResult) => void) | null>(null);
-  // 순회 중단 신호 (탭 이탈 / 정지 버튼)
-  const stopRef = useRef(false);
-  // 카운트다운 tick setInterval — 1초마다 wallclock 재계산. 절대 시각은 nextRunAt가 진실.
-  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // AppState handler stale closure 방지 — 항상 최신 nextRunAt 참조.
-  const nextRunAtRef = useRef<number | null>(null);
-  nextRunAtRef.current = nextRunAt;
-  // runOnce stale closure 방지 — setInterval/AppState 안에서 항상 최신 클로저 호출
-  const runOnceRef = useRef<(startFrom?: number) => void>(() => {});
-
-  // 1.0.19 §4 분배 모드 — chip으로 사용자 선택. AsyncStorage 영속.
-  const [distMode, setDistMode] = useState<DistributionMode>('auto');
-
-  /** 분배 모드 변경 + 영속화 (실패해도 메모리 상태는 반영) */
-  const updateDistMode = useCallback((mode: DistributionMode) => {
-    setDistMode(mode);
-    AsyncStorage.setItem(STORAGE_KEY_DIST_MODE, mode).catch((e) =>
-      console.warn('[admin] distMode 저장 실패:', e),
-    );
+  const load = useCallback(async () => {
+    try {
+      const s = await fetchAdminStats();
+      setStats(s);
+    } catch (e) {
+      console.warn('[admin] fetchAdminStats 실패:', e);
+    }
   }, []);
 
-  // 담당 상품 — distMode 기반 동적 분배
-  const myProducts = useMemo(() => {
-    const slot = distSlot(distMode);
-    if (slot === null) return products; // 'all'
-    return products.filter((_, idx) => idx % 2 === slot);
-  }, [products, distMode]);
-
-  // mount: shared_products 전체 fetch
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       setLoading(true);
-      const list = await fetchAllSharedProducts();
-      if (cancelled) return;
-      setProducts(list);
+      await load();
       setLoading(false);
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [load]);
 
-  // mount: AsyncStorage에서 distMode 복원. 유효하지 않은 값은 'auto'로 fallback.
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY_DIST_MODE)
-      .then((val) => {
-        if (val === 'auto' || val === 'odd' || val === 'even' || val === 'all') {
-          setDistMode(val);
-          console.log(`[admin] distMode 복원: ${val}`);
-        }
-      })
-      .catch((e) => console.warn('[admin] distMode 복원 실패:', e));
-  }, []);
-
-  // mount: AsyncStorage에서 nextRunAt 복원 — 앱 완전 종료 후 재실행 시 카운트다운 이어감.
-  // nextRunAt이 살아있다는 것 = 자동 반복 의도 → autoLoop도 함께 ON 복원.
-  useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY_NEXT_RUN)
-      .then((val) => {
-        if (!val) return;
-        const at = Number(val);
-        if (!Number.isFinite(at) || at <= 0) {
-          AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-          return;
-        }
-        setNextRunAt(at);
-        setAutoLoop(true);
-        console.log(
-          `[admin] nextRunAt 복원: ${new Date(at).toLocaleTimeString('ko-KR')} (남은 ${Math.max(0, Math.round((at - Date.now()) / 1000))}s)`,
-        );
-      })
-      .catch((e) => console.warn('[admin] nextRunAt 복원 실패:', e));
-  }, []);
-
-  // unmount: 진행 중 작업 정리 (tick은 별도 useEffect cleanup에서 정리)
-  useEffect(() => {
-    return () => {
-      stopRef.current = true;
-      resolverRef.current?.({ ok: false });
-      resolverRef.current = null;
-    };
-  }, []);
-
-  const handleScrapeResult = useCallback((data: ScrapedProduct) => {
-    const r = resolverRef.current;
-    resolverRef.current = null;
-    setScrapeUrl(null);
-    r?.({ ok: data.price > 0, price: data.price });
-  }, []);
-
-  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
-    const r = resolverRef.current;
-    resolverRef.current = null;
-    setScrapeUrl(null);
-    if (reason === 'challenge') {
-      // 챌린지면 순회 자체 중단 — 다음 상품도 동일하게 차단되므로 헛수고
-      stopRef.current = true;
-      Alert.alert(
-        '쿠팡 봇 차단',
-        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
-      );
-    }
-    r?.({ ok: false });
-  }, []);
-
-  const scrapeOne = useCallback((item: SharedProduct): Promise<ScrapeResult> => {
-    return new Promise((resolve) => {
-      // 1.0.17: 아이고에서 추가된 shared_products는 resolvedUrl 누락 → productId 기반 vp URL fallback
-      const targetUrl = getCoupangProductUrl(item);
-      // link.coupang.com 단축 URL은 스크래핑 불가 — startScrape 정책과 동일
-      if (!targetUrl || targetUrl.includes('link.coupang.com')) {
-        resolve({ ok: false });
-        return;
-      }
-      resolverRef.current = resolve;
-      scrapeKeyRef.current++;
-      setScrapeUrl(targetUrl);
-      // CoupangScraper 내부 20s timeout이 안전망 — 그래도 안 풀리는 케이스 대비 외부 25s 안전망
-      setTimeout(() => {
-        if (resolverRef.current === resolve) {
-          resolverRef.current = null;
-          setScrapeUrl(null);
-          resolve({ ok: false });
-        }
-      }, 25000);
-    });
-  }, []);
-
-  const runOnce = useCallback(
-    async (startFrom: number = 0) => {
-      if (myProducts.length === 0) {
-        Alert.alert('담당 상품 없음', '인덱스 분배 결과 처리할 상품이 없습니다.');
-        return;
-      }
-      // 카운트다운 진행 중이면 정리 (수동 시작이 카운트다운보다 우선).
-      // nextRunAt만 null로 set → ticking useEffect cleanup이 setInterval 해제.
-      if (nextRunAt !== null) {
-        setNextRunAt(null);
-        AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-      }
-      setCountdownSec(null);
-
-      stopRef.current = false;
-      setRunning(true);
-      // 이어서 시작이면 기존 results/summary 보존, 처음부터면 리셋
-      if (startFrom === 0) {
-        setResults([]);
-        setSummary(null);
-      }
-      setCurrentIdx(startFrom);
-
-      let ok = 0;
-      let fail = 0;
-      const newResults: ItemResult[] = [];
-      let completedFull = false;
-
-      for (let i = startFrom; i < myProducts.length; i++) {
-        if (stopRef.current) {
-          // 정지 시 현재 idx를 resumeIdx로 보존 (다음 시작은 i부터)
-          setResumeIdx(i);
-          break;
-        }
-        const item = myProducts[i];
-        setCurrentIdx(i);
-        setCurrentName(item.productName || item.productId);
-
-        const r = await scrapeOne(item);
-        if (stopRef.current) {
-          setResumeIdx(i);
-          break;
-        }
-
-        if (r.ok && r.price && r.price > 0) {
-          try {
-            await adminUpdateRealPrice(item.productId, r.price);
-            ok++;
-            newResults.unshift({
-              productId: item.productId,
-              productName: item.productName || item.productId,
-              status: 'ok',
-              price: r.price,
-              at: Date.now(),
-            });
-          } catch (e) {
-            console.warn('[admin] realPrice write 실패:', item.productId, e);
-            fail++;
-            newResults.unshift({
-              productId: item.productId,
-              productName: item.productName || item.productId,
-              status: 'fail',
-              at: Date.now(),
-            });
-          }
-        } else {
-          fail++;
-          newResults.unshift({
-            productId: item.productId,
-            productName: item.productName || item.productId,
-            status: 'fail',
-            at: Date.now(),
-          });
-        }
-        setResults(newResults.slice(0, RECENT_RESULT_LIMIT));
-
-        if (i === myProducts.length - 1) {
-          completedFull = true;
-          break; // 마지막 상품 처리 후 sleep/휴식 스킵
-        }
-
-        // 1.0.17: 매 BATCH_SIZE 처리 후 5분 휴식 (Akamai TTL 해제 윈도우).
-        // i+1 (다음 idx로 진입 직전)이 BATCH_SIZE 배수일 때 트리거.
-        const processedCount = i - startFrom + 1;
-        const isBatchBoundary = processedCount > 0 && processedCount % BATCH_SIZE === 0;
-        if (isBatchBoundary) {
-          console.log(
-            `[admin] 배치 휴식 진입 — 처리 ${processedCount}개, ${BATCH_REST_MS / 60000}분 대기`,
-          );
-          await interruptibleSleep(BATCH_REST_MS, stopRef, (remainingMs) => {
-            setRestRemainingSec(remainingMs > 0 ? Math.ceil(remainingMs / 1000) : null);
-          });
-          setRestRemainingSec(null);
-          if (stopRef.current) {
-            setResumeIdx(i + 1);
-            break;
-          }
-        } else {
-          await sleep(randomJitterMs());
-        }
-      }
-
-      setRunning(false);
-      setCurrentName('');
-
-      if (completedFull) {
-        // 1회 순회 완전 완료 — resume 위치 리셋
-        setResumeIdx(0);
-        setSummary({ ok, fail, at: Date.now() });
-        console.log(`[admin] 순회 완료 ok=${ok} fail=${fail} (총 ${myProducts.length}개)`);
-
-        // 자동 반복: nextRunAt 절대 시각 set + AsyncStorage 저장 → ticking useEffect가 표시/실행.
-        if (autoLoop && !stopRef.current) {
-          const at = Date.now() + waitMinutes * 60 * 1000;
-          setNextRunAt(at);
-          AsyncStorage.setItem(STORAGE_KEY_NEXT_RUN, String(at)).catch((e) =>
-            console.warn('[admin] nextRunAt 저장 실패:', e),
-          );
-        }
-      } else {
-        console.log(`[admin] 순회 정지 (idx=${currentIdx + 1}/${myProducts.length})`);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [myProducts, autoLoop, waitMinutes, scrapeOne],
-  );
-
-  // setInterval/AppState 안에서 stale closure 회피 — 항상 최신 runOnce 호출
-  runOnceRef.current = runOnce;
-
-  // nextRunAt 또는 loading 변경 시 wallclock tick 가동/정리.
-  // - nextRunAt === null → tick 정리 + countdownSec=null
-  // - loading 중 → products 준비 후 다음 사이클에 처리 (만료 시 즉시 실행 회피 안전망)
-  // - 미만료 → 1초 tick (남은 시간 = nextRunAt - Date.now())
-  // - 만료 → tick 정리 + AsyncStorage clear + setNextRunAt(null) + runOnceRef 호출
-  useEffect(() => {
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    if (nextRunAt === null) {
-      setCountdownSec(null);
-      return;
-    }
-    if (loading) return; // products 미로드 → 다음 사이클(loading false)에서 재진입
-
-    const tick = () => {
-      const ms = nextRunAt - Date.now();
-      if (ms <= 0) {
-        if (countdownTimerRef.current) {
-          clearInterval(countdownTimerRef.current);
-          countdownTimerRef.current = null;
-        }
-        setCountdownSec(null);
-        setNextRunAt(null);
-        AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-        runOnceRef.current(0);
-        return;
-      }
-      setCountdownSec(Math.ceil(ms / 1000));
-    };
-    tick(); // 즉시 1회 — 만료 상태면 곧바로 실행 (백그라운드에서 만료된 케이스)
-    countdownTimerRef.current = setInterval(tick, 1000);
-    return () => {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-        countdownTimerRef.current = null;
-      }
-    };
-  }, [nextRunAt, loading]);
-
-  // AppState 'active' 복귀 시 nextRunAt 만료 검사 — 백그라운드 동안 setInterval 멈춤 보정.
-  // (포그라운드 복귀 직후 tick이 즉시 만료 감지하지만, 명시적 핸들러로 confidence 높임)
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      const at = nextRunAtRef.current;
-      if (at === null) return;
-      if (Date.now() >= at) {
-        console.log('[admin] AppState active — nextRunAt 만료 감지, 즉시 실행');
-        setCountdownSec(null);
-        setNextRunAt(null);
-        AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-        runOnceRef.current(0);
-      }
-    });
-    return () => sub.remove();
-  }, []);
-
-  const handleStop = () => {
-    stopRef.current = true;
-    resolverRef.current?.({ ok: false });
-    resolverRef.current = null;
-    setNextRunAt(null);
-    AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-    setRunning(false);
-    setCurrentName('');
-    setRestRemainingSec(null);
-  };
-
-  // 자동 반복 토글 OFF 시 nextRunAt 즉시 정리 (영속화 포함)
-  useEffect(() => {
-    if (!autoLoop && nextRunAt !== null) {
-      setNextRunAt(null);
-      AsyncStorage.removeItem(STORAGE_KEY_NEXT_RUN).catch(() => {});
-    }
-  }, [autoLoop, nextRunAt]);
-
-  const progress =
-    myProducts.length > 0 ? (currentIdx + (running ? 0 : 1)) / myProducts.length : 0;
-  const progressPct = Math.min(100, Math.round(progress * 100));
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* 헤더 */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={26} color={theme.text} />
+        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+          <Ionicons name="chevron-back" size={24} color={theme.text} />
+          <Text style={styles.headerBtnText}>설정</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>관리자 모드</Text>
-        <View style={{ width: 26 }} />
+        <Text style={styles.title}>관리자 통계</Text>
+        <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {/* 기기 상태 + 분배 모드 (1.0.19 §4) */}
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>이 기기</Text>
-          <Text style={styles.cardValue}>{distLabel(distMode)}</Text>
-
-          <Text style={[styles.waitLabel, { marginTop: 12 }]}>분배 모드</Text>
-          <View style={styles.chipGroup}>
-            {(['auto', 'odd', 'even', 'all'] as const).map((m) => {
-              const active = distMode === m;
-              const label =
-                m === 'auto' ? '자동'
-                : m === 'odd' ? '홀수만'
-                : m === 'even' ? '짝수만'
-                : '전체';
-              return (
-                <TouchableOpacity
-                  key={m}
-                  style={[styles.chip, active && styles.chipActive]}
-                  onPress={() => updateDistMode(m)}
-                  disabled={running}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {loading ? (
-            <Text style={styles.cardDesc}>shared_products 로딩 중...</Text>
-          ) : (
-            <Text style={styles.cardDesc}>
-              담당 {myProducts.length}개 / 전체 {products.length}개
-            </Text>
-          )}
+      {loading ? (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator size="large" color={theme.primary} />
         </View>
-
-        {/* 시작/정지 + 자동 반복 */}
-        <View style={styles.card}>
-          {!running ? (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.startBtn, loading && styles.btnDisabled]}
-              onPress={() => runOnce(resumeIdx)}
-              disabled={loading || myProducts.length === 0}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="play" size={18} color="#000" />
-              <Text style={styles.actionText}>
-                {resumeIdx > 0
-                  ? `${resumeIdx + 1}번부터 이어서 시작`
-                  : '순회 시작'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.stopBtn]}
-              onPress={handleStop}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="stop" size={18} color="#fff" />
-              <Text style={[styles.actionText, { color: '#fff' }]}>정지</Text>
-            </TouchableOpacity>
-          )}
-
-          {resumeIdx > 0 && !running && (
-            <TouchableOpacity
-              style={styles.resetLink}
-              onPress={() => setResumeIdx(0)}
-              activeOpacity={0.6}
-            >
-              <Ionicons name="refresh" size={14} color={theme.subtext} />
-              <Text style={styles.resetLinkText}>처음부터 다시 시작</Text>
-            </TouchableOpacity>
-          )}
-
-          <View style={styles.divider} />
-
-          <View style={styles.row}>
-            <View style={styles.rowText}>
-              <Text style={styles.label}>순회 완료 후 자동 반복</Text>
-              <Text style={styles.desc}>화면이 켜져 있는 동안만 동작</Text>
-            </View>
-            <Switch
-              value={autoLoop}
-              onValueChange={setAutoLoop}
-              trackColor={{ false: theme.border, true: theme.primary }}
-              thumbColor={theme.text}
+      ) : !stats ? (
+        <View style={styles.loadingBox}>
+          <Ionicons name="alert-circle-outline" size={32} color={theme.subtext} />
+          <Text style={styles.errorText}>통계 조회 실패</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={onRefresh}>
+            <Text style={styles.retryText}>다시 시도</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={theme.primary}
             />
-          </View>
+          }
+        >
+          {/* 1. 추적상품수 */}
+          <Section
+            icon="cube-outline"
+            title="추적상품"
+            color={theme.primary}
+          >
+            <Row label="전체 등록" value={`${stats.productStats.total}개`} />
+            <Row
+              label="추적자 보유"
+              value={`${stats.productStats.withTrackers}개`}
+              hint={`(${pctText(stats.productStats.withTrackers, stats.productStats.total)})`}
+            />
+            <Row
+              label="평균 추적자수"
+              value={stats.productStats.avgTrackers.toFixed(1)}
+            />
+          </Section>
 
-          {autoLoop && (
-            <>
-              <Text style={styles.waitLabel}>대기 시간</Text>
-              <View style={styles.chipGroup}>
-                {WAIT_OPTIONS.map((m) => {
-                  const active = waitMinutes === m;
-                  return (
-                    <TouchableOpacity
-                      key={m}
-                      style={[styles.chip, active && styles.chipActive]}
-                      onPress={() => setWaitMinutes(m)}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[
-                          styles.chipText,
-                          active && styles.chipTextActive,
-                        ]}
-                      >
-                        {m}분
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </>
-          )}
-        </View>
+          {/* 2. 가격변동 */}
+          <Section icon="trending-down" title="가격변동 (24h)" color="#FF6B6B">
+            <Row label="가격 하락 건수" value={`${stats.priceStats.drops24h}건`} />
+            <Row
+              label="평균 하락률"
+              value={
+                stats.priceStats.drops24h > 0
+                  ? `${stats.priceStats.avgDropRate.toFixed(1)}%`
+                  : '—'
+              }
+            />
+          </Section>
 
-        {/* 진행 상황 */}
-        {running && (
-          <View style={styles.card}>
-            <View style={styles.progressHeader}>
-              <ActivityIndicator size="small" color={theme.primary} />
-              <Text style={styles.progressTitle}>
-                {currentIdx + 1} / {myProducts.length} ({progressPct}%)
-              </Text>
-            </View>
-            {currentName ? (
-              <Text style={styles.currentName} numberOfLines={1}>
-                {currentName}
-              </Text>
-            ) : null}
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${progressPct}%` }]} />
-            </View>
-          </View>
-        )}
-
-        {/* 배치 휴식 카운트다운 — 20개 처리 후 5분 휴식 중 */}
-        {restRemainingSec !== null && restRemainingSec > 0 && (
-          <View style={[styles.card, styles.countdownCard]}>
-            <Text style={styles.cardLabel}>배치 휴식 (쿠팡 봇 차단 회피)</Text>
-            <Text style={styles.countdownText}>
-              {Math.floor(restRemainingSec / 60)}분 {restRemainingSec % 60}초
-            </Text>
-            <Text style={styles.cardDesc}>
-              20개 처리 후 5분간 대기합니다. 정지를 눌러 즉시 중단할 수 있어요.
-            </Text>
-          </View>
-        )}
-
-        {/* 카운트다운 — 순회 완료 후 자동 반복 대기 중 */}
-        {countdownSec !== null && countdownSec > 0 && (
-          <View style={[styles.card, styles.countdownCard]}>
-            <Text style={styles.cardLabel}>다음 순회까지</Text>
-            <Text style={styles.countdownText}>
-              {Math.floor(countdownSec / 60)}분 {countdownSec % 60}초
-            </Text>
-            <Text style={styles.cardDesc}>0초가 되면 자동으로 순회를 시작합니다</Text>
-          </View>
-        )}
-
-        {/* 요약 */}
-        {summary && (
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>최근 순회 결과</Text>
-            <Text style={styles.summaryText}>
-              ✅ {summary.ok}개 성공 / ❌ {summary.fail}개 실패
-            </Text>
-            <Text style={styles.cardDesc}>
-              {new Date(summary.at).toLocaleTimeString('ko-KR')}
-              {autoLoop && !running && countdownSec === null
-                ? ` · ${waitMinutes}분 후 자동 재시작`
-                : ''}
-            </Text>
-          </View>
-        )}
-
-        {/* 최근 결과 리스트 */}
-        {results.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>최근 {results.length}개</Text>
-            {results.map((r) => (
-              <View key={`${r.productId}-${r.at}`} style={styles.resultRow}>
-                <Text
-                  style={[
-                    styles.resultIcon,
-                    { color: r.status === 'ok' ? '#4CAF50' : '#FF6666' },
-                  ]}
-                >
-                  {r.status === 'ok' ? '✅' : '❌'}
+          {/* 3. 알림발송 */}
+          <Section icon="notifications-outline" title="알림발송" color="#FFB02E">
+            {stats.notifStats.available ? (
+              <>
+                <Row
+                  label="오늘 발송"
+                  value={`${stats.notifStats.sentToday ?? 0}건`}
+                />
+                <Row
+                  label="이번 주 발송"
+                  value={`${stats.notifStats.sentThisWeek ?? 0}건`}
+                />
+                <Row
+                  label="마지막 발송"
+                  value={formatRelative(stats.notifStats.lastSentAt)}
+                />
+              </>
+            ) : (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>
+                  데이터 없음 — cron 발송 누적 대기 중
                 </Text>
-                <Text style={styles.resultName} numberOfLines={1}>
-                  {r.productName}
+                <Text style={styles.emptyHint}>
+                  meta/notif_stats 문서가 생성되면 자동 표시됩니다
                 </Text>
-                {r.price ? (
-                  <Text style={styles.resultPrice}>{r.price.toLocaleString()}원</Text>
-                ) : null}
               </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
+            )}
+          </Section>
 
-      {/* hidden WebView — 1회용 promise 기반 */}
-      <CoupangScraper
-        key={scrapeKeyRef.current}
-        url={scrapeUrl}
-        onResult={handleScrapeResult}
-        onError={handleScrapeError}
-      />
+          {/* 4. 사용자수 */}
+          <Section icon="people-outline" title="사용자" color="#22C55E">
+            <Row label="전체" value={`${stats.userStats.total}명`} />
+            <Row
+              label="7일 이내 활동"
+              value={`${stats.userStats.active7d}명`}
+              hint={`(${pctText(stats.userStats.active7d, stats.userStats.total)})`}
+            />
+            <Row
+              label="푸시 토큰 보유"
+              value={`${stats.userStats.withToken}명`}
+              hint={`(${pctText(stats.userStats.withToken, stats.userStats.total)})`}
+            />
+          </Section>
+
+          {/* cron 메타 (footer) */}
+          <View style={styles.footer}>
+            <Text style={styles.footerLabel}>
+              cron 마지막 실행: {formatRelative(stats.cronStats.lastRunAt)}
+            </Text>
+            {typeof stats.cronStats.lastCheckedOffset === 'number' && (
+              <Text style={styles.footerLabel}>
+                split offset: {stats.cronStats.lastCheckedOffset}
+              </Text>
+            )}
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
+interface SectionProps {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  color: string;
+  children: React.ReactNode;
+}
+function Section({ icon, title, color, children }: SectionProps) {
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Ionicons name={icon} size={18} color={color} />
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      <View style={styles.sectionBody}>{children}</View>
+    </View>
+  );
+}
+
+function Row({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <View style={styles.rowRight}>
+        <Text style={styles.rowValue}>{value}</Text>
+        {hint && <Text style={styles.rowHint}>{hint}</Text>}
+      </View>
+    </View>
+  );
+}
+
+function pctText(part: number, total: number): string {
+  if (total <= 0) return '0%';
+  return `${Math.round((part / total) * 100)}%`;
+}
+
+function formatRelative(ts?: number): string {
+  if (!ts || ts <= 0) return '—';
+  const diff = Date.now() - ts;
+  if (diff < 0) return '방금';
+  if (diff < 60_000) return '방금';
+  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}분 전`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3600_000)}시간 전`;
+  return `${Math.floor(diff / 86_400_000)}일 전`;
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.background },
+  container: {
+    flex: 1,
+    backgroundColor: theme.background,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.border,
   },
-  backBtn: { padding: 4 },
-  title: { fontSize: 17, fontWeight: '700', color: theme.text },
-  scroll: { padding: 16, gap: 16 },
-
-  card: {
-    backgroundColor: theme.card,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.border,
-    padding: 16,
-    gap: 6,
-  },
-  cardLabel: { fontSize: 12, color: theme.subtext, fontWeight: '600' },
-  cardValue: { fontSize: 18, color: theme.text, fontWeight: '700' },
-  cardDesc: { fontSize: 13, color: theme.subtext },
-
-  actionBtn: {
+  headerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 10,
+    gap: 4,
+    padding: 4,
   },
-  startBtn: { backgroundColor: theme.primary },
-  stopBtn: { backgroundColor: '#CC3333' },
-  btnDisabled: { opacity: 0.5 },
-  actionText: { fontSize: 16, fontWeight: '700', color: '#000' },
-
-  divider: { height: 1, backgroundColor: theme.border, marginVertical: 8 },
-
+  headerBtnText: {
+    color: theme.text,
+    fontSize: 16,
+  },
+  title: {
+    flex: 1,
+    color: theme.text,
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 60,
+  },
+  loadingBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  errorText: {
+    color: theme.subtext,
+    fontSize: 14,
+  },
+  retryBtn: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: theme.primary,
+  },
+  retryText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  scroll: {
+    padding: 16,
+    gap: 12,
+    paddingBottom: 32,
+  },
+  section: {
+    backgroundColor: theme.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.border,
+    overflow: 'hidden',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  sectionTitle: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  sectionBody: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    gap: 8,
+  },
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  rowText: { flex: 1, gap: 2 },
-  label: { fontSize: 15, color: theme.text, fontWeight: '500' },
-  desc: { fontSize: 12, color: theme.subtext },
-
-  progressHeader: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    paddingVertical: 4,
   },
-  progressTitle: { fontSize: 14, color: theme.text, fontWeight: '600' },
-  currentName: { fontSize: 13, color: theme.subtext, marginTop: 4 },
-  progressBarBg: {
-    height: 6,
-    backgroundColor: theme.border,
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginTop: 10,
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: theme.primary,
-  },
-
-  summaryText: { fontSize: 16, color: theme.text, fontWeight: '600' },
-
-  resultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 6,
-  },
-  resultIcon: { fontSize: 14, width: 20 },
-  resultName: { flex: 1, fontSize: 13, color: theme.text },
-  resultPrice: { fontSize: 13, color: theme.subtext, fontVariant: ['tabular-nums'] },
-
-  resetLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 8,
-  },
-  resetLinkText: { fontSize: 13, color: theme.subtext },
-
-  waitLabel: {
-    fontSize: 13,
+  rowLabel: {
     color: theme.subtext,
-    fontWeight: '500',
-    marginTop: 8,
+    fontSize: 13,
   },
-  chipGroup: {
+  rowRight: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 6,
+    alignItems: 'baseline',
+    gap: 6,
   },
-  chip: {
-    paddingHorizontal: 14,
+  rowValue: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  rowHint: {
+    color: theme.subtext,
+    fontSize: 11,
+  },
+  emptyBox: {
     paddingVertical: 8,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.border,
-    backgroundColor: theme.background,
+    gap: 4,
   },
-  chipActive: {
-    backgroundColor: theme.primary,
-    borderColor: theme.primary,
+  emptyText: {
+    color: theme.subtext,
+    fontSize: 13,
   },
-  chipText: { fontSize: 13, color: theme.subtext, fontWeight: '500' },
-  chipTextActive: { color: '#000', fontWeight: '700' },
-
-  countdownCard: { borderColor: theme.primary },
-  countdownText: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: theme.primary,
-    fontVariant: ['tabular-nums'],
+  emptyHint: {
+    color: theme.subtext,
+    fontSize: 11,
+  },
+  footer: {
+    marginTop: 8,
+    paddingHorizontal: 4,
+    gap: 4,
+  },
+  footerLabel: {
+    color: theme.subtext,
+    fontSize: 11,
   },
 });

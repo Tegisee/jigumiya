@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   Linking,
   TextInput,
   Modal,
-  ActivityIndicator,
   Share,
   Platform,
 } from 'react-native';
@@ -20,51 +19,43 @@ import { Ionicons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
-import CoupangScraper, { ScrapedProduct } from '../../components/CoupangScraper';
-import { getCoupangProductUrl } from '../../services/coupangApi';
 import { getSharedProduct } from '../../services/firebase';
 import { useFavoriteToggle } from '../../hooks/useFavoriteToggle';
 
 /**
- * 1.0.19 §5 (docs/025) — lastRealPriceUpdatedAt 기준 상대시간 + stale 여부.
- * 6시간 이상 미갱신은 isStale=true로 UI에서 노란색 강조 (TTL 6h 가드와 일치).
+ * lastCheckedAt 기준 상대시간 + stale 여부. cron이 10분 주기로 갱신하므로 1h 이상이면 stale.
  */
 function formatLastUpdate(ts: number): { text: string; isStale: boolean } {
   const diffMs = Date.now() - ts;
-  const SIX_HOURS = 6 * 60 * 60 * 1000;
-  const isStale = diffMs >= SIX_HOURS;
+  const ONE_HOUR = 60 * 60 * 1000;
+  const isStale = diffMs >= ONE_HOUR;
   if (diffMs < 0 || diffMs < 60 * 1000) return { text: '방금', isStale: false };
-  if (diffMs < 60 * 60 * 1000) {
+  if (diffMs < ONE_HOUR) {
     return { text: `${Math.floor(diffMs / (60 * 1000))}분 전`, isStale };
   }
-  if (diffMs < 24 * 60 * 60 * 1000) {
-    return { text: `${Math.floor(diffMs / (60 * 60 * 1000))}시간 전`, isStale };
+  if (diffMs < 24 * ONE_HOUR) {
+    return { text: `${Math.floor(diffMs / ONE_HOUR)}시간 전`, isStale };
   }
-  if (diffMs < 48 * 60 * 60 * 1000) {
+  if (diffMs < 48 * ONE_HOUR) {
     return { text: '어제', isStale };
   }
-  return { text: `${Math.floor(diffMs / (24 * 60 * 60 * 1000))}일 전`, isStale };
+  return { text: `${Math.floor(diffMs / (24 * ONE_HOUR))}일 전`, isStale };
 }
 
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { trackedItems, removeItem, updateItemPrice, markChecked } = useAppStore();
+  const { trackedItems, removeItem } = useAppStore();
 
   // 알림 라우팅은 itemId=productId로 보내므로(notifier.ts) productId fallback 매칭 필수.
   // i.id(클라이언트 UUID) 또는 i.productId(쿠팡 상품 ID) 둘 다 허용.
   const item = trackedItems.find((i) => i.id === id || i.productId === id);
 
-  const [refreshing, setRefreshing] = useState(false);
-  const [scrapeUrl, setScrapeUrl] = useState<string | null>(null);
   const [showAskModal, setShowAskModal] = useState(false);
   const [customAsk, setCustomAsk] = useState('');
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 1.0.19 §5 (docs/025) — shared_products.lastRealPriceUpdatedAt fetch.
-  // TrackedItem에는 이 필드가 없으므로 mount 시 1회 fetch. updateItemPrice/refresh 후에는 즉시 갱신.
-  // INIT 상태(realPrice 미수신)는 undefined로 두고 UI에서 표시 스킵.
-  const [lastRealPriceUpdatedAt, setLastRealPriceUpdatedAt] = useState<number | null>(null);
+  // shared_products.lastCheckedAt — cron 마지막 갱신 시점. 상대시간 + stale 강조.
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
   useEffect(() => {
     const pid = item?.productId;
     if (!pid) return;
@@ -73,16 +64,14 @@ export default function DetailScreen() {
       try {
         const snap = await getSharedProduct(pid);
         if (cancelled) return;
-        if (snap?.lastRealPriceUpdatedAt) {
-          setLastRealPriceUpdatedAt(snap.lastRealPriceUpdatedAt);
+        if (snap?.lastCheckedAt) {
+          setLastCheckedAt(snap.lastCheckedAt);
         }
       } catch (e) {
-        // 조회 실패 시 표시 미노출 (조용히 fallback)
-        console.warn('[detail] lastRealPriceUpdatedAt 조회 실패:', e);
+        console.warn('[detail] lastCheckedAt 조회 실패:', e);
       }
     })();
     return () => { cancelled = true; };
-    // item.currentPrice 변경 시 (handleScrapeResult 후 updateItemPrice 발화) 재조회 — fresh 시간 반영
   }, [item?.productId, item?.currentPrice]);
 
   const ASK_MESSAGES = [
@@ -101,48 +90,6 @@ export default function DetailScreen() {
     toggle: handleToggleFavorite,
   } = useFavoriteToggle(item);
 
-  const handleRefresh = useCallback(() => {
-    if (!item || refreshing) return;
-    // 1.0.17: resolvedUrl 누락 케이스(아이고 공유상품 등)에서도 productId 기반 vp URL로 동작
-    const targetUrl = getCoupangProductUrl(item);
-    if (!targetUrl || targetUrl.includes('link.coupang.com')) {
-      Alert.alert('새로고침 불가', '이 상품은 자동 새로고침을 지원하지 않습니다');
-      return;
-    }
-    setRefreshing(true);
-    setScrapeUrl(targetUrl);
-    timeoutRef.current = setTimeout(() => {
-      setRefreshing(false);
-      setScrapeUrl(null);
-    }, 15000);
-  }, [item, refreshing]);
-
-  const handleScrapeResult = useCallback((data: ScrapedProduct) => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (item) {
-      // 1.0.17: 성공/실패/차단 무관하게 시도 시점 마킹 → PriceChecker 6h TTL 가드에 즉시 반영
-      markChecked(item.id);
-      if (data.price > 0) updateItemPrice(item.id, data.price);
-    }
-    setRefreshing(false);
-    setScrapeUrl(null);
-  }, [item, updateItemPrice, markChecked]);
-
-  const handleScrapeError = useCallback((reason?: 'challenge' | 'unknown') => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (item) markChecked(item.id);
-    if (reason === 'challenge') {
-      Alert.alert(
-        '쿠팡 봇 차단',
-        '쿠팡이 일시적으로 차단 중입니다. 잠시 후 다시 시도해주세요.',
-      );
-    } else {
-      Alert.alert('실패', '가격 정보를 가져올 수 없습니다');
-    }
-    setRefreshing(false);
-    setScrapeUrl(null);
-  }, [item, markChecked]);
-
   if (!item) {
     return (
       <SafeAreaView style={styles.container}>
@@ -151,23 +98,16 @@ export default function DetailScreen() {
     );
   }
 
-  // 1.0.19 §2 (docs/025) — 가격 상태 머신. 미설정(legacy) 시 'TRACKING'으로 간주.
-  const priceStatus = item.priceStatus ?? 'TRACKING';
-  const isInit = priceStatus === 'INIT';
-  const isSyncing = priceStatus === 'SYNCING';
-  const isTracking = priceStatus === 'TRACKING';
-
   const prices = item.priceHistory.map((p) => p.price);
   const maxPrice = Math.max(...prices);
   const minPrice = Math.min(...prices);
-  const hasChartData = isTracking && item.priceHistory.length > 1;
+  const hasChartData = item.priceHistory.length > 1;
   const isAllSamePrice = hasChartData && new Set(prices).size === 1;
   const firstPrice = prices[0] ?? 0;
   const lastPrice = prices[prices.length - 1] ?? 0;
 
-  // 트렌드: TRACKING 상태에서만 의미 있음. INIT/SYNCING은 'flat'로 고정해 변동 텍스트 노출 차단.
   const trend: 'drop' | 'up' | 'flat' =
-    !isTracking || !hasChartData || isAllSamePrice || lastPrice === firstPrice
+    !hasChartData || isAllSamePrice || lastPrice === firstPrice
       ? 'flat'
       : lastPrice < firstPrice
         ? 'drop'
@@ -178,16 +118,12 @@ export default function DetailScreen() {
   const chartColor =
     trend === 'drop' ? CHART_RED : trend === 'up' ? CHART_BLUE : theme.subtext;
 
-  // 상단 hero용 상태 라벨 + 색. INIT/SYNCING은 변동 텍스트 대신 상태 안내.
-  const statusText = isInit
-    ? '⏳ 가격 추적 준비 중'
-    : isSyncing
-      ? '🔄 가격 추적 시작!'
-      : trend === 'drop'
-        ? '📉 가격 하락 감지'
-        : trend === 'up'
-          ? '📈 가격 상승 감지'
-          : '➡️ 가격 변동 없음';
+  const statusText =
+    trend === 'drop'
+      ? '📉 가격 하락 감지'
+      : trend === 'up'
+        ? '📈 가격 상승 감지'
+        : '➡️ 가격 변동 없음';
 
   // 추적 기간 계산 (일)
   const trackingDays = item.priceHistory.length >= 2
@@ -234,13 +170,13 @@ export default function DetailScreen() {
   const createdDate = new Date(item.createdAt);
   const dateStr = `${createdDate.getFullYear()}.${String(createdDate.getMonth() + 1).padStart(2, '0')}.${String(createdDate.getDate()).padStart(2, '0')}`;
 
-  // 가격 하락 여부 (이전 가격 대비) — TRACKING 상태에서만 의미 있음
-  const hasPriceDrop = isTracking && item.priceHistory.length >= 2 &&
+  // 가격 하락 여부 (이전 가격 대비)
+  const hasPriceDrop = item.priceHistory.length >= 2 &&
     item.currentPrice < item.priceHistory[item.priceHistory.length - 2]?.price;
 
-  // 가격 인사이트 메시지 생성 — TRACKING 상태에서만 의미 있음 (INIT/SYNCING은 baseline 단계)
+  // 가격 인사이트 메시지 생성
   const priceInsights: { icon: string; text: string; color: string }[] = [];
-  if (isTracking && item.priceHistory.length >= 2) {
+  if (item.priceHistory.length >= 2) {
     // 트렌드 요약 — 그래프 색상과 자동 연동 (drop=red / up=blue / flat=gray)
     if (trend === 'drop') {
       const diff = firstPrice - lastPrice;
@@ -335,17 +271,6 @@ export default function DetailScreen() {
           <Text style={styles.headerBtnText}>홈</Text>
         </TouchableOpacity>
         <View style={styles.headerRight}>
-          <TouchableOpacity
-            onPress={handleRefresh}
-            style={styles.headerBtn}
-            disabled={refreshing}
-          >
-            {refreshing ? (
-              <ActivityIndicator size="small" color={theme.primary} />
-            ) : (
-              <Ionicons name="refresh" size={22} color={theme.text} />
-            )}
-          </TouchableOpacity>
           <TouchableOpacity onPress={handleDelete} style={styles.headerBtn}>
             <Ionicons name="trash-outline" size={22} color="#FF4444" />
           </TouchableOpacity>
@@ -383,27 +308,17 @@ export default function DetailScreen() {
 
         {/* 현재가 + 상태 hero */}
         <View style={styles.priceHero}>
-          <Text
-            style={[
-              styles.priceHeroValue,
-              isInit && { color: theme.subtext },
-            ]}
-          >
+          <Text style={styles.priceHeroLabel}>기준가격</Text>
+          <Text style={styles.priceHeroValue}>
             {item.currentPrice > 0
-              ? `${item.currentPrice.toLocaleString()}원${isInit ? ' (예상)' : ''}`
+              ? `${item.currentPrice.toLocaleString()}원`
               : '가격 정보 없음'}
           </Text>
-          <Text
-            style={[
-              styles.priceHeroStatus,
-              { color: isInit || isSyncing ? theme.primary : chartColor },
-            ]}
-          >
+          <Text style={[styles.priceHeroStatus, { color: chartColor }]}>
             {statusText}
           </Text>
-          {/* 1.0.19 §5 (docs/025) — 마지막 realPrice 갱신 시점. 6h 이상 미갱신은 노란색 강조. */}
-          {lastRealPriceUpdatedAt && (() => {
-            const up = formatLastUpdate(lastRealPriceUpdatedAt);
+          {lastCheckedAt && (() => {
+            const up = formatLastUpdate(lastCheckedAt);
             return (
               <Text
                 style={[
@@ -416,34 +331,15 @@ export default function DetailScreen() {
               </Text>
             );
           })()}
+          <Text style={styles.priceHeroHint}>
+            (할인 및 쿠폰 등을 적용한 실제 결제가는 쿠팡에서 확인하세요)
+          </Text>
         </View>
 
         {/* Chart */}
         <View style={styles.chartSection}>
           <Text style={styles.sectionTitle}>가격 변동</Text>
-          {isInit ? (
-            // 1.0.19 §2 INIT — 첫 realPrice 미수신, 그래프 표시 안 함
-            <View style={styles.chartEmpty}>
-              <Ionicons name="time-outline" size={32} color={theme.subtext} />
-              <Text style={styles.chartEmptyTitle}>가격 추적 준비 중</Text>
-              <Text style={styles.chartEmptyDesc}>
-                첫 가격 수집 후 그래프가 시작됩니다
-              </Text>
-            </View>
-          ) : isSyncing ? (
-            // 1.0.19 §2 SYNCING — 첫 realPrice baseline 단계, 그래프 1점만 의미 있어 텍스트로 안내
-            <View style={styles.chartEmpty}>
-              <Ionicons name="checkmark-circle-outline" size={32} color={theme.primary} />
-              <Text style={styles.chartEmptyTitle}>
-                {item.currentPrice > 0
-                  ? `현재가 ${item.currentPrice.toLocaleString()}원`
-                  : '가격 수집 완료'}
-              </Text>
-              <Text style={styles.chartEmptyDesc}>
-                최저가 도달 시 알림이 시작됩니다
-              </Text>
-            </View>
-          ) : hasChartData ? (
+          {hasChartData ? (
             <View style={styles.chartWrap}>
               <LineChart
                 data={chartData}
@@ -684,12 +580,6 @@ export default function DetailScreen() {
         </View>
       </Modal>
 
-      {/* Hidden WebView — 수동 가격 새로고침 */}
-      <CoupangScraper
-        url={scrapeUrl}
-        onResult={handleScrapeResult}
-        onError={handleScrapeError}
-      />
     </SafeAreaView>
   );
 }
@@ -786,6 +676,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     gap: 6,
+  },
+  priceHeroLabel: {
+    fontSize: 13,
+    color: theme.subtext,
+    fontWeight: '500',
+  },
+  priceHeroHint: {
+    fontSize: 11,
+    color: theme.subtext,
+    marginTop: 4,
+    textAlign: 'center',
   },
   priceHeroValue: {
     color: theme.text,

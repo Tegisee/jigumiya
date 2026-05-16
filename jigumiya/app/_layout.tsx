@@ -86,8 +86,8 @@ export default function RootLayout() {
       // Functions 컨테이너 워밍업 — fire-and-forget, 쿠팡 공유 첫 호출 cold start 제거
       warmupResolveAffiliate();
       await registerForPushNotifications();
-      // 1.0.17: 콜드 스타트 직후 Firestore 최신값 반영 — 홈 화면(tabs/index)이 mount되기 전에도
-      // realPrice/priceHistory 머지가 끝나야 PriceChecker TTL/가격 비교가 신선한 값으로 동작.
+      // 콜드 스타트 직후 Firestore 최신값 반영 — 홈 화면(tabs/index) mount 전에도
+      // shared_products 머지가 끝나야 가격/그래프가 신선한 값으로 표시.
       // 홈 화면 mount 시 syncFromFirestore 호출이 별도로 있지만, 알림 진입 등 다른 라우트
       // 콜드 스타트 경로에서는 동기화 누락 → 본 layout에서 1회 보장.
       useAppStore.getState().syncFromFirestore();

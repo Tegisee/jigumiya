@@ -14,7 +14,7 @@ import { ProductCard } from '../../components/ProductCard';
 /**
  * 추적중 탭 (1.0.17 §앱구조 §4) — 기존 가격변동(price-drops) 탭을 대체.
  * 홈 화면에서 분리된 trackedItems FlatList를 별도 탭으로 노출.
- * PriceChecker 자동 새로고침은 홈(`index.tsx`)에서 가동 — 같은 store 출처라 viewport 첫 6개 일치.
+ * 가격은 cron(shared-price-check, 10분 주기)이 갱신 → 동일 store 구독으로 자동 반영.
  */
 export default function TrackedScreen() {
   const { trackedItems } = useAppStore();

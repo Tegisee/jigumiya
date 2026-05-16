@@ -20,6 +20,7 @@ import {
   hasCoupangApiKeys,
   extractProductId,
   extractVendorItemId,
+  searchProducts,
 } from '../../services/coupangApi';
 import {
   callResolveAffiliate,
@@ -118,7 +119,7 @@ function parseProductName(text: string): string {
   return '';
 }
 
-/** 1.0.19 §1 — WebView 제거 후 Functions 응답이 가진 메타데이터를 그대로 사용. */
+/** Functions/searchProducts에서 받은 메타데이터 — currentPrice 시드 + 미리보기 카드 출처. */
 interface ResolvedMeta {
   resolvedUrl: string;
   affiliateUrl: string;
@@ -276,11 +277,56 @@ export default function AddItemModal() {
       productName = parseProductName(sharedText || '');
     }
 
+    // 1.0.20 #3 — Functions 메타가 비어있으면 쿠팡 검색 API로 productId 정확 매칭 fallback.
+    // Akamai가 vp HTML OG 파싱을 차단해도 검색 API는 막히지 않음. rate limit 1분/50회.
+    const ids = extractIds(resolvedUrl, affiliateUrl, parsedUrl);
+    if (
+      ids.productId &&
+      hasCoupangApiKeys() &&
+      (!productImage || apiPrice <= 0 || !productName)
+    ) {
+      const keywordSource = productName || parseProductName(sharedText || '');
+      const keyword = keywordSource
+        .split(/\s+/)
+        .slice(0, 4)
+        .join(' ')
+        .trim();
+      if (keyword.length >= 2) {
+        try {
+          const products = await withTimeout(
+            searchProducts(keyword, 5),
+            5000,
+            'searchProducts',
+          );
+          const match = products.find(
+            (p) => String(p.productId) === ids.productId,
+          );
+          if (match) {
+            if (!productImage) productImage = match.productImage;
+            if (apiPrice <= 0) apiPrice = match.productPrice;
+            if (!productName) productName = match.productName;
+            console.log(
+              '[AddItem] searchProducts fallback 성공:',
+              `name=${!!match.productName} img=${!!match.productImage} price=${match.productPrice}`,
+            );
+          } else {
+            console.log(
+              '[AddItem] searchProducts fallback 매칭 실패:',
+              keyword,
+              `(${products.length} candidates)`,
+            );
+          }
+        } catch (e) {
+          console.warn('[AddItem] searchProducts fallback 에러:', e);
+        }
+      }
+    }
+
     setMeta({ resolvedUrl, affiliateUrl, productName, productImage, apiPrice });
     setStep('target');
   };
 
-  // 2단계: "저장" 버튼 — priceStatus='INIT'으로 즉시 저장 + 모달 종료
+  // 2단계: "저장" 버튼 — apiPrice를 currentPrice로 즉시 저장 + 모달 종료
   const handleSave = async () => {
     if (!meta) return;
     setSaving(true);
@@ -292,9 +338,8 @@ export default function AddItemModal() {
     // URL에서 productId/vendorItemId 추출 (다중 후보 시도)
     const ids = extractIds(meta.resolvedUrl, meta.affiliateUrl, url);
 
-    // 1.0.19 §1 — INIT 상태로 즉시 저장. realPrice는 cron/관리자/자동 새로고침이 백그라운드 갱신.
-    // currentPrice는 표시용 fallback으로 apiPrice를 mirror (그래프엔 사용 안 함 — priceHistory 빔).
-    // priceHistory는 INIT 상태에서 빈 배열 — 첫 realPrice 도착 시 SYNCING으로 전이하며 1점 시작.
+    // 1.0.20 (docs/026) — apiPrice 단일 출처. priceHistory는 빈 배열로 시작,
+    // cron 첫 사이클에서 1점 추가됨. shared 머지 시 과거 시계열 자동 상속.
     await addItem({
       id: Date.now().toString(),
       url: meta.affiliateUrl,
@@ -302,12 +347,10 @@ export default function AddItemModal() {
       productId: ids.productId,
       vendorItemId: ids.vendorItemId,
       productName,
-      currentPrice: apiPrice, // INIT fallback. realPrice 도착 시 store의 updateItemPrice가 덮어씀.
-      apiPrice: apiPrice > 0 ? apiPrice : undefined,
+      currentPrice: apiPrice,
       targetPrice: targetPrice.trim() ? Number(targetPrice) : undefined,
       thumbnail,
       priceHistory: [],
-      priceStatus: 'INIT',
       createdAt: Date.now(),
     });
 
@@ -392,19 +435,22 @@ export default function AddItemModal() {
                   {meta.productName || '상품 정보 없음'}
                 </Text>
                 {meta.apiPrice > 0 && (
-                  <Text style={styles.previewPrice}>
-                    예상가 {meta.apiPrice.toLocaleString()}원
-                  </Text>
+                  <View style={styles.previewPriceRow}>
+                    <Text style={styles.previewPriceLabel}>기준가격</Text>
+                    <Text style={styles.previewPrice}>
+                      {meta.apiPrice.toLocaleString()}원
+                    </Text>
+                  </View>
                 )}
                 <Text style={styles.previewHint}>
-                  정확한 현재가는 곧 갱신됩니다
+                  (할인 및 쿠폰 등을 적용한 실제 결제가는 쿠팡에서 확인하세요)
                 </Text>
               </View>
             )}
 
             <TextInput
               style={styles.input}
-              placeholder="목표가 입력 (선택사항)"
+              placeholder="목표 기준가격 (선택사항)"
               placeholderTextColor={theme.subtext}
               value={targetPrice}
               onChangeText={setTargetPrice}
@@ -419,14 +465,15 @@ export default function AddItemModal() {
                 activeOpacity={0.7}
               >
                 <Text style={styles.suggestText}>
-                  추천 목표가: {suggestedPrice.toLocaleString()}원 (10% 할인)
+                  추천 목표 기준가격: {suggestedPrice.toLocaleString()}원 (10% 할인)
                 </Text>
               </TouchableOpacity>
             )}
 
             {!targetPrice.trim() && (
               <Text style={styles.skipHint}>
-                건너뛰면 최저가 갱신 시 알림을 보내드려요
+                건너뛰면 최저 기준가격 갱신 시 알림을 보내드려요{'\n'}
+                (실제 결제가는 더 저렴할 수 있어요)
               </Text>
             )}
 
@@ -552,6 +599,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 22,
   },
+  previewPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  previewPriceLabel: {
+    color: theme.subtext,
+    fontSize: 12,
+    fontWeight: '500',
+  },
   previewPrice: {
     color: theme.primary,
     fontSize: 20,
@@ -559,14 +616,16 @@ const styles = StyleSheet.create({
   },
   previewHint: {
     color: theme.subtext,
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 16,
   },
   skipHint: {
     color: theme.subtext,
     fontSize: 12,
     marginBottom: 8,
     marginLeft: 4,
+    lineHeight: 17,
   },
   suggestBtn: {
     marginTop: -10,

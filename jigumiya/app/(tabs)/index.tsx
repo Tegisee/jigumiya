@@ -15,7 +15,6 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../../constants/theme';
 import { useAppStore } from '../../store/useAppStore';
-import PriceChecker from '../../components/PriceChecker';
 import { hasCoupangApiKeys, generateDeepLink } from '../../services/coupangApi';
 import {
   fetchActiveJigumiyaEvent,
@@ -40,27 +39,18 @@ export default function HomeScreen() {
     event: EventBestJigumiya;
     daysUntil: number;
   } | null>(null);
-  // 1.0.17 자동 새로고침 트리거. mount + 포그라운드 복귀마다 토글링으로 PriceChecker useEffect 재실행.
-  // PriceChecker 내부 runningRef로 중복 실행 방지, TTL 6h 가드로 최근 체크는 자동 스킵.
-  const [checkTrigger, setCheckTrigger] = useState(0);
-
   useEffect(() => {
     // productId 누락 항목 자가 치유 (단축 URL resolve 실패로 하트 버튼 사라진 케이스 복구)
     backfillProductIds();
-    // 콜드 스타트 자동 새로고침 트리거 — sync 후 약간 지연으로 trackedItems 머지 완료 대기
-    const coldStartTimer = setTimeout(() => setCheckTrigger((n) => n + 1), 3000);
 
     const sub = AppState.addEventListener('change', (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         syncFromFirestore();
-        // sync 머지 완료 + 알림 라우팅 등 안정화 후 트리거
-        setTimeout(() => setCheckTrigger((n) => n + 1), 2000);
       }
       appStateRef.current = nextState;
     });
 
     return () => {
-      clearTimeout(coldStartTimer);
       sub.remove();
     };
   }, [syncFromFirestore, backfillProductIds]);
@@ -315,9 +305,6 @@ export default function HomeScreen() {
           이 앱은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
         </Text>
       </ScrollView>
-
-      {/* 1.0.17 포그라운드 자동 새로고침 — TTL 6h + viewport 우선 + 3~8s 지터 (Akamai 완화) */}
-      <PriceChecker active={checkTrigger > 0} key={checkTrigger} />
     </SafeAreaView>
   );
 }

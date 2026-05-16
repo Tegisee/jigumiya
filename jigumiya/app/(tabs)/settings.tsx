@@ -19,7 +19,7 @@ export default function SettingsScreen() {
   } = useAppStore();
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // uid 변경 → isAdmin 구독 — docs/023 §관리자 모드
+  // uid 변경 → isAdmin 구독 (docs/026 통계 대시보드)
   useEffect(() => {
     let unsubAdmin: (() => void) | null = null;
     const unsubUid = subscribeAuthUid((uid) => {
@@ -136,7 +136,7 @@ export default function SettingsScreen() {
                 <Ionicons name="construct-outline" size={20} color={theme.primary} />
                 <View style={styles.rowText}>
                   <Text style={styles.label}>관리자 모드</Text>
-                  <Text style={styles.desc}>shared_products realPrice 자동 순회</Text>
+                  <Text style={styles.desc}>운영 통계 대시보드</Text>
                 </View>
               </View>
               <Ionicons name="chevron-forward" size={18} color={theme.subtext} />

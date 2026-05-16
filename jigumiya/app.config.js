@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "지금이야",
     slug: "jigumiya",
-    version: "1.0.19",
+    version: "1.0.20",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "dark",
@@ -15,7 +15,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.jigumiya.app",
-      buildNumber: "55",
+      buildNumber: "56",
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         LSApplicationQueriesSchemes: ["coupang", "itms-appss"],
@@ -28,7 +28,7 @@ export default {
     },
     android: {
       package: "com.jigumiya.app",
-      versionCode: 55,
+      versionCode: 56,
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
       adaptiveIcon: {
         backgroundColor: "#000000",

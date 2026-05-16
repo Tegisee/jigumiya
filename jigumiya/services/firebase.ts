@@ -27,6 +27,8 @@ import {
   increment,
   onSnapshot,
   serverTimestamp,
+  runTransaction,
+  getCountFromServer,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -338,13 +340,10 @@ export async function syncLocalToFirestore(
 /**
  * shared_products/{productId} 업서트 (merge)
  *
- * ⚠️ 시그니처를 Partial로 완화한 이유 + RealPrice 역할 분담(docs/023):
+ * ⚠️ 책임 분담 (1.0.20 docs/026):
  * - trackerCount/favoriteCount: increment()로만 관리 → 절대 이 경로로 쓰지 말 것
- * - priceHistory/lowestPrice/highestPrice: 서버(cron / CF)가 관리
- * - apiPrice/lastCheckedAt: cron 전용 (이 함수로 쓰지 말 것)
- * - realPrice/lastRealPriceUpdatedAt: 앱 WebView 전용 (1B 작업에서 updateItemPrice 경로로 wire)
- * - needsCheck: cron set / CF·앱 clear
- * - 클라이언트는 메타데이터(url, productName, thumbnail, vendorItemId) + 최초 realPrice mirror만 기록
+ * - priceHistory/lowestPrice/highestPrice/apiPrice/lastCheckedAt: 서버(cron) 전용
+ * - 클라이언트는 메타데이터(url, productName, thumbnail, vendorItemId) + 최초 currentPrice 시드만 기록
  */
 export async function upsertSharedProduct(
   product: Partial<SharedProduct> & { productId: string },
@@ -371,9 +370,8 @@ export async function upsertSharedProduct(
  * productId 없으면 null 반환 (shared_products 스킵).
  * 카운터 / priceHistory / lowest·highestPrice 는 의도적으로 제외.
  *
- * RealPrice 아키텍처(docs/023): 앱 추가 시점의 currentPrice는 WebView 파싱 결과 →
- * 사실상 realPrice이므로 realPrice/lastRealPriceUpdatedAt도 함께 mirror.
- * apiPrice/needsCheck는 cron 영역이라 미설정.
+ * 1.0.20 (docs/026): 신규 추가의 currentPrice는 Functions/searchProducts에서 받은 apiPrice 값 →
+ * apiPrice 시드. 기존 shared 문서 있으면 setDoc(merge)로 cron 값이 우세.
  */
 export function trackedItemToSharedProduct(
   item: TrackedItem,
@@ -387,14 +385,8 @@ export function trackedItemToSharedProduct(
     ...(item.vendorItemId ? { vendorItemId: item.vendorItemId } : {}),
     productName: item.productName,
     thumbnail: item.thumbnail,
-    currentPrice: item.currentPrice, // legacy 호환 — 곧 제거 예정
-    ...(item.currentPrice > 0
-      ? { realPrice: item.currentPrice, lastRealPriceUpdatedAt: now }
-      : {}),
-    // 1.0.19 §2 — INIT 신규 상품에 한해 apiPrice / priceStatus 시드.
-    // 기존 shared 문서가 있으면 setDoc(merge)로 동일 값이 다시 쓰임(=noop). cron이 이후 진실 source.
-    ...(item.apiPrice && item.apiPrice > 0 ? { apiPrice: item.apiPrice } : {}),
-    ...(item.priceStatus ? { priceStatus: item.priceStatus } : {}),
+    currentPrice: item.currentPrice,
+    ...(item.currentPrice > 0 ? { apiPrice: item.currentPrice } : {}),
     lastCheckedAt: now,
   };
 }
@@ -458,6 +450,35 @@ export async function incrementTrackerCount(
     console.log('[shared] trackerCount', productId, delta > 0 ? '+' : '', delta);
   } catch (e) {
     console.warn('[Firebase] trackerCount 증감 실패:', e);
+  }
+}
+
+/**
+ * 1.0.20 (docs/026 #11): trackerCount=0 + favoriteCount=0이면 shared_products 문서 즉시 삭제.
+ * cron rate limit + Firestore 비용 절감. transaction으로 race 차단 — 다른 사용자가 동시에
+ * 추가하는 경우 transaction이 retry되어 새 카운터를 보고 삭제 스킵.
+ *
+ * 가드:
+ *   - trackerCount > 0: 다른 사용자가 추적 중 → 보존
+ *   - favoriteCount > 0: 자주사는 사용자 보호 → 보존
+ *   - 문서 미존재: noop
+ */
+export async function deleteSharedIfOrphan(productId: string): Promise<void> {
+  try {
+    const ref = doc(db, 'shared_products', productId);
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const trackerCount = Number(data.trackerCount ?? 0);
+      const favoriteCount = Number(data.favoriteCount ?? 0);
+      if (trackerCount <= 0 && favoriteCount <= 0) {
+        tx.delete(ref);
+      }
+    });
+    console.log('[shared] deleteIfOrphan checked', productId);
+  } catch (e) {
+    console.warn('[Firebase] deleteSharedIfOrphan 실패:', productId, e);
   }
 }
 
@@ -847,46 +868,155 @@ export async function fetchAllSharedProducts(): Promise<SharedProduct[]> {
   }
 }
 
-/**
- * 관리자 모드 — realPrice + lastRealPriceUpdatedAt + needsCheck:false 업데이트.
- * 1B(useAppStore.updateItemPrice)와 다른 점: needsCheck를 명시적 클리어 (CF 트리거 부담 감소).
- *
- * 1.0.19 §2 (docs/025): priceStatus 전이도 함께 처리.
- *   - INIT → SYNCING: 첫 realPrice, firstRealPriceAt 기록
- *   - SYNCING → TRACKING: 두 번째 realPrice, trackingStartedAt 기록
- *   - TRACKING(or legacy undefined): 그대로 유지
- * snapshot read 1회 추가 비용. 관리자 순회 빈도는 낮아 무시 가능 + race는 곧 다음 사이클이 수렴.
- */
-export async function adminUpdateRealPrice(
-  productId: string,
-  realPrice: number,
-): Promise<void> {
-  const now = Date.now();
-  let transitionFields: Partial<SharedProduct> = {};
-  try {
-    const snap = await getDoc(doc(db, 'shared_products', productId));
-    const before = snap.exists() ? (snap.data() as SharedProduct) : null;
-    const currentStatus = before?.priceStatus ?? 'TRACKING';
-    if (currentStatus === 'INIT') {
-      transitionFields = { priceStatus: 'SYNCING', firstRealPriceAt: now };
-    } else if (currentStatus === 'SYNCING') {
-      transitionFields = { priceStatus: 'TRACKING', trackingStartedAt: now };
-    }
-    // TRACKING / legacy: 전이 없음
-  } catch (e) {
-    console.warn('[admin] priceStatus 전이 read 실패 — 전이 스킵:', e);
-  }
-  await setDoc(
-    doc(db, 'shared_products', productId),
-    {
-      realPrice,
-      lastRealPriceUpdatedAt: now,
-      needsCheck: false,
-      ...transitionFields,
-    },
-    { merge: true },
-  );
+// ──────────────────────────────────────────────────────────
+// 관리자 통계 대시보드 (docs/026 #5)
+// ──────────────────────────────────────────────────────────
+
+export interface AdminStats {
+  productStats: {
+    total: number;
+    withTrackers: number;
+    avgTrackers: number;
+  };
+  priceStats: {
+    drops24h: number;
+    avgDropRate: number;
+  };
+  notifStats: {
+    available: boolean;
+    sentToday?: number;
+    sentThisWeek?: number;
+    lastSentAt?: number;
+  };
+  userStats: {
+    total: number;
+    active7d: number;
+    withToken: number;
+  };
+  cronStats: {
+    lastRunAt?: number;
+    lastCheckedOffset?: number;
+  };
 }
+
+/**
+ * 관리자 통계 4섹션 일괄 조회. Promise.all로 병렬.
+ * meta/notif_stats는 cron이 발송 시 누적 갱신 예정 — 현재 없으면 available=false로 graceful.
+ */
+export async function fetchAdminStats(): Promise<AdminStats> {
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  const SEVEN_DAYS = 7 * ONE_DAY;
+  const now = Date.now();
+
+  const [products, drops24h, jigumiyaUsers, metaStats, notifStats] =
+    await Promise.all([
+      // shared_products full fetch — 100~수백 문서라 비용 부담 없음
+      getDocs(collection(db, 'shared_products')).catch((e) => {
+        console.warn('[admin/stats] shared_products fetch 실패:', e);
+        return null;
+      }),
+      // price_drops 24h
+      getDocs(
+        query(
+          collection(db, 'price_drops'),
+          where('createdAt', '>', now - ONE_DAY),
+        ),
+      ).catch((e) => {
+        console.warn('[admin/stats] price_drops fetch 실패:', e);
+        return null;
+      }),
+      // users where(app=jigumiya)
+      getDocs(
+        query(collection(db, 'users'), where('app', '==', 'jigumiya')),
+      ).catch((e) => {
+        console.warn('[admin/stats] users fetch 실패:', e);
+        return null;
+      }),
+      getDoc(doc(db, 'meta', 'stats')).catch((e) => {
+        console.warn('[admin/stats] meta/stats fetch 실패:', e);
+        return null;
+      }),
+      getDoc(doc(db, 'meta', 'notif_stats')).catch(() => null),
+    ]);
+
+  // 1. productStats
+  let totalProducts = 0;
+  let withTrackers = 0;
+  let trackerSum = 0;
+  if (products) {
+    totalProducts = products.size;
+    for (const d of products.docs) {
+      const tc = Number(d.data().trackerCount ?? 0);
+      if (tc > 0) {
+        withTrackers++;
+        trackerSum += tc;
+      }
+    }
+  }
+  const avgTrackers = withTrackers > 0 ? trackerSum / withTrackers : 0;
+
+  // 2. priceStats — 24h drops + avg dropRate (음수)
+  let dropsCount = 0;
+  let dropRateSum = 0;
+  if (drops24h) {
+    dropsCount = drops24h.size;
+    for (const d of drops24h.docs) {
+      const r = Number(d.data().dropRate ?? 0);
+      if (r < 0) dropRateSum += r;
+    }
+  }
+  const avgDropRate = dropsCount > 0 ? dropRateSum / dropsCount : 0;
+
+  // 3. userStats — 활성(lastActiveAt 7d 이내) + 토큰 보유
+  let totalUsers = 0;
+  let active7d = 0;
+  let withToken = 0;
+  if (jigumiyaUsers) {
+    totalUsers = jigumiyaUsers.size;
+    for (const u of jigumiyaUsers.docs) {
+      const data = u.data();
+      const lastActiveStr = data.lastActiveAt as string | undefined;
+      const lastActiveMs = lastActiveStr ? Date.parse(lastActiveStr) : 0;
+      if (lastActiveMs > 0 && now - lastActiveMs < SEVEN_DAYS) active7d++;
+      if (data.expoPushToken) withToken++;
+    }
+  }
+
+  // 4. cronStats
+  const cronData = metaStats?.exists() ? metaStats.data() : null;
+  const cronStats = {
+    lastRunAt: cronData?.lastRunAt as number | undefined,
+    lastCheckedOffset: cronData?.lastCheckedOffset as number | undefined,
+  };
+
+  // 5. notifStats — 미존재 시 available=false
+  if (notifStats?.exists()) {
+    const data = notifStats.data();
+    return {
+      productStats: { total: totalProducts, withTrackers, avgTrackers },
+      priceStats: { drops24h: dropsCount, avgDropRate },
+      notifStats: {
+        available: true,
+        sentToday: Number(data.sentToday ?? 0),
+        sentThisWeek: Number(data.sentThisWeek ?? 0),
+        lastSentAt: data.lastSentAt as number | undefined,
+      },
+      userStats: { total: totalUsers, active7d, withToken },
+      cronStats,
+    };
+  }
+
+  return {
+    productStats: { total: totalProducts, withTrackers, avgTrackers },
+    priceStats: { drops24h: dropsCount, avgDropRate },
+    notifStats: { available: false },
+    userStats: { total: totalUsers, active7d, withToken },
+    cronStats,
+  };
+}
+
+/** 의도된 unused import 회피 — getCountFromServer는 추후 N이 커지면 사용 (현재 full fetch). */
+void getCountFromServer;
 
 /**
  * meta/config_jigumiya 단건 조회 — 인증 없이 호출 가능 (rules: read if true).
