@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View, Platform } from 'react-native';
 import WebView, {
   WebViewMessageEvent,
@@ -244,6 +244,10 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
   const doneRef = useRef(false);
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 1.0.21 — 403 fallback (m.coupang.com → www.coupang.com 1회).
+  // 부모가 보내는 url을 그대로 시도하다가 403이면 도메인 swap 후 재로드.
+  const fallbackUsedRef = useRef(false);
+  const [retryUrl, setRetryUrl] = useState<string | null>(null);
 
   // url 변경 시 상태 리셋 + 10s timeout 시작.
   // 1.0.21 fix: 초기값 null로 — 이전엔 useRef(url)로 첫 mount 시 ref가 url과 같아
@@ -253,6 +257,8 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
     prevUrlRef.current = url;
     doneRef.current = false;
     injectedRef.current = false;
+    fallbackUsedRef.current = false;
+    setRetryUrl(null);
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (!doneRef.current) {
@@ -262,6 +268,9 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
       }
     }, TIMEOUT_MS);
   }
+
+  // WebView source에 실제 사용할 URL — retryUrl 우선
+  const effectiveUrl = retryUrl ?? url;
 
   // unmount 시 timer 정리
   useEffect(() => {
@@ -382,11 +391,32 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
   const handleHttpError = useCallback((event: WebViewHttpErrorEvent) => {
     if (doneRef.current) return;
     const ne = event.nativeEvent;
+    const status = ne.statusCode;
+    const failedUrl = ne.url ?? '';
     console.warn('[AndroidMetaScraper] HTTP error:', {
-      status: ne.statusCode,
+      status,
       desc: ne.description,
-      url: ne.url?.slice(0, 120),
+      url: failedUrl.slice(0, 120),
     });
+
+    // 1.0.21 — 403 + m.coupang.com이면 www.coupang.com으로 1회 재로드 (Akamai 모바일 차단 회피)
+    if (
+      status === 403 &&
+      !fallbackUsedRef.current &&
+      failedUrl.includes('m.coupang.com')
+    ) {
+      const wwwUrl = failedUrl.replace(
+        /\/\/m\.coupang\.com\//,
+        '//www.coupang.com/',
+      );
+      fallbackUsedRef.current = true;
+      injectedRef.current = false; // 재로드 시 SCRAPE_JS 재주입 허용
+      console.warn(
+        '[AndroidMetaScraper] 403 fallback: m. → www.',
+        wwwUrl.slice(0, 120),
+      );
+      setRetryUrl(wwwUrl);
+    }
   }, []);
 
   const handleShouldStartLoad = useCallback((request: ShouldStartLoadRequest) => {
@@ -422,7 +452,7 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
     <View style={styles.hidden} pointerEvents="none">
       <WebView
         ref={webViewRef}
-        source={{ uri: url }}
+        source={{ uri: effectiveUrl ?? url }}
         userAgent={USER_AGENT}
         injectedJavaScriptBeforeContentLoaded={PRELOAD_JS}
         onMessage={handleMessage}

@@ -418,17 +418,15 @@ export default function AddItemModal() {
     );
 
     if (isAndroid && metaIncomplete && isVpVm) {
-      const mobileUrl = resolvedUrl.replace(
-        /\/\/www\.coupang\.com\//,
-        '//m.coupang.com/',
-      );
-      const converted = mobileUrl !== resolvedUrl;
+      // 1.0.21: m.coupang.com이 Akamai HTTP 403으로 더 잘 막혀서 www. 그대로 사용.
+      //   AndroidMetaScraper 측에 m. 도메인 안전망(403 시 www. 1회 재로드)이 있어
+      //   혹시 m. URL이 우회 경로로 들어와도 자동 처리됨.
       console.log(
-        `[AddItem] Android WebView fallback 발사 converted=${converted}:`,
-        mobileUrl.slice(0, 120),
+        '[AddItem] Android WebView fallback 발사:',
+        resolvedUrl.slice(0, 120),
       );
-      console.log('[AddItem] setScraperUrl(mobileUrl) — fallback 발사');
-      setScraperUrl(mobileUrl);
+      console.log('[AddItem] setScraperUrl(resolvedUrl) — fallback 발사');
+      setScraperUrl(resolvedUrl);
     } else {
       const reason = !isAndroid
         ? 'not-android'
