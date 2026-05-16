@@ -184,8 +184,10 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
   const injectedRef = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // url 변경 시 상태 리셋 + 10s timeout 시작
-  const prevUrlRef = useRef(url);
+  // url 변경 시 상태 리셋 + 10s timeout 시작.
+  // 1.0.21 fix: 초기값 null로 — 이전엔 useRef(url)로 첫 mount 시 ref가 url과 같아
+  //   if 조건 false → timeout 미시작 → 페이지 로드 실패 시 영구 잔존 버그.
+  const prevUrlRef = useRef<string | null>(null);
   if (url && url !== prevUrlRef.current) {
     prevUrlRef.current = url;
     doneRef.current = false;
