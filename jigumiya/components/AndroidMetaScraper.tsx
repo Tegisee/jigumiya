@@ -4,6 +4,12 @@ import WebView, {
   WebViewMessageEvent,
   WebViewNavigation,
 } from 'react-native-webview';
+import type {
+  WebViewNavigationEvent,
+  WebViewErrorEvent,
+  WebViewHttpErrorEvent,
+  ShouldStartLoadRequest,
+} from 'react-native-webview/lib/WebViewTypes';
 
 /**
  * 1.0.20+ Android 전용 메타 추출 fallback (docs/026 후속).
@@ -198,9 +204,14 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
 
   const handleMessage = useCallback(
     (event: WebViewMessageEvent) => {
+      const raw = event.nativeEvent.data ?? '';
+      console.log(
+        `[AndroidMetaScraper] postMessage raw (len=${raw.length}):`,
+        raw.slice(0, 240),
+      );
       if (doneRef.current) return;
       try {
-        const data = JSON.parse(event.nativeEvent.data);
+        const data = JSON.parse(raw);
         if (data.type === 'ERROR') {
           console.warn('[AndroidMetaScraper] JS error:', data.message);
           // 에러는 timeout에 맡김 (silent retry 여지)
@@ -252,6 +263,9 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
       const isProductPage =
         navUrl.includes('coupang.com/vp/products/') ||
         navUrl.includes('coupang.com/vm/products/');
+      console.log(
+        `[AndroidMetaScraper] nav: loading=${navState.loading} isProductPage=${isProductPage} url=${navUrl.slice(0, 120)}`,
+      );
       if (isProductPage && !navState.loading) {
         tryInject();
       }
@@ -259,15 +273,70 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
     [tryInject],
   );
 
-  const handleLoadEnd = useCallback(() => {
-    if (doneRef.current || injectedRef.current) return;
-    tryInject();
-  }, [tryInject]);
+  const handleLoadStart = useCallback((event: WebViewNavigationEvent) => {
+    console.log(
+      '[AndroidMetaScraper] onLoadStart:',
+      event.nativeEvent.url?.slice(0, 120),
+    );
+  }, []);
 
-  const handleError = useCallback(() => {
+  const handleLoadEnd = useCallback(
+    (event: WebViewNavigationEvent | WebViewErrorEvent) => {
+      const ne = event.nativeEvent;
+      console.log(
+        `[AndroidMetaScraper] onLoadEnd: url=${ne.url?.slice(0, 120)} loading=${'loading' in ne ? ne.loading : 'n/a'}`,
+      );
+      if (doneRef.current || injectedRef.current) return;
+      tryInject();
+    },
+    [tryInject],
+  );
+
+  const handleError = useCallback((event: WebViewErrorEvent) => {
     if (doneRef.current) return;
-    // WebView 에러는 timeout으로 흘림 — silent
-    console.warn('[AndroidMetaScraper] WebView error — wait for timeout');
+    const ne = event.nativeEvent;
+    console.warn('[AndroidMetaScraper] WebView error:', {
+      code: ne.code,
+      desc: ne.description,
+      url: ne.url?.slice(0, 120),
+    });
+  }, []);
+
+  const handleHttpError = useCallback((event: WebViewHttpErrorEvent) => {
+    if (doneRef.current) return;
+    const ne = event.nativeEvent;
+    console.warn('[AndroidMetaScraper] HTTP error:', {
+      status: ne.statusCode,
+      desc: ne.description,
+      url: ne.url?.slice(0, 120),
+    });
+  }, []);
+
+  const handleShouldStartLoad = useCallback((request: ShouldStartLoadRequest) => {
+    const reqUrl = request.url || '';
+    const blockedPrefixes = [
+      'coupang://',
+      'coupangapp://',
+      'itms-appss://',
+      'intent://',
+      'market://',
+    ];
+    const isBlocked = blockedPrefixes.some((b) => reqUrl.startsWith(b));
+    if (isBlocked) {
+      console.warn(
+        '[AndroidMetaScraper] onShouldStartLoad 차단 (딥링크):',
+        reqUrl.slice(0, 120),
+      );
+      return false;
+    }
+    if (!reqUrl.startsWith('http://') && !reqUrl.startsWith('https://')) {
+      console.warn(
+        '[AndroidMetaScraper] onShouldStartLoad 차단 (비-http):',
+        reqUrl.slice(0, 120),
+      );
+      return false;
+    }
+    return true;
   }, []);
 
   if (!url || Platform.OS !== 'android') return null;
@@ -281,9 +350,11 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
         injectedJavaScriptBeforeContentLoaded={PRELOAD_JS}
         onMessage={handleMessage}
         onNavigationStateChange={handleNavigationChange}
+        onLoadStart={handleLoadStart}
         onLoadEnd={handleLoadEnd}
         onError={handleError}
-        onHttpError={handleError}
+        onHttpError={handleHttpError}
+        onShouldStartLoadWithRequest={handleShouldStartLoad}
         javaScriptEnabled
         domStorageEnabled
         thirdPartyCookiesEnabled={false}
