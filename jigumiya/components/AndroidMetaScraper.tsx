@@ -45,9 +45,9 @@ interface Props {
 
 const TIMEOUT_MS = 10_000;
 
-// 갤럭시 환경 우회 — 최신 Pixel Chrome (2026-05 기준 131+)
+// 갤럭시 환경 우회 — Galaxy S24 Chrome (실제 사용자 디바이스와 일치, fingerprint 자연도 ↑)
 const USER_AGENT =
-  'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+  'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
 
 // 페이지 로드 전 주입:
 //   1. navigator.webdriver 우회 — Akamai 봇 분류 회피
@@ -466,7 +466,7 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
         domStorageEnabled
         thirdPartyCookiesEnabled={false}
         sharedCookiesEnabled={false}
-        incognito
+        incognito={false}
         cacheEnabled={false}
         startInLoadingState={false}
         // 외부 앱 호출 (intent://, market://) 차단
