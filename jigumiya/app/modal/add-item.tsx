@@ -335,17 +335,33 @@ export default function AddItemModal() {
     // 1.0.20+ — Android 전용 WebView fallback (옵션 C: 백그라운드).
     // Functions + searchProducts 모두 메타 못 채운 경우 m.coupang.com vp 페이지를 hidden WebView로 로드.
     // 사용자는 target 단계 미리보기 보는 동안 백그라운드 추출. 결과 도착 시 setMeta로 머지.
-    if (
-      Platform.OS === 'android' &&
-      (!productImage || apiPrice <= 0) &&
-      /coupang\.com\/(vp|vm)\/products\//.test(resolvedUrl)
-    ) {
+    //
+    // 1.0.21 디버깅: 갤럭시에서 발사 안 되는 케이스 추적용 — 조건 분기 결과 전수 로깅.
+    const isAndroid = Platform.OS === 'android';
+    const metaIncomplete = !productImage || apiPrice <= 0;
+    const isVpVm = /coupang\.com\/(vp|vm)\/products\//.test(resolvedUrl);
+    console.log(
+      `[AddItem] WebView fallback 검사: android=${isAndroid} metaIncomplete=${metaIncomplete}(img=${!!productImage} price=${apiPrice}) isVpVm=${isVpVm} resolvedUrl=${resolvedUrl.slice(0, 120)}`,
+    );
+
+    if (isAndroid && metaIncomplete && isVpVm) {
       const mobileUrl = resolvedUrl.replace(
         /\/\/www\.coupang\.com\//,
         '//m.coupang.com/',
       );
-      console.log('[AddItem] Android WebView fallback 발사:', mobileUrl.slice(0, 80));
+      const converted = mobileUrl !== resolvedUrl;
+      console.log(
+        `[AddItem] Android WebView fallback 발사 converted=${converted}:`,
+        mobileUrl.slice(0, 120),
+      );
       setScraperUrl(mobileUrl);
+    } else {
+      const reason = !isAndroid
+        ? 'not-android'
+        : !metaIncomplete
+          ? 'meta-already-complete'
+          : 'url-not-vp/vm';
+      console.log(`[AddItem] Android WebView fallback 스킵 reason=${reason}`);
     }
   };
 
