@@ -306,6 +306,8 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
         `[AndroidMetaScraper] nav: loading=${navState.loading} isProductPage=${isProductPage} url=${navUrl.slice(0, 120)}`,
       );
       if (isProductPage && !navState.loading) {
+        // 1.0.21: 페이지 reload/navigation 시 SCRAPE_JS 재주입 허용 (postMessage 누락 fix)
+        injectedRef.current = false;
         tryInject();
       }
     },
@@ -322,11 +324,20 @@ function AndroidMetaScraperImpl({ url, onMeta, onTimeout }: Props) {
   const handleLoadEnd = useCallback(
     (event: WebViewNavigationEvent | WebViewErrorEvent) => {
       const ne = event.nativeEvent;
+      const endUrl = ne.url ?? '';
+      const isProductPage =
+        endUrl.includes('coupang.com/vp/products/') ||
+        endUrl.includes('coupang.com/vm/products/');
       console.log(
-        `[AndroidMetaScraper] onLoadEnd: url=${ne.url?.slice(0, 120)} loading=${'loading' in ne ? ne.loading : 'n/a'}`,
+        `[AndroidMetaScraper] onLoadEnd: url=${endUrl.slice(0, 120)} loading=${'loading' in ne ? ne.loading : 'n/a'} isProductPage=${isProductPage}`,
       );
-      if (doneRef.current || injectedRef.current) return;
-      tryInject();
+      if (doneRef.current) return;
+      // 1.0.21: vp 페이지 도달 시에만 inject. reload 시 재주입 허용.
+      // 비-vp 중간 페이지(redirect intermediate)에는 inject 안 함 → 빈값 postMessage 방지.
+      if (isProductPage) {
+        injectedRef.current = false;
+        tryInject();
+      }
     },
     [tryInject],
   );
