@@ -26,6 +26,10 @@ import {
   callResolveAffiliate,
   warmupResolveAffiliate,
 } from '../../services/firebase';
+import {
+  AndroidMetaScraper,
+  type ScrapedMeta,
+} from '../../components/AndroidMetaScraper';
 
 function extractUrl(text: string): string {
   const coupangMatch = text.match(/https?:\/\/[^\s]*coupang\.com[^\s]*/i);
@@ -143,6 +147,8 @@ export default function AddItemModal() {
   const [step, setStep] = useState<Step>('url');
   const [meta, setMeta] = useState<ResolvedMeta | null>(null);
   const [saving, setSaving] = useState(false);
+  // 2-2 (옵션 C) — target 단계 백그라운드 WebView fallback URL. null이면 unmount.
+  const [scraperUrl, setScraperUrl] = useState<string | null>(null);
   const isFromShare = !!sharedUrl;
   // 'url' 외 단계 진행 중에 expo-router 캐싱으로 인한 state 리셋 방지 (rare)
   const stepRef = useRef<Step>('url');
@@ -162,6 +168,7 @@ export default function AddItemModal() {
       setStep('url');
       setMeta(null);
       setSaving(false);
+      setScraperUrl(null);
     }, [sharedUrl])
   );
 
@@ -324,7 +331,46 @@ export default function AddItemModal() {
 
     setMeta({ resolvedUrl, affiliateUrl, productName, productImage, apiPrice });
     setStep('target');
+
+    // 1.0.20+ — Android 전용 WebView fallback (옵션 C: 백그라운드).
+    // Functions + searchProducts 모두 메타 못 채운 경우 m.coupang.com vp 페이지를 hidden WebView로 로드.
+    // 사용자는 target 단계 미리보기 보는 동안 백그라운드 추출. 결과 도착 시 setMeta로 머지.
+    if (
+      Platform.OS === 'android' &&
+      (!productImage || apiPrice <= 0) &&
+      /coupang\.com\/(vp|vm)\/products\//.test(resolvedUrl)
+    ) {
+      const mobileUrl = resolvedUrl.replace(
+        /\/\/www\.coupang\.com\//,
+        '//m.coupang.com/',
+      );
+      console.log('[AddItem] Android WebView fallback 발사:', mobileUrl.slice(0, 80));
+      setScraperUrl(mobileUrl);
+    }
   };
+
+  // WebView fallback 결과 — setMeta 머지 (빈 필드만 채움) + 즉시 unmount
+  const handleScraperMeta = useCallback((scraped: ScrapedMeta) => {
+    setMeta((prev) => {
+      if (!prev) return prev;
+      const merged: ResolvedMeta = {
+        ...prev,
+        productName: prev.productName || scraped.productName || '',
+        productImage: prev.productImage || scraped.productImage || '',
+        apiPrice: prev.apiPrice > 0 ? prev.apiPrice : (scraped.apiPrice ?? 0),
+      };
+      console.log(
+        `[AddItem] WebView fallback 머지: name=${!!scraped.productName} img=${!!scraped.productImage} price=${scraped.apiPrice ?? 0}`,
+      );
+      return merged;
+    });
+    setScraperUrl(null);
+  }, []);
+
+  const handleScraperTimeout = useCallback(() => {
+    console.warn('[AddItem] WebView fallback timeout — silent');
+    setScraperUrl(null);
+  }, []);
 
   // 2단계: "저장" 버튼 — apiPrice를 currentPrice로 즉시 저장 + 모달 종료
   const handleSave = async () => {
@@ -354,6 +400,7 @@ export default function AddItemModal() {
       createdAt: Date.now(),
     });
 
+    setScraperUrl(null); // 저장 완료 시 WebView 강제 unmount (race 결과 무시)
     setSaving(false);
     if (isFromShare) {
       router.replace('/');
@@ -366,6 +413,7 @@ export default function AddItemModal() {
     if (step === 'target' || step === 'resolving') {
       setMeta(null);
       setStep('url');
+      setScraperUrl(null); // WebView fallback 강제 unmount
     } else {
       isFromShare ? router.replace('/') : router.back();
     }
@@ -497,6 +545,13 @@ export default function AddItemModal() {
           </>
         )}
       </KeyboardAvoidingView>
+
+      {/* Android 전용 hidden WebView 메타 fallback (target 단계 백그라운드) */}
+      <AndroidMetaScraper
+        url={scraperUrl}
+        onMeta={handleScraperMeta}
+        onTimeout={handleScraperTimeout}
+      />
     </SafeAreaView>
   );
 }

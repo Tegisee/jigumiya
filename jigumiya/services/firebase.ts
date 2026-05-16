@@ -29,6 +29,7 @@ import {
   serverTimestamp,
   runTransaction,
   getCountFromServer,
+  deleteField,
 } from 'firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -308,6 +309,19 @@ export async function updateItemInFirestore(
   }
 }
 
+/** users/{uid}/items/{itemId}에서 targetPrice 필드 자체를 unset */
+export async function clearItemTargetPrice(itemId: string): Promise<void> {
+  const uid = getCurrentUid();
+  if (!uid) return;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'items', itemId), {
+      targetPrice: deleteField(),
+    });
+  } catch (e) {
+    console.warn('[Firebase] targetPrice 삭제 실패:', e);
+  }
+}
+
 /** 로컬 전체 데이터를 Firestore에 백업 */
 export async function syncLocalToFirestore(
   items: TrackedItem[]
@@ -365,9 +379,31 @@ export async function upsertSharedProduct(
 }
 
 /**
+ * 상품명 invalid 판정 — shared_products write 가드 + addItem 머지 분기 공용.
+ *
+ * invalid 3종:
+ *   1. 빈 문자열 / 공백만
+ *   2. "쿠팡(을) (X) 추천(X) 합니다(X) !?" 등 갤럭시/iOS 공유 시 자동 삽입 문구
+ *      (parseProductName 정규식과 동일 패턴 — `쿠팡을?\s*추천\s*합니다!?`)
+ *   3. "상품 정보 없음" — 앱이 생성한 placeholder (add-item.tsx handleSave fallback)
+ */
+export function isInvalidProductName(name: string | undefined | null): boolean {
+  if (!name) return true;
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return true;
+  if (trimmed === '상품 정보 없음') return true;
+  if (/^쿠팡을?\s*추천\s*합니다!?$/.test(trimmed)) return true;
+  return false;
+}
+
+/**
  * TrackedItem → SharedProduct 변환 헬퍼 (클라이언트 쓰기 전용)
  *
- * productId 없으면 null 반환 (shared_products 스킵).
+ * 반환 null 케이스 (shared_products 스킵 = dead 문서 생성 방지):
+ *   - productId 없음
+ *   - productName invalid (isInvalidProductName 참조)
+ *   - thumbnail 빈 값
+ *
  * 카운터 / priceHistory / lowest·highestPrice 는 의도적으로 제외.
  *
  * 1.0.20 (docs/026): 신규 추가의 currentPrice는 Functions/searchProducts에서 받은 apiPrice 값 →
@@ -377,6 +413,8 @@ export function trackedItemToSharedProduct(
   item: TrackedItem,
 ): (Partial<SharedProduct> & { productId: string }) | null {
   if (!item.productId) return null;
+  if (isInvalidProductName(item.productName)) return null;
+  if (!item.thumbnail) return null;
   const now = Date.now();
   return {
     productId: item.productId,

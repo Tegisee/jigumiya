@@ -8,6 +8,7 @@ import {
   saveItemToFirestore,
   removeItemFromFirestore,
   updateItemInFirestore,
+  clearItemTargetPrice,
   updateNotificationEnabled,
   fetchItemsFromFirestore,
   fetchSharedProductsByIds,
@@ -20,6 +21,7 @@ import {
   removeTrackedRef,
   incrementTrackerCount,
   deleteSharedIfOrphan,
+  isInvalidProductName,
 } from '../services/firebase';
 import {
   extractProductId,
@@ -32,7 +34,8 @@ interface AppState {
   trackedItems: TrackedItem[];
   addItem: (item: TrackedItem) => Promise<void>;
   removeItem: (id: string) => void;
-  updateTargetPrice: (id: string, price: number) => void;
+  /** price=undefined면 targetPrice 필드 자체를 삭제 (목표가 해제) */
+  updateTargetPrice: (id: string, price: number | undefined) => void;
   syncFromFirestore: () => Promise<void>;
   backfillProductIds: () => Promise<void>;
   toggleNotification: () => void;
@@ -66,30 +69,60 @@ export const useAppStore = create<AppState>()(
           return;
         }
 
-        // 첫 추적 + productId 있을 때 shared_products 과거 priceHistory 머지.
-        // cron이 누적해온 시계열을 신규 사용자도 즉시 보이게 한다. 오늘자 가격은
-        // 신규 추가의 currentPrice(=apiPrice)가 더 신선하므로 같은 날짜면 덮어쓰고 아니면 append.
+        // 첫 추적 + productId 있을 때 shared_products 과거 메타 + priceHistory 머지.
+        // cron이 누적해온 시계열을 신규 사용자도 즉시 보이게 한다.
+        // 1.0.20+: Functions/검색이 메타 못 채운 경우 shared의 thumbnail/productName/apiPrice도 상속
+        //   → 갤럭시 공유 등 placeholder만 들어오는 케이스 보완.
         let finalItem = item;
         if (!alreadyTracking && item.productId) {
           try {
             const snapshot = await getSharedProduct(item.productId);
             if (snapshot) {
+              const patches: Partial<TrackedItem> = {};
+
+              // 메타 상속 — local이 비어있고 shared가 유효할 때만
+              if (!item.thumbnail && snapshot.thumbnail) {
+                patches.thumbnail = snapshot.thumbnail;
+              }
+              if (
+                isInvalidProductName(item.productName) &&
+                !isInvalidProductName(snapshot.productName)
+              ) {
+                patches.productName = snapshot.productName;
+              }
+              const snapPrice = snapshot.apiPrice ?? snapshot.currentPrice ?? 0;
+              if (item.currentPrice <= 0 && snapPrice > 0) {
+                patches.currentPrice = snapPrice;
+              }
+
+              // priceHistory 머지 — 오늘자 가격은 신규/머지된 currentPrice 사용
               const sharedHist = snapshot.priceHistory ?? [];
+              const effectivePrice = patches.currentPrice ?? item.currentPrice;
               if (sharedHist.length > 0) {
                 const today = new Date().toISOString().slice(0, 10);
                 const merged = sharedHist.map((p) => ({ ...p }));
                 const last = merged[merged.length - 1];
-                if (item.currentPrice > 0) {
+                if (effectivePrice > 0) {
                   if (last?.date === today) {
-                    last.price = item.currentPrice;
+                    last.price = effectivePrice;
                   } else {
-                    merged.push({ date: today, price: item.currentPrice });
+                    merged.push({ date: today, price: effectivePrice });
                   }
                 }
-                finalItem = { ...item, priceHistory: merged };
+                patches.priceHistory = merged;
                 console.log(
-                  `[addItem] shared 머지 ${item.productId}: ${sharedHist.length}건 + 오늘 → ${merged.length}건`,
+                  `[addItem] shared 머지 ${item.productId}: hist ${sharedHist.length} + 오늘 → ${merged.length} | ` +
+                    `meta(thumb=${!!patches.thumbnail} name=${!!patches.productName} price=${patches.currentPrice ?? 'keep'})`,
                 );
+              } else if (Object.keys(patches).length > 0) {
+                console.log(
+                  `[addItem] shared 메타 상속 ${item.productId}: ` +
+                    `thumb=${!!patches.thumbnail} name=${!!patches.productName} price=${patches.currentPrice ?? 'keep'}`,
+                );
+              }
+
+              if (Object.keys(patches).length > 0) {
+                finalItem = { ...item, ...patches };
               }
             }
           } catch (e) {
@@ -151,11 +184,22 @@ export const useAppStore = create<AppState>()(
       },
       updateTargetPrice: (id, price) => {
         set((state) => ({
-          trackedItems: state.trackedItems.map((item) =>
-            item.id === id ? { ...item, targetPrice: price } : item,
-          ),
+          trackedItems: state.trackedItems.map((item) => {
+            if (item.id !== id) return item;
+            if (price === undefined) {
+              // targetPrice 필드 자체를 제거 (목표가 해제)
+              const { targetPrice: _omit, ...rest } = item;
+              void _omit;
+              return rest as TrackedItem;
+            }
+            return { ...item, targetPrice: price };
+          }),
         }));
-        updateItemInFirestore(id, { targetPrice: price });
+        if (price === undefined) {
+          clearItemTargetPrice(id);
+        } else {
+          updateItemInFirestore(id, { targetPrice: price });
+        }
       },
       syncFromFirestore: async () => {
         const remote = await fetchItemsFromFirestore();

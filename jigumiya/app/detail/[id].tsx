@@ -45,7 +45,7 @@ function formatLastUpdate(ts: number): { text: string; isStale: boolean } {
 export default function DetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { trackedItems, removeItem } = useAppStore();
+  const { trackedItems, removeItem, updateTargetPrice } = useAppStore();
 
   // 알림 라우팅은 itemId=productId로 보내므로(notifier.ts) productId fallback 매칭 필수.
   // i.id(클라이언트 UUID) 또는 i.productId(쿠팡 상품 ID) 둘 다 허용.
@@ -53,6 +53,8 @@ export default function DetailScreen() {
 
   const [showAskModal, setShowAskModal] = useState(false);
   const [customAsk, setCustomAsk] = useState('');
+  const [showTargetModal, setShowTargetModal] = useState(false);
+  const [targetInput, setTargetInput] = useState('');
 
   // shared_products.lastCheckedAt — cron 마지막 갱신 시점. 상대시간 + stale 강조.
   const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null);
@@ -248,6 +250,39 @@ export default function DetailScreen() {
     }, delay);
   };
 
+  const handleSaveTarget = () => {
+    const trimmed = targetInput.trim();
+    if (!trimmed) {
+      Alert.alert('입력 필요', '목표 기준가격을 입력해주세요');
+      return;
+    }
+    const num = Number(trimmed.replace(/[^0-9]/g, ''));
+    if (!Number.isFinite(num) || num <= 0) {
+      Alert.alert('잘못된 값', '0보다 큰 숫자를 입력해주세요');
+      return;
+    }
+    updateTargetPrice(item.id, num);
+    setShowTargetModal(false);
+  };
+
+  const handleClearTarget = () => {
+    Alert.alert(
+      '목표가 삭제',
+      '이 상품의 목표 기준가격을 삭제하시겠습니까?',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: () => {
+            updateTargetPrice(item.id, undefined);
+            setShowTargetModal(false);
+          },
+        },
+      ],
+    );
+  };
+
   const handleDelete = () => {
     Alert.alert('상품 삭제', '이 상품을 삭제하시겠습니까?', [
       { text: '취소', style: 'cancel' },
@@ -335,6 +370,33 @@ export default function DetailScreen() {
             (할인 및 쿠폰 등을 적용한 실제 결제가는 쿠팡에서 확인하세요)
           </Text>
         </View>
+
+        {/* 목표 기준가격 — 있으면 표시+편집, 없으면 설정 버튼 */}
+        <TouchableOpacity
+          style={styles.targetRow}
+          onPress={() => {
+            setTargetInput(hasTarget ? String(item.targetPrice) : '');
+            setShowTargetModal(true);
+          }}
+          activeOpacity={0.7}
+        >
+          {hasTarget ? (
+            <>
+              <Ionicons name="flag" size={16} color={CHART_GREEN} />
+              <Text style={styles.targetRowLabel}>목표 기준가격</Text>
+              <Text style={styles.targetRowValue}>
+                {item.targetPrice!.toLocaleString()}원
+              </Text>
+              <Ionicons name="pencil" size={16} color={theme.subtext} />
+            </>
+          ) : (
+            <>
+              <Ionicons name="flag-outline" size={16} color={theme.primary} />
+              <Text style={styles.targetRowSet}>목표 기준가격 설정</Text>
+              <Ionicons name="chevron-forward" size={16} color={theme.subtext} />
+            </>
+          )}
+        </TouchableOpacity>
 
         {/* Chart */}
         <View style={styles.chartSection}>
@@ -576,6 +638,61 @@ export default function DetailScreen() {
             >
               <Text style={styles.askCancelText}>취소</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 목표 기준가격 수정 모달 */}
+      <Modal visible={showTargetModal} transparent animationType="slide">
+        <View style={styles.askOverlay}>
+          <TouchableOpacity
+            style={styles.askBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowTargetModal(false)}
+          />
+          <View style={styles.askSheet}>
+            <View style={styles.askHandle} />
+            <Text style={styles.askTitle}>목표 기준가격 수정</Text>
+            <TextInput
+              style={styles.targetInput}
+              placeholder="목표 기준가격 (원)"
+              placeholderTextColor={theme.subtext}
+              value={targetInput}
+              onChangeText={setTargetInput}
+              keyboardType="number-pad"
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleSaveTarget}
+            />
+            <Text style={styles.targetHint}>
+              (할인 및 쿠폰 등을 적용한 실제 결제가는 쿠팡에서 확인하세요)
+            </Text>
+            <View style={styles.targetActionsRow}>
+              <TouchableOpacity
+                style={styles.targetCancelBtn}
+                onPress={() => setShowTargetModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.targetCancelText}>취소</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.targetSaveBtn}
+                onPress={handleSaveTarget}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.targetSaveText}>저장</Text>
+              </TouchableOpacity>
+            </View>
+            {hasTarget && (
+              <TouchableOpacity
+                style={styles.targetClearBtn}
+                onPress={handleClearTarget}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="trash-outline" size={16} color="#FF4444" />
+                <Text style={styles.targetClearText}>목표가 삭제</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -959,6 +1076,105 @@ const styles = StyleSheet.create({
   },
   askCancelText: {
     color: theme.subtext,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // ── 목표가 행 ──
+  targetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: theme.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  targetRowLabel: {
+    color: theme.subtext,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  targetRowValue: {
+    flex: 1,
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  targetRowSet: {
+    flex: 1,
+    color: theme.primary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // ── 목표가 수정 모달 ──
+  targetInput: {
+    marginTop: 4,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: theme.background,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  targetHint: {
+    color: theme.subtext,
+    fontSize: 11,
+    marginTop: 6,
+    marginBottom: 12,
+    lineHeight: 16,
+  },
+  targetActionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  targetCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+  },
+  targetCancelText: {
+    color: theme.subtext,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  targetSaveBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    backgroundColor: theme.primary,
+    alignItems: 'center',
+  },
+  targetSaveText: {
+    color: '#000000',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  targetClearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 12,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 68, 68, 0.4)',
+    backgroundColor: 'rgba(255, 68, 68, 0.08)',
+  },
+  targetClearText: {
+    color: '#FF4444',
     fontSize: 14,
     fontWeight: '600',
   },
