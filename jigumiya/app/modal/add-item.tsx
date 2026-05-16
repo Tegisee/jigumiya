@@ -62,6 +62,83 @@ async function fetchWithTimeout(
 }
 
 /**
+ * 1.0.21 — Akamai 봇 분류 회피용 모바일 브라우저 헤더.
+ * 기본 React Native fetch UA는 봇 분류 트리거 → 클라이언트 fallback이 403/챌린지 응답 받던 원인.
+ */
+const COUPANG_FETCH_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  'Accept-Language': 'ko-KR,ko;q=0.9',
+  Accept:
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+};
+
+const VP_VM_RE = /coupang\.com\/(vp|vm)\/products\//;
+
+/**
+ * 1.0.21 — link.coupang.com 단축 URL을 5단계 redirect chain으로 추적.
+ * Functions의 resolveRedirectChain 클라이언트 포트.
+ *
+ *   - manual redirect → Location 헤더 우선
+ *   - 200 HTML → redirectWebUrl hex-escape 파싱 (extractRedirectUrlFromHtml)
+ *   - isProductUrl(/vp|vm/) 도달 즉시 종료
+ *   - 루프/예외 시 마지막 currentUrl 그대로 반환 (호출자가 추가 fallback 판단)
+ */
+async function resolveLinkChain(startUrl: string): Promise<string> {
+  let currentUrl = startUrl;
+  const visited = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    if (VP_VM_RE.test(currentUrl)) {
+      console.log(`[AddItem] chain step ${i}: vp 도달`, currentUrl.slice(0, 100));
+      return currentUrl;
+    }
+    if (visited.has(currentUrl)) {
+      console.warn('[AddItem] chain loop 감지 — 중단');
+      break;
+    }
+    visited.add(currentUrl);
+
+    try {
+      const res = await fetchWithTimeout(
+        currentUrl,
+        { redirect: 'manual', headers: COUPANG_FETCH_HEADERS },
+        8000,
+      );
+      console.log(
+        `[AddItem] chain step ${i}: status=${res.status} url=${currentUrl.slice(0, 80)}`,
+      );
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        if (location && location.includes('coupang.com')) {
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+        break;
+      }
+
+      if (res.status === 200) {
+        const html = await res.text();
+        const extracted = extractRedirectUrlFromHtml(html);
+        if (extracted) {
+          currentUrl = extracted;
+          continue;
+        }
+        // 200이지만 redirectWebUrl 없음 — 종착지로 간주
+        break;
+      }
+
+      // 4xx/5xx 등 — 종료
+      break;
+    } catch (e) {
+      console.warn(`[AddItem] chain step ${i} fetch 실패:`, e);
+      break;
+    }
+  }
+  return currentUrl;
+}
+
+/**
  * Coupang 단축 링크(link.coupang.com/a/...)는 3xx가 아니라
  * `redirectWebUrl = '...\\x3D...';` 형태의 JS 코드를 담은 200 HTML을 반환한다.
  * hex escape(\\xNN)를 디코드해 실제 vp URL을 추출 — Functions resolver 실패 시
@@ -237,30 +314,25 @@ export default function AddItemModal() {
         functionsResult.error,
         functionsResult.detail,
       );
-      // 단축 URL은 200 + JS hex-escape redirectWebUrl 응답. 3단 fallback 시도.
-      if (parsedUrl.includes('link.coupang.com')) {
-        try {
-          const res = await fetchWithTimeout(parsedUrl, { redirect: 'manual' }, 5000);
-          const location = res.headers.get('location');
-          if (location && location.includes('coupang.com')) {
-            resolvedUrl = location;
-          } else if (res.status === 200) {
-            const html = await res.text();
-            const extracted = extractRedirectUrlFromHtml(html);
-            if (extracted) resolvedUrl = extracted;
-          }
-          if (resolvedUrl === parsedUrl) {
-            const res2 = await fetchWithTimeout(parsedUrl, { redirect: 'follow' }, 5000);
-            if (res2.url && res2.url.includes('coupang.com') && res2.url !== parsedUrl) {
-              resolvedUrl = res2.url;
-            } else if (res2.status === 200) {
-              const html2 = await res2.text();
-              const extracted2 = extractRedirectUrlFromHtml(html2);
-              if (extracted2) resolvedUrl = extracted2;
-            }
-          }
-        } catch (e) {
-          console.warn('[AddItem] fallback resolve 실패:', e);
+      // 1.0.21 강화 — 5단계 chain + Safari UA로 Akamai 봇 회피
+      if (parsedUrl.includes('coupang.com')) {
+        resolvedUrl = await resolveLinkChain(parsedUrl);
+      }
+      // 1.0.21 옵션 2 안전망 — chain이 vp 미도달이면 어디서든 productId 잡혔는지 확인 후 vp 재구성
+      if (!VP_VM_RE.test(resolvedUrl)) {
+        const ids = extractIds(resolvedUrl, parsedUrl);
+        if (ids.productId) {
+          const reconstructed = `https://www.coupang.com/vp/products/${ids.productId}`;
+          console.log(
+            '[AddItem] productId 안전망: vp URL 재구성',
+            reconstructed,
+          );
+          resolvedUrl = reconstructed;
+        } else {
+          console.warn(
+            '[AddItem] chain + productId 모두 실패 — resolvedUrl 비-vp 유지',
+            resolvedUrl.slice(0, 100),
+          );
         }
       }
       // 제휴 딥링크는 클라이언트 키가 있을 때만 fallback
